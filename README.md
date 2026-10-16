@@ -30,8 +30,9 @@ Agora is a federation of small repositories, not a monolith:
 
 - **Each component lives in its own subdirectory, and that subdirectory is its own Git
   repository.**
-- **A `release` repository aggregates them.** It pins each component at a specific revision as a
-  Git submodule and builds the entire desktop from those pins.
+- **A `release` repository aggregates them.** It is a separate repository, checked in here as a
+  submodule; it pins each component at a specific revision as a Git submodule and builds the entire
+  desktop from those pins.
 
 Two consequences this buys us:
 
@@ -39,11 +40,11 @@ Two consequences this buys us:
 - **Reusable parts.** A component (the stack, the window server) can be consumed on its own, without
   pulling in the whole desktop.
 
-**Layout.** This top-level directory *is* the `release` repository: its working tree holds one
-submodule directory per component, alongside this document. The component repositories are local Git
-repositories; their remotes are not yet decided, so submodule URLs are deliberately left unwired for
-now. *(If the release repository should instead be a separate `release/` subdirectory, this is the
-place to change.)*
+**Layout.** This top-level directory is the *development workspace*: its working tree holds one
+submodule directory per component, each tracking `main`, alongside this document. Its `release/`
+subdirectory is a second submodule — the **`release` repository** — whose own working tree holds the
+same components pinned at exact revisions. The workspace floats; the release pins. Component remotes
+live under the `AgoraDesktop` organisation, and `.gitmodules` records their URLs.
 
 ## The components
 
@@ -79,7 +80,7 @@ components (a file manager, system preferences, more applications) are not yet s
 
 | repository | what it is |
 |---|---|
-| *(this directory)* | the `release` repository: submodule pins + the build that produces a desktop and an installable image |
+| `release` | the `release` repository (a submodule of this workspace): the same components pinned at exact revisions, plus the build that produces a desktop and an installable image |
 
 ## Conventions
 
@@ -138,9 +139,10 @@ These are taken as given for now, but are not yet ratified:
 - **The component split.** The first eight components are named; the rest — the file manager, system
   preferences, further applications, and any protocol or session repositories — are still to be
   decided.
-- **Remote hosting and naming** for every component repository. Unresolved, so the release
-  repository's `.gitmodules` is left unwired.
-- **The `release` repository itself** — whether to `git init` this top-level directory now, and what
-  its build system will be: distribution packages, a bootable/installable image, or both.
+- **Remote hosting and naming** for every component repository — *resolved*: repositories live under
+  the `AgoraDesktop` organisation, and `.gitmodules` records their URLs.
+- **The `release` repository itself** — *resolved*: it is a separate repository, checked in here as the
+  `release/` submodule, and pins each component at an exact revision. Its **build system** is still
+  open: distribution packages, a bootable/installable image, or both.
 - **The session model and the reference application set's order** — deferred until the split above
   is settled.

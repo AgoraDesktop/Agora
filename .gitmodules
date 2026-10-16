@@ -1,0 +1,52 @@
+[submodule "libagora-core"]
+	path = libagora-core
+	url = https://github.com/AgoraDesktop/libagora-core.git
+	branch = main
+[submodule "libagora-dispatch"]
+	path = libagora-dispatch
+	url = https://github.com/AgoraDesktop/libagora-dispatch.git
+	branch = main
+[submodule "libagora-lcms2"]
+	path = libagora-lcms2
+	url = https://github.com/AgoraDesktop/libagora-lcms2.git
+	branch = main
+[submodule "libagora-objc"]
+	path = libagora-objc
+	url = https://github.com/AgoraDesktop/libagora-objc.git
+	branch = main
+[submodule "libagora-base"]
+	path = libagora-base
+	url = https://github.com/AgoraDesktop/libagora-base.git
+	branch = main
+[submodule "libagora-app"]
+	path = libagora-app
+	url = https://github.com/AgoraDesktop/libagora-app.git
+	branch = main
+[submodule "libagora-text"]
+	path = libagora-text
+	url = https://github.com/AgoraDesktop/libagora-text.git
+	branch = main
+[submodule "libagora-drawing"]
+	path = libagora-drawing
+	url = https://github.com/AgoraDesktop/libagora-drawing.git
+	branch = main
+[submodule "libagora-watch"]
+	path = libagora-watch
+	url = https://github.com/AgoraDesktop/libagora-watch.git
+	branch = main
+[submodule "libagora-iconservices"]
+	path = libagora-iconservices
+	url = https://github.com/AgoraDesktop/libagora-iconservices.git
+	branch = main
+[submodule "libagora-launchservices"]
+	path = libagora-launchservices
+	url = https://github.com/AgoraDesktop/libagora-launchservices.git
+	branch = main
+[submodule "window-server"]
+	path = window-server
+	url = https://github.com/AgoraDesktop/window-server.git
+	branch = main
+[submodule "widget-zoo"]
+	path = widget-zoo
+	url = https://github.com/AgoraDesktop/widget-zoo.git
+	branch = main

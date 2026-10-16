@@ -1,0 +1,11 @@
+# Build output — never versioned
+/build-prefix/
+
+# Agent/runtime state
+/.reasonix/
+
+# Unversioned source trees. Not git repos yet, so they are excluded rather than
+# committed as plain files — that keeps them free to become their own component
+# repositories later without needing a history rewrite.
+/swift-toolchain/
+/swift-interop-probe/

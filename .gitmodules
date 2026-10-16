@@ -53,3 +53,7 @@
 [submodule "release"]
 	path = release
 	url = https://github.com/AgoraDesktop/release.git
+[submodule "AgoraDesktop.github.io"]
+	path = AgoraDesktop.github.io
+	url = https://github.com/AgoraDesktop/AgoraDesktop.github.io.git
+	branch = main

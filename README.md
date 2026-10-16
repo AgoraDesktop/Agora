@@ -75,6 +75,9 @@ components (a file manager, system preferences, more applications) are not yet s
 | repository | what it is |
 |---|---|
 | `window-server` | the Wayland compositor: Agora's implementation of the Mac window server — outputs, seats, input routing, surface roles, layers |
+| `libagora-watch` | the change stream — a path changed, and here is which way |
+| `libagora-iconservices` | Icon Services — the icon an item or a type is drawn with: the lookup and the representations |
+| `libagora-launchservices` | Launch Services — the type model (Uniform Type Identifiers), and what opens what |
 | `widget-zoo` | a demonstration application: the view and control classes and the menu system |
 
 ### Assembly
@@ -137,7 +140,7 @@ These are taken as given for now, but are not yet ratified:
 
 ## Open questions
 
-- **The component split.** The first eight components are named; the rest — the file manager, system
+- **The component split.** The first thirteen components are named; the rest — the file manager, system
   preferences, further applications, and any protocol or session repositories — are still to be
   decided.
 - **Remote hosting and naming** for every component repository — *resolved*: repositories live under

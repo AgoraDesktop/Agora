@@ -480,7 +480,11 @@ the ingest are Apple's.
   `workspace/PROVENANCE.md`: the key-equivalent mask is ZERO by default here where Apple's is Command (so every row
   names its own); the bar's window was a RACE, now fixed at `-nextEventMatchingMask:` in `libagora-app`; and
   clicking the first title opens the application menu (MEASURED: a window at level 101) which a flood of spurious
-  `NSLeftMouseDragged` events then dismisses — a menu-tracking bug to fix in the AppKit, recorded rather than hidden.
+  `NSLeftMouseDragged` events then dismisses. **THAT THIRD ONE IS NOW DIAGNOSED AND FIXED IN TWO COMPONENTS:** the
+  session was begun and never driven, because this application pumped its own events and `NSMenuView`'s bar loop
+  fetches only while `-[NSApplication isRunning]` — so `-runForSeconds:` now calls the ORDINARY LOOP, with the
+  deadline riding `-applicationDidUpdate:`; and a RELEASE was ending the session, a rule written for a menu that
+  owns its own loop where a bar's loop drains every window's queue instead (see `libagora-app/PROVENANCE.md` § 8).
 
 ### W2 — The file window shell
 - **Deliverable:** `WSFinderWindowController` with toolbar, sidebar, path bar, status bar, the four-view

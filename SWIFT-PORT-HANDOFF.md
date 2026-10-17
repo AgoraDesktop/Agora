@@ -59,23 +59,27 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
 |---|---|
 | parser / Sema / SIL | empty file, multi-file-free single-file programs, `-O` pipelines |
 | classes | allocation, deinit, inheritance, `super`, vtables, field offsets |
-| generics | generic classes (`_ContiguousArrayStorage`), `Array`, `Set`, `Dictionary`, prespecialised metadata |
+| generics | generic classes (`_ContiguousArrayStorage`), `Array`, `Set`, `Dictionary`, prespecialised metadata (installed layout 0; a Swift-defined generic class under layout 2 is the S4 blocker) |
 | existentials | class existentials (`[any P]`), `AnyObject` boxes holding Swift classes |
 | errors | `throw` / `catch` / `try?`, native error boxes (`ErrorObjectNative.cpp`) |
 | strings | interpolation, Unicode (`"héllo 🌍"`), `String(repeating:)` |
 | concurrency types | `actor` declaration (not exercised at runtime) |
 | **Agora interop** | `import Foundation` (Agora's), `NSObject.alloc()`, `isKind(of:)`, `description()`, `object_getClass`/`class_getName` through libobjc2 |
 | **default flags** | `swiftc prog.swift` enables Objective-C interop and selects the GNUstep runtime ABI family without any `-Xfrontend` flags |
-| **super dispatch** | a Swift `super.` send to an imported class emits `objc_msg_lookup_super` + a direct IMP call, not Apple's `objc_msgSendSuper2`; such a program now **links** (semantics need S1/S5, see below) |
+| **super dispatch** | a Swift `super.` send to an imported class emits `objc_msg_lookup_super` + a direct IMP call, not Apple's `objc_msgSendSuper2`; such a program links, and with the layout-2 test compiler `objc-to-swift-probe` verifies the semantics (`super -init` is reached) |
 | **the two probes** | `agora-import-probe`: all 11 checks; `objc-to-swift-probe`: compiles and links, then traps in `objc_allocWithZone` when the Swift subclass is first allocated — **but passes every check with the layout-2 test compiler** |
 | **Swift -> Agora class objects** (layout 2, test compiler) | class emitted as a GNUstep `struct objc_class` + metaclass; `objc_getClass` before `main`; `respondsToSelector`; instance and class dispatch from C; category attachment and `+load`; `Counter()` via `objc_allocWithZone`; ivar list keeps `instance_size` intact |
 
-**Not available yet**, and by design with the compact layout (see §4):
+**Not available yet in the *installed* (layout 0) toolchain.** The layout-2
+test compiler in §2.7 changes the first item for fixed classes; the rest still
+holds, and the default cannot flip until S4:
 
-- Swift classes are **not** Objective-C class objects: `@objc` members on them,
-  subclassing Agora's `NSObject` in Swift, categories, and ObjC→Swift dispatch
-  do not work. Interop is one-way: Swift can message Agora objects, Agora never
-  sees a Swift class.
+- Swift classes are **not** Objective-C class objects in the installed
+  toolchain: `@objc` members on them, subclassing Agora's `NSObject` in Swift,
+  categories, and ObjC→Swift dispatch do not work. Interop is one-way: Swift can
+  message Agora objects, Agora never sees a Swift class. With the layout-2 test
+  compiler a *fixed* Swift class is a class object (§2.7); *generic* classes are
+  the S4 blocker.
 - No Foundation *bridging* of Swift values: `String` ↔ `NSString`, `Array` ↔
   `NSArray` and `Error` ↔ `NSError` all need the ObjC-object layout (and, for
   the value types, a Foundation overlay, which this toolchain does not build).
@@ -85,7 +89,8 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
   `objc_allocWithZone`, and libobjc2 then treats the Swift metadata as a class
   object. With the compact layout that is invalid: the probe (and a two-line
   `class Counter: NSObject` with an explicit init) traps in
-  `objc_test_class_flag`. S1/S5.
+  `objc_test_class_flag`. Fixed by the layout-2 emission (§2.7); the installed
+  toolchain still has it.
 - **`NSObject()` sugar — fixed.** For a genuine Agora class the sugar goes
   through `objc_allocWithZone`, which sends `+allocWithZone:`. `NSObject` now
   implements that selector as a compatibility door that ignores its argument and
@@ -273,8 +278,10 @@ matter:
 - A `Peer` send (`objc_msgSendSuper`) already means "start at this class", so it
   is left as-is.
 
-What is *not* verified yet is semantics: a Swift subclass of `NSObject` still
-cannot be allocated (next section), so nothing reaches the super method.
+Semantics needed a class object: at layout 0 nothing can allocate a Swift
+subclass of `NSObject` (next section), so nothing reaches the super method. The
+layout-2 test compiler closes that: `objc-to-swift-probe`'s "Swift subclass
+reached super -init" check passes.
 
 ### 2.6 `+allocWithZone:` is back, as a compatibility door
 
@@ -311,7 +318,8 @@ Verified: `NSObject()`, `NSNull()` (singleton preserved), `NSMutableArray()`
 `agora-import-probe` passes all 11 checks.
 
 **What it does not fix.** A Swift class with Objective-C ancestry is still
-unallocatable at layout 0. `objc_allocWithZone(cls)` starts with
+unallocatable at layout 0 (the layout-2 test compiler, §2.7, does fix it).
+`objc_allocWithZone(cls)` starts with
 `objc_test_class_flag(cls->isa, …)`; for compact Swift class metadata word 0 is
 `Kind == 0`, so `isa` is NULL and libobjc2 dereferences NULL at offset `0x20`
 before any message is sent. Adding selectors cannot change that — only S1 can.
@@ -448,8 +456,12 @@ Not in the patch, but part of the port:
 Regenerate the fork patch after editing the source tree:
 
 ```sh
-git -C ~/.agora-swift/src/swift diff > swift-toolchain/patches/0003-swift-enable-objc-interop.patch
+git -C ~/.agora-swift/src/swift diff HEAD \
+  > swift-toolchain/patches/0003-swift-enable-objc-interop.patch
 ```
+
+`HEAD` matters: `stdlib/public/SwiftShims/TargetConditionals.h` is a staged
+addition, and a plain `git diff` omits it.
 
 ---
 
@@ -460,9 +472,34 @@ git -C ~/.agora-swift/src/swift diff > swift-toolchain/patches/0003-swift-enable
 # headers or IRGen change)
 swift-toolchain/scripts/build-swift-toolchain.sh
 
-# the gate
+# the language/runtime gate (installed toolchain, compact layout)
 swift-toolchain/scripts/verify-swift-port.sh
+
+# the S1 gate (layout-2 test compiler; builds the frontend if needed)
+swift-toolchain/scripts/verify-class-abi.sh
 ```
+
+### State on disk at the end of this round
+
+- **Installed toolchain** (`~/.agora-swift/toolchain`): unchanged, compact
+  layout 0. `verify-swift-port.sh` is green.
+- **Build tree** (`~/.agora-swift/src/build/agora-linux-x86_64/swift-linux-x86_64`):
+  configured with `SWIFT_OBJC_CLASS_LAYOUT=2` and contains the layout-2
+  `bin/swift-frontend` plus `bin/swiftc-layout2`. It is **not** installed. The
+  stdlib in the build tree is still the compact one.
+- **Fork working tree** (`~/.agora-swift/src/swift`): all of patch 0003,
+  uncommitted by design. The Agora repository has the doc update committed
+  (`f28c8db`); `swift-toolchain/` and `swift-interop-probe/` are git-ignored
+  local trees.
+- **To restore the build tree to the default**: run
+  `swift-toolchain/scripts/build-swift-toolchain.sh` (it always passes
+  `-DSWIFT_OBJC_CLASS_LAYOUT:` with an empty default, which resets the cache) or
+  `cmake -DSWIFT_OBJC_CLASS_LAYOUT:STRING= <build dir>`. The next build then
+  recompiles ~1100 compiler TUs and the stdlib.
+- **Current results**: `verify-swift-port.sh` all green;
+  `verify-class-abi.sh` `S1 gate: ok`; probes with the installed toolchain
+  11/11 then the known `objc_allocWithZone` trap; probes with the layout-2
+  compiler 17/17 and no crash.
 
 A program that uses Agora needs only the module map and the include/library
 paths — interop and the GNUstep runtime family are the default for this target:
@@ -489,7 +526,7 @@ swift-interop-probe/scripts/run-native-probe.sh
 
 Current result with the installed toolchain: `agora-import-probe` passes;
 `objc-to-swift-probe` builds and links, then traps in `objc_allocWithZone` on
-the first Swift-class allocation, which is the S1/S5 gate rather than a probe
+the first Swift-class allocation, which is the layout-0 gate rather than a probe
 defect. With the layout-2 test compiler both probes pass:
 
 ```sh
@@ -521,19 +558,48 @@ Debugging techniques that produced the findings above:
 ## 5. What to do next
 
 1. **S4: generic-class metadata patterns** — the next blocker, and the only
-   thing between the test compiler and a layout-2 *toolchain*. With layout 2 now
-   the emitter, a generic class defined in Swift fails at link time with
-   `undefined reference to ._OBJC_METACLASS__TtCs12_SwiftObject`: the generic
-   path still builds an Apple-shaped pattern (`GenericClassMetadataBuilder` in
-   `GenMeta.cpp`: `ClassRODataOffset`/`MetaclassObjectOffset`, the 5-word
-   `addMetaclassObject`, `emitClassPrivateDataFields`) and references the
-   imported metaclass. It needs the same treatment the fixed path just got:
-   GNUstep pattern header, a metaclass slot with the right offsets, instance
-   size/ivar data for the pattern, and a runtime side
-   (`swift_allocateGenericClassMetadata` in `Metadata.cpp`) that fills the name
-   and the class-object fields. Once generic classes emit, run
+   thing between the test compiler and a layout-2 *toolchain*. Start by
+   reproducing it:
+
+   ```sh
+   # a Swift file containing `class Box<T> { var value: T; init(_ v: T) { value = v } }`
+   swiftc-layout2 ... generic.swift   # link error:
+   #   undefined reference to `._OBJC_METACLASS__TtCs12_SwiftObject'
+   ```
+
+   There are two distinct problems, and only the second survives a layout-2
+   stdlib rebuild:
+
+   a. **The pattern names the root class's metaclass.** For any Swift class the
+      root is `SwiftObject`; `GenericClassMetadataBuilder::addMetaclassObject`
+      (≈`GenMeta.cpp:5088`) asks for `getAddrOfMetaclassObject(rootClass)`,
+      which now spells `._OBJC_METACLASS__TtCs12_SwiftObject`. That symbol is a
+      *local* in the installed layout-0 stdlib, so the mixed build fails at
+      link. In a layout-2 stdlib the symbol exists; don't "fix" this by going
+      back to the class symbol.
+   b. **The pattern is Apple-shaped.** `GenericClassMetadataBuilder::layoutHeader`
+      (≈`GenMeta.cpp:4959`) emits `Destroy`, `IVarDestroyer`, `Flags`,
+      `ClassRODataOffset`, `MetaclassObjectOffset`, `MetaclassRODataOffset`;
+      `addMetaclassObject` emits the 5-word `class_t`; the extra data is filled
+      by `emitClassPrivateDataFields` with a `class_ro_t`; and the runtime's
+      `initializeClassMetadataFromPattern` (`stdlib/public/runtime/Metadata.cpp:479`)
+      sets `MetadataKind`/`ClassISA`/`CacheData`/`Data`, with the metaclass and
+      RO-data blocks gated on `SWIFT_OBJC_CLASS_LAYOUT == 1`. The object bounds
+      (`ClassMetadataBounds`, from the descriptor) are already computed from the
+      layout-2 ABI type, so the *size* is right; the header initialization and
+      the pattern's extra-data offsets are not.
+
+   A minimal hypothesis worth testing first: **a generic Swift class cannot have
+   ObjC ancestry** (Swift forbids `@objc` members on generic classes), so it does
+   not need to be an ObjC class object at all. Then layout 2 needs only: the
+   GNUstep-shaped metadata (automatic via the ABI type), the runtime setting
+   `ABIVersion = SWIFT_GNUSTEP_CLASS_ABI_VERSION` instead of `Kind`, and *no*
+   extra-data metaclass/RO-data — leave `isa`/`name`/`methods`/`ivars` null and
+   keep the class out of `__objc_classes` (`emitClassMetadata` already only adds
+   resilient stubs for classes with ObjC ancestry). Validate with a generic
+   class plus `Array`/`Set`/`Dictionary` under the layout-2 compiler, then run
    `AGORA_SWIFT_CLASS_LAYOUT=2 swift-toolchain/scripts/build-swift-toolchain.sh`
-   and let the stdlib rebuild; that is the real test, because the stdlib is full
+   and let the stdlib rebuild. That rebuild is the real test: the stdlib is full
    of generic classes (`_ContiguousArrayStorage`, …).
 2. **S3 finish: read/write the ivars from C.** The ivar list is emitted now
    (that is what keeps `instance_size` alive, §2.7); the remaining check is that
@@ -642,7 +708,9 @@ use libobjc2's `objc_msg_lookup_super` instead of the Apple-only
 natively: `agora-import-probe` passes every check (including the `NSObject()`
 sugar, which needed a `+allocWithZone:` compatibility door in Agora's NSObject),
 and `objc-to-swift-probe`
-compiles and links but traps in `objc_allocWithZone`, because a Swift subclass
-of `NSObject` is still not an Objective-C class object. Interop today is
-one-way — Swift messages Agora, Agora does not see Swift classes — which is
-exactly the S1 → S6 work in `SWIFT-GNUSTEP-CLASS-ABI.md`.
+compiled and linked but trapped in `objc_allocWithZone`, because a Swift
+subclass of `NSObject` was not an Objective-C class object. At that point
+interop was one-way — Swift messaged Agora, Agora did not see Swift classes —
+which is the S1 → S6 work in `SWIFT-GNUSTEP-CLASS-ABI.md`. This round took S1:
+the layout-2 test compiler makes fixed Swift classes class objects, and S4
+(generic patterns) is what stands between it and the default.

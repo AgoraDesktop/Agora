@@ -291,6 +291,24 @@ introspection, `class_getInstanceVariable`).
 | `stdlib/public/runtime/Metadata.cpp`, `SwiftObject.mm`, `DynamicCast.cpp` | replace `getROData`/`Data`/mask users with the new fields; `swift_instantiateObjCClass` → the §3.2 hook; `isTypeMetadata` → `abi_version` |
 | `stdlib/public/runtime/GNUstepObjCCompatibility.mm` | drop the `objc_readClassPair`/`_objc_realizeClassFromSwift` stubs once registration is real |
 
+**What S1 actually touched (fixed/non-generic classes).** The design above was
+the map; this is the terrain as implemented:
+
+| Area | Reality |
+|---|---|
+| header order | `ClassMetadataVisitor::layout()` calls `addClassGNUstepHeader()` (a CRTP helper) for layout 2; `ClassMetadataScanner` gives it pointer-sized fields, so `ClassMetadataLayout` sizes follow automatically |
+| field values | `ClassMetadataBuilderBase::addGNUstep*()` in `GenMeta.cpp`; the name/method/ivar constants come from `IRGenModule::getGNUstepClassData()` (`GenClass.cpp`), cached per class |
+| method lists | `ClassDataBuilder::buildGNUstepMethodList()`; `ObjCMethodDescriptor` grew a `selector` string so a real `SEL` (the `__objc_selectors` record) can be used |
+| ivars | `ClassDataBuilder::buildGNUstepIvarList()` — required, not optional: a null list makes libobjc2 overwrite `instance_size` |
+| metaclass | `irgen::emitGNUstepMetaclassObject()`; emitted *before* the class metadata initializer, from `addMetadataFlags()`; `Linking.cpp` spells `._OBJC_METACLASS_<name>` for Swift-defined classes |
+| registration | nothing new: the embedded Clang CodeGen already emits `.objc_init`/`__objc_load`; only the class-list section changed to `__objc_classes` (`GenDecl.cpp`) |
+| selector table | already emitted by the previous round (`getGNUstepSelector` in `GenObjC.cpp`); no registration call is needed because `__objc_load` registers the whole `__objc_selectors` range |
+
+`emitROData`/`emitRODataFields` were **not** deleted: they are still the layout-1
+path, and the metadata builder simply never calls `emitClassPrivateData()` at
+layout 2. The same is true of `addClassDataPointer`/`addClassCacheData` — unused
+at layout 2, still needed for layout 1 and for `@objc @implementation` classes.
+
 ### 5.2 `libagora-objc`
 
 | Change | Status |
@@ -349,7 +367,11 @@ are easy to miss:
 The remaining piece before the *default* can flip is S4: the stdlib is full of
 generic classes, and `GenericClassMetadataBuilder` still emits the Apple pattern.
 
-### 6.0 Where the IRGen work attaches (scouted)
+### 6.0 Where the IRGen work attaches
+
+*Status: the fixed/non-generic path is implemented (S1, see §6 and the handoff
+§2.7). The bullets below remain the map; the outstanding entries are the
+resilient/generic pattern and the runtime pattern initializer (S4).*
 
 - `lib/IRGen/MetadataLayout.h:168` `ClassMetadataLayout` computes `MetadataSize`,
   `MetadataAddressPoint`, `VTableOffset`, `FieldOffsetVector` and

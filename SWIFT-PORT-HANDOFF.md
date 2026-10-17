@@ -55,7 +55,7 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
 | **Agora interop** | `import Foundation` (Agora's), `NSObject.alloc()`, `isKind(of:)`, `description()`, `object_getClass`/`class_getName` through libobjc2 |
 | **default flags** | `swiftc prog.swift` enables Objective-C interop and selects the GNUstep runtime ABI family without any `-Xfrontend` flags |
 | **super dispatch** | a Swift `super.` send to an imported class emits `objc_msg_lookup_super` + a direct IMP call, not Apple's `objc_msgSendSuper2`; such a program now **links** (semantics need S1/S5, see below) |
-| **the two probes** | `agora-import-probe`: 11/11 checks; `objc-to-swift-probe`: compiles and links, then traps in `objc_allocWithZone` when the Swift subclass is first allocated |
+| **the two probes** | `agora-import-probe`: 12/12 checks; `objc-to-swift-probe`: compiles and links, then traps in `objc_allocWithZone` when the Swift subclass is first allocated |
 
 **Not available yet**, and by design with the compact layout (see §4):
 
@@ -73,11 +73,13 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
   object. With the compact layout that is invalid: the probe (and a two-line
   `class Counter: NSObject` with an explicit init) traps in
   `objc_test_class_flag`. S1/S5.
-- **`NSObject()` sugar.** Even for a genuine Agora class the sugar goes through
-  `objc_allocWithZone`, which sends `+allocWithZone:`; Agora's `NSObject`
-  deliberately has no zone-taking API (`libagora-base/NSObject.h`), so the call
-  raises `NSInvalidArgumentException`. Use `.alloc()` — this is the open decision
-  in §5 item 5.
+- **`NSObject()` sugar — fixed.** For a genuine Agora class the sugar goes
+  through `objc_allocWithZone`, which sends `+allocWithZone:`. `NSObject` now
+  implements that selector as a compatibility door that ignores its argument and
+  forwards to `+alloc` (§2.6), so `NSObject()`, `NSNull()` and
+  `NSMutableArray()` work. It does not help the Swift-class case above:
+  libobjc2 inspects `cls->isa` *before* sending any message, so no selector is
+  ever involved.
 - **Property-shaped imported accessors.** Agora declares `- (size_t)length` and
   friends as methods (Apple and GNUstep declare a `length` property), so Swift
   writes `text.length()`, not `text.length`. Not a port defect, but it is what
@@ -261,6 +263,46 @@ matter:
 What is *not* verified yet is semantics: a Swift subclass of `NSObject` still
 cannot be allocated (next section), so nothing reaches the super method.
 
+### 2.6 `+allocWithZone:` is back, as a compatibility door
+
+**§5 item 3 of the previous round, resolved.** libobjc2's `objc_allocWithZone()`
+ends in `[cls allocWithZone: NULL]`, and Swift's `__allocating_init` — which
+every `T()` on an imported class goes through — reaches the runtime that way.
+Agora's zone-API removal left no such selector, so `NSObject()` raised
+`NSInvalidArgumentException` (README finding 3).
+
+`NSObject` now implements:
+
+```objc
++ (id)allocWithZone:(struct _NSZone *)zone
+{
+	(void)zone;
+	return [self alloc];
+}
+```
+
+The forwarding is the important part: `+alloc` stays **the** singleton door, so
+a subclass that overrides it still answers its shared instance — verified with
+`NSNull() === NSNull()`. (The same shape NSProxy already had.)
+
+The parameter is spelled `struct _NSZone *` only for its **type encoding**. It is
+an opaque tag, never dereferenced, and no `NSZone` type enters the SDK. libobjc2
+compares a method's encoding with the selector's registered encoding and prints
+`Calling [NSObject +allocWithZone:] with incorrect signature` when they differ;
+the runtime's own declaration (`libagora-objc/fast_paths.m`) registers
+`@24@0:8^{_NSZone=}16`, so `void *` (what NSProxy uses) works but is noisy on
+every allocation.
+
+Verified: `NSObject()`, `NSNull()` (singleton preserved), `NSMutableArray()`
+(`AGArrayMutable`); `verify-swift-port.sh` now exercises the sugar as well, and
+`agora-import-probe` is 12/12.
+
+**What it does not fix.** A Swift class with Objective-C ancestry is still
+unallocatable at layout 0. `objc_allocWithZone(cls)` starts with
+`objc_test_class_flag(cls->isa, …)`; for compact Swift class metadata word 0 is
+`Kind == 0`, so `isa` is NULL and libobjc2 dereferences NULL at offset `0x20`
+before any message is sent. Adding selectors cannot change that — only S1 can.
+
 ---
 
 ## 3. Change inventory
@@ -279,6 +321,7 @@ cannot be allocated (next section), so nothing reaches the super method.
 | `lib/Frontend/CompilerInvocation.cpp` | non-Darwin ELF targets default `ObjCRuntimeVendorKind` to `GNUstep`; an explicit flag still wins |
 | `lib/IRGen/GenObjC.cpp` | GNUstep super sends: `objc_msg_lookup_super` + IMP call, with the superclass named statically |
 | `include/swift/Runtime/RuntimeFunctions.def` | `objc_msg_lookup_super` runtime declaration |
+| `libagora-base/NSObject.h`, `NSObject.m` (patch 0005) | `+allocWithZone:` compatibility door: ignores the zone, forwards to `+alloc`; the parameter is `struct _NSZone *` for type-encoding compatibility |
 | `stdlib/public/runtime/Metadata.cpp` | class-object-only blocks gated on layout 1 |
 | `stdlib/public/runtime/MetadataImpl.h` | `AnyObject` box retain/release through the checking helpers |
 | `stdlib/public/runtime/Casting.cpp`, `DynamicCast.cpp` | class-metatype casts without ObjC messaging |
@@ -292,6 +335,7 @@ Not in the patch, but part of the port:
 | `swift-toolchain/scripts/build-swift-toolchain.sh` | installs the `swiftc` host-runtime wrapper (and removes the `swiftc` symlink first — writing through it overwrites `swift-frontend`) |
 | `swift-toolchain/scripts/verify-swift-port.sh` | the end-to-end gate: type-check, compile, run, `-O`, Agora interop (now with no explicit interop flags) |
 | `swift-toolchain/patches/0004-libdispatch-overlay-non-interop.patch` | keeps the `Dispatch` overlay on the non-interop ABI the toolchain built it with |
+| `swift-toolchain/patches/0005-libagora-base-allocWithZone.patch` | the `NSObject` compatibility door (applied to the `libagora-base` working tree, like 0001/0002) |
 | `swift-interop-probe/scripts/run-native-probe.sh` | builds and runs both probes against the native toolchain (no SwiftPM) |
 | `swift-interop-probe/{AgoraProbeKit,Sources}` | adapted to Agora's headers (`length()` as a method, `.alloc()` instead of `NSObject()`), plus `AgoraProbeIsKindOfClassNamed` for class-cluster checks |
 
@@ -337,7 +381,7 @@ Run both interop probes against the native toolchain (no SwiftPM needed):
 swift-interop-probe/scripts/run-native-probe.sh
 ```
 
-Current result: `agora-import-probe` 11/11; `objc-to-swift-probe` builds and
+Current result: `agora-import-probe` 12/12; `objc-to-swift-probe` builds and
 links, then traps in `objc_allocWithZone` on the first Swift-class allocation,
 which is the S1/S5 gate rather than a probe defect.
 
@@ -380,14 +424,11 @@ Debugging techniques that produced the findings above:
    `~/.agora-swift/bootstrap` with a non-interop stdlib installed under the
    toolchain (`lib/swift/host/…`), or do the proper host/target split in the
    CMake install. This is the only remaining build-system "cheat".
-3. **`+allocWithZone:` decision.** Confirmed by probe: `NSObject()` (and every
-   imported `T()`) goes through `objc_allocWithZone`, which sends
-   `+allocWithZone:`, which Agora's `NSObject` deliberately does not implement —
-   so the sugar raises `NSInvalidArgumentException`. Either add a compatibility
-   `+ (id)allocWithZone:(void *)zone { return [self alloc]; }` that preserves the
-   singleton door (`libagora-base/NSObject.h` explains why the door is `+alloc`),
-   or make `.alloc()`-style construction the documented Swift idiom. Not a
-   defect of the Swift port.
+3. **`+allocWithZone:` — done** (§2.6). `NSObject()` and every imported `T()`
+   now work through a compatibility door that forwards to `+alloc`, so a
+   subclass's singleton override still wins. The Swift-class case is untouched:
+   libobjc2 rejects the class pointer before any selector is involved, which is
+   S1/S5.
 4. **Property-shaped accessors in Agora's headers.** `- (size_t)length` imports
    as `length()`, while Apple and GNUstep declare a `length` property. Writing
    Swift against Agora therefore reads differently from writing it against
@@ -395,7 +436,7 @@ Debugging techniques that produced the findings above:
    `@property` declarations is source-compatible for Objective-C and would make
    `text.length` work.
 5. **Keep the probes green.** `swift-interop-probe/scripts/run-native-probe.sh`
-   is the native harness; `agora-import-probe` is 11/11 today, and
+   is the native harness; `agora-import-probe` is 12/12 today, and
    `objc-to-swift-probe` becomes the S5 gate as soon as Swift classes are class
    objects. The published-container `run-probe.sh` and
    `compat/ObjCInteropShim.c` are now historical.
@@ -413,7 +454,8 @@ swift-toolchain/
 │   ├── 0001-libagora-base-objcxx-clean.patch   3 hunks / 2 files
 │   ├── 0002-libagora-core-objcxx-clean.patch   1 hunk  / 1 file
 │   ├── 0003-swift-enable-objc-interop.patch   40 files, ~743 insertions
-│   └── 0004-libdispatch-overlay-non-interop.patch  1 file (the Dispatch overlay)
+│   ├── 0004-libdispatch-overlay-non-interop.patch  1 file (the Dispatch overlay)
+│   └── 0005-libagora-base-allocWithZone.patch      2 files (NSObject)
 └── scripts/
     ├── build-swift-toolchain.sh               build + install (incl. wrapper)
     └── verify-swift-port.sh                   the end-to-end gate
@@ -453,7 +495,9 @@ runtime family are now the compiler's **default** for this target (a program
 needs no `-Xfrontend` flags), and Swift's `super.` sends into imported classes
 use libobjc2's `objc_msg_lookup_super` instead of the Apple-only
 `objc_msgSendSuper2`, so such programs link. The two probes were re-run
-natively: `agora-import-probe` passes every check, and `objc-to-swift-probe`
+natively: `agora-import-probe` passes every check (including the `NSObject()`
+sugar, which needed a `+allocWithZone:` compatibility door in Agora's NSObject),
+and `objc-to-swift-probe`
 compiles and links but traps in `objc_allocWithZone`, because a Swift subclass
 of `NSObject` is still not an Objective-C class object. Interop today is
 one-way — Swift messages Agora, Agora does not see Swift classes — which is

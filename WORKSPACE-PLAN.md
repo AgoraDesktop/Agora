@@ -209,10 +209,16 @@ names needs systemd.
 
 This is where Agora's architecture and the Mac's agree, and the seam must be stated before code is written.
 
-- **Workspace owns the desktop window.** One borderless `NSWindow` at the CoreGraphics desktop level, covering
-  `[NSScreen frame]` — **not** `visibleFrame` — drawing the wallpaper and the icons. The Dock
-  (`NSDockWindowLevel`) and ordinary windows (`NSNormalWindowLevel`) sit above it, so the Dock's translucent
-  area shows the desktop through, which is the Mac's look.
+- **The desktop is TWO LEVELS, and Workspace owns only the upper one.**
+  * `kCGDesktopWindowLevel` — the **WALLPAPER**, a window of its own below every ordinary window, and **the
+    Dock's to draw** (a stub in the tests until the Dock exists). The Finder drew it at 10.6; Agora gives that
+    layer to the Dock so the desktop is a *shell* surface and not a file manager's private background.
+  * `kCGDesktopIconWindowLevel` — the **ICONS**, and **Workspace's**: one borderless, **TRANSPARENT** window
+    covering `[NSScreen frame]`, drawing ONLY the items of the desktop directory. The compositor blends it over
+    the wallpaper (source-over), so the wallpaper shows through wherever there is no icon.
+  The Dock (`NSDockWindowLevel`) and ordinary windows (`NSNormalWindowLevel`) sit above both, and **BOTH ARE UNDER
+  THE SERVER'S MENU BAR**: the bar is composited at its own level (`AWS_MENU_BAR_LEVEL`, 24 — Apple's main-menu
+  level), so the desktop is the furniture's background and not its coverer.
 - **The desktop level is CoreGraphics vocabulary, and this tree's AppKit enumeration starts too high.**
   `libagora-app/NSWindow.h` defines `NSNormalWindowLevel = 0` and up; the desktop sits *below* it, in
   `CGWindowLevel.h`'s names (`kCGDesktopWindowLevel`, and `kCGDesktopIconWindowLevel` — see the same argument in
@@ -278,7 +284,7 @@ Each is a real fork; the plan states a recommendation and the file that would ca
 1. **The per-directory metadata store (the `.DS_Store` question).** The Mac's answer is a hidden per-folder
    file, and the project rule is "where the Mac has an answer, Agora takes it" — but the **format is ours to
    choose**, exactly as `window-server/DESIGN.md` argues for the wire format. **Recommendation:** a per-folder
-   sidecar in Agora's own binary-plist format, holding icon positions, view options (icon size, grid spacing,
+   sidecar in Agora's own property-list format, holding icon positions, view options (icon size, grid spacing,
    label position, sort/arrange), and per-item labels; filename Agora-owned (`.agora` is the placeholder).
    Per-item data that must survive a move (labels, custom-icon reference, `Quarantine`) goes in an **extended
    attribute** where the filesystem supports one, with the sidecar as fallback. `WSMetadataStore` is the only
@@ -382,6 +388,11 @@ the ingest are Apple's.
   re-found after a rescan, and `UTTypeConformsTo` walks the hierarchy. Nothing foreign is on the fixture.
 - **Done (2026-10-16):** `libagora-launchservices` — C throughout over Core Foundation alone (`readelf`:
   `libagora-core.so` and libc, nothing else), **19 checks** in its own suite. See the component `README.md`.
+- **And the OPENING DOOR landed with it:** `LSOpenCFURLRef` / `LSOpenURLsWithRole` spawn an application's
+  process — a bundle, or a document in the application that owns its type — with activation, single-instance and
+  lifetime left to the session; the `launch` suite is **9 checks**. **AND IT FOUND A CORE FOUNDATION BUG, NOW
+  FIXED THERE:** `CFBundleCopyExecutableURL` answered NULL for a modern `.app` because the executables
+  subdirectory name was the host's (`Linux`), not `Contents/MacOS`; fixed in `libagora-core`.
 
 ### F2 — Icon Services: the icon lookup
 - **Deliverable:** `libagora-iconservices` returning a rasterised icon for a URL (via the type registry), an
@@ -421,6 +432,15 @@ the ingest are Apple's.
 - **Proves:** the app/bundle/launch path, the desktop level, and the fact that the desktop is Workspace's.
 - **Test:** `seam-desktop.sh` — headless `window-server` + Workspace for N frames + screenshot; assert the
   desktop fill covers the screen and that a normal window opened above it is composited on top.
+- **Done (2026-10-16):** `workspace/` — `Workspace.app` (a real bundle) whose desktop window is borderless, at
+  `kCGDesktopWindowLevel` (`-2147483628`, measured), the size of `[NSScreen frame]`, drawing the Argentum
+  wallpaper as a vertical ramp. The suite is `workspace-desktop` (`tests/run-desktop.sh` + `check.py`),
+  **9 checks**: coverage at every corner, the ramp the right way up, and a NORMAL window created *after* the
+  desktop composited *over* it. **AND ONE THING FOUND, THEN FIXED:** the server's menu-bar strip was painted
+  before the windows ("until the strip has a LEVEL of its own such a window covers it"), so the full-screen
+  desktop used to cover it. The strip now has `AWS_MENU_BAR_LEVEL` (24) and is composited in the level walk, so
+  the suite measures the fix — the MENU BAR is in the top rows, OVER the desktop — and the desktop's icons are
+  padded below it by the bar's height plus ten points.
 
 ### W1 — Desktop icons
 - **Deliverable:** `WSIconLayout` + `WSDesktopView`, backed by `WSItemModel`, showing `~/Desktop`; single/multi
@@ -428,6 +448,17 @@ the ingest are Apple's.
 - **Proves:** the desktop is a real file manager surface, not wallpaper.
 - **Test:** `desktop_layout.m` (offscreen) for grid arithmetic, collision and arrange modes; `metadata_store.m`
   for a sidecar round-trip; a pixel test for icon presence at a stored position.
+- **Done (2026-10-16):** `workspace/` shows `~/Desktop` (or `AGORA_DESKTOP`) as icons — **`WSIconLayout`**
+  (column-major grid, nearest-free snap, arrange, hit test), **`WSMetadataStore`** (the per-folder `.agora`
+  sidecar), and **`WSItemModel`** (the one directory model every view will read). The view draws an icon per item
+  (`libagora-iconservices`), single/multi-selects, rubber-bands, drags to reposition (snapping to the nearest
+  free cell and SAVING the sidecar) and double-click OPENS (F1's `LSOpenCFURLRef`; a folder is W2's window).
+  **MEASURED:** `workspace-desktop-layout` and `workspace-metadata-store` offscreen, and the desktop pixel test
+  is now **11 checks** — the icon appears at the stored position (900,300). **AND THE SIDECAR IS XML:** the plan
+  said binary, this tree's serializer REFUSES binary, and a sidecar that diffs is the better answer anyway.
+  **AND THE ICONS CLEAR THE MENU BAR:** the grid's ORIGIN is now the top of the AREA it fills rather than an
+  inset it adds, and `WSDesktopView` pads that area by the menu bar's height (`NSStatusBar -thickness`) plus ten
+  points — MEASURED: the first icon's box begins at y = 34.
 
 ### W2 — The file window shell
 - **Deliverable:** `WSFinderWindowController` with toolbar, sidebar, path bar, status bar, the four-view

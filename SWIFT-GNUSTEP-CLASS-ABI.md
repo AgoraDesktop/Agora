@@ -1,0 +1,462 @@
+# The GNUstep class ABI for Swift — design and plan
+
+*Decision: **Swift classes on Agora will be GNUstep-ABI class objects**, so that
+Agora's libobjc2 can register, resolve and dispatch to them like any other class.
+This document is the target ABI, the evidence behind it, the exact changes
+required, and a staged plan with verification gates.*
+
+Companion: [`SWIFT-PORT-HANDOFF.md`](SWIFT-PORT-HANDOFF.md) (§4 option C),
+[`SWIFT-TOOLCHAIN-INTEGRATION.md`](SWIFT-TOOLCHAIN-INTEGRATION.md).
+
+---
+
+## 0. Prerequisite: how the change can be tested at all
+
+**Resolved (2026-10-17).** Nothing in §4–§6 can be validated until the compiler
+can compile a source file; it now can, and how it was unblocked changes this
+plan's prerequisites. Two things happened, recorded in
+[`SWIFT-PORT-HANDOFF.md`](SWIFT-PORT-HANDOFF.md) §2.3–2.4:
+
+- The **target** stdlib was migrated to the compact class layout
+  (`SWIFT_OBJC_CLASS_LAYOUT == 0`), the layout bootstrap-compiled code already
+  emits, and IRGen now keys every class-object decision off
+  `usesObjcClassObject()` (`IGM.usesObjCClassObject()`), not off interop.
+- The **compiler process** was moved onto the host (bootstrap, non-interop)
+  standard library, because `_runtime(_ObjC)` changes `Array`'s storage type and
+  therefore the stdlib's ABI. The installed `swiftc` is a wrapper that puts the
+  host runtime on `LD_LIBRARY_PATH`; programs get the target stdlib through
+  `DT_RUNPATH`.
+
+Consequence for this plan: **the compiler no longer loads the target stdlib**,
+so the target class layout is a free choice. The two-stage build described below
+is no longer required for S1, and neither is recompiling swift-syntax with a
+stage-0 compiler. What remains for S1 is the IRGen/runtime emission work in
+§6.1a. The rest of this section is the original analysis, kept because it is
+still the accurate description of why the host and target runtimes must be
+separate. It is worth being explicit about what each stage needs:
+
+- The compiler's **own** Swift code (`SwiftCompilerSources`, both swift-syntax
+  copies) is compiled by the **bootstrap** compiler, which cannot emit interop
+  code on Linux (its stdlib has no `AutoreleasingUnsafeMutablePointer`, so `&v`
+  is a hard error) — verified again while writing this.
+- The **compiler itself** (IRGen, Sema, …) is C++, so it *can* be changed freely:
+  a stage-0 compiler built from this fork emits whatever class layout its IRGen
+  emits, regardless of how its own Swift sources were compiled.
+- Therefore the workable order is a **two-stage build**: stage 0 (built today,
+  from the bootstrap compiler) with the IRGen/runtime change produces a
+  GNUstep-layout stdlib and GNUstep-layout stage-1 modules; the final compiler
+  then runs with every Swift object in the process on the same layout.
+- The one piece the existing build does not stage is **swift-syntax**: both
+  copies (`lib/CompilerSwiftSyntax`, `lib/SwiftSyntax`) are built with
+  `CMAKE_Swift_COMPILER` (the bootstrap compiler) and pin it at configure time
+  through `project(… LANGUAGES Swift)`. Under this plan they must be compiled by
+  the stage-0 compiler, which needs new CMake plumbing (or a separate
+  out-of-tree build).
+
+Alternative order, if a working compiler is wanted sooner: make the class layout
+*compact* (the layout the bootstrap compiler already produces) instead of
+GNUstep's. That fixes the compiler outright — including plain non-interop
+`swiftc file.swift`, which is equally broken today — but it makes interop
+one-way. It is a strictly smaller change and it is not wasted work: the layout
+switch it introduces (a macro independent of `SWIFT_OBJC_INTEROP`, plus
+`Runtime::ObjCClassLayout` in `MetadataRef.h:44`) is the same machinery a
+GNUstep-layout pass needs.
+
+## 1. Why the layouts cannot be reconciled in place
+
+Swift's ObjC interop uses the **Apple** class ABI. Agora's libobjc2 uses the
+**GNUstep** one. Both are `struct objc_class`-shaped and both start with
+`isa` + superclass, and that is where the agreement ends:
+
+| word | Swift / Apple (`TargetAnyClassMetadataObjCInterop`) | GNUstep (`libagora-objc/class.h`) |
+|---|---|---|
+| 0 | `isa` | `isa` |
+| 1 | `Superclass` | `super_class` |
+| 2 | `CacheData[0]` | `name` |
+| 3 | `CacheData[1]` | `version` |
+| 4 | `Data` (`ptrtoint(ROData) \| mask`) | `info` (`objc_class_flags`) |
+| 5 | `Flags` (u32) + `InstanceAddressPoint` (u32) | `instance_size` |
+| 6 | `InstanceSize` (u32) + `InstanceAlignMask`(u16) + `Reserved`(u16) | `ivars` |
+| 7 | `ClassSize` (u32) + `ClassAddressPoint` (u32) | `methods` |
+| 8 | `Description` (the class descriptor) | `dtable` |
+| 9 | `IVarDestroyer` | `subclass_list` |
+| 10… | vtable, field offsets, generic args, … | `cxx_construct`, `cxx_destruct`, `sibling_class`, `protocols`, `extra_data`, `abi_version`, `properties` |
+
+Two collisions make a merged struct impossible, not merely awkward:
+
+- word 4: libobjc2 needs `info` to be a small flag word and tests bit 12
+  (`objc_class_flag_hidden_class`) and bit 0 (`objc_class_flag_meta`) in it;
+  Swift needs `Data` to be a pointer with the "is Swift" bit set.
+- word 8: libobjc2 dispatches through `dtable`; Swift needs `Description` to find
+  its vtable, field offsets and generic arguments.
+
+Same for the out-of-line Apple `class_ro_t` (`flags, instanceStart, instanceSize,
+reserved/ivarLayout, name, methodList, protocolList, ivarList, weakIvarLayout,
+propertyList`): GNUstep has no such object — `name`, `methods` and `ivars` live
+**in the class struct**, and there is no RO/RW split. So `Data`, `getROData()`,
+`setAsTypeMetadata()` and `SWIFT_CLASS_IS_SWIFT_MASK` have no place in the target
+design at all.
+
+## 2. Evidence that the target ABI is workable
+
+Four probes in [`swift-interop-probe/class-abi/`](swift-interop-probe/class-abi/)
+build the GNUstep-ABI shape by hand and register it four ways.
+
+| probe | registration | result |
+|---|---|---|
+| `probe.c` | `objc_registerClassPair` on a statically shaped struct | registration, `class_getName`, `objc_getClass`, `class_createInstance`, `object_getClass` all work; the first message send **crashes** |
+| `probe2.c` | `objc_allocateClassPair` + `class_addMethod` | instance and class dispatch both work |
+| `probe3.c` | `struct objc_init` → `__objc_load` (the **compiler's** path, static classes) | **everything works**, including `+load` delivery: `respondsToSelector` true on both sides, `-greet` dispatched, `+answer` dispatched |
+| `probe4.c` | `objc_loadClass_np` (the new hook, **dynamic/generic** classes) | **everything works**: heap-allocated class, `respondsToSelector` true both sides, both dispatches |
+
+### The one non-obvious requirement: `struct objc_method` field order
+
+`libagora-objc/method.h` defines
+
+```c
+struct objc_method { IMP imp; SEL selector; const char *types; };
+```
+
+**`imp` comes first**, not `selector` — the opposite of Apple's `method_t`
+(`{ name, types, imp }`) and easy to get wrong. The first version of `probe3`
+declared `{ selector, types, imp }` and produced a class that registered but
+whose methods were invisible (and that crashed `+load` delivery inside
+`sel_isEqual`). With the order corrected the probe works unchanged. Anything
+emitting these lists from IRGen must match this order exactly.
+
+Consequence for the design: **no emitted selector table is required for
+dispatch.** `probe3` interns its selectors with `sel_registerName()` and the
+loader-based path resolves them fine. clang additionally emits a
+`__objc_selectors` table (array of `SEL` in `struct objc_init.sel_begin..sel_end`)
+so that selectors can be pre-registered, which is worth mirroring later (it
+keeps method lists in read-only data and avoids a registration call per
+selector), but it is an optimisation, not a requirement.
+
+### Why `objc_registerClassPair` is not the path for compiler-shaped classes
+
+`dtable_for_class()` (`dtable.h:58`) **never installs** a dispatch table; it only
+returns `cls->dtable`. Installation happens in `objc_send_initialize()`
+(`dtable.c:726`), which builds the tables with `create_dtable_for_class()`.
+`objc_load_class()` (`class_table.c:410`) sets `cls->dtable` to the
+`uninstalled_dtable` sentinel, so the send path knows to call
+`objc_send_initialize()`. `objc_registerClassPair()` sets neither, leaving
+`dtable == NULL`, so the send path treats NULL as an installed table and walks
+it — the `probe.c` crash. Calling `objc_send_initialize()` afterwards does not
+recover, because the table creation then sees a non-sentinel NULL.
+
+## 3. Where classes come from
+
+Two cases, and they need different mechanisms:
+
+### 3.1 Statically emitted classes → the GNUstep module
+
+libobjc2 discovers classes when a constructor calls
+`__objc_load(struct objc_init *)` (`loader.c:170`). clang emits exactly that for
+`-fobjc-runtime=gnustep-2.0`:
+
+```
+	leaq	.objc_init(%rip), %rdi
+	callq	__objc_load@PLT
+```
+
+The contract (`loader.c`, `struct objc_init`) is a set of range pairs:
+
+```c
+struct objc_init {
+  uint64_t version;                 // must be 0
+  SEL sel_begin, sel_end;           // emitted selector table
+  Class *cls_begin, *cls_end;       // emitted class list
+  Class *cls_ref_begin, *cls_ref_end;
+  struct objc_category  *cat_begin,  *cat_end;
+  struct objc_protocol  *proto_begin,*proto_end;
+  struct objc_protocol **proto_ref_begin, **proto_ref_end;
+  struct objc_alias     *alias_begin,*alias_end;
+  struct nsstr          *strings_begin,*strings_end;
+};
+```
+
+`__objc_load` registers the selectors, then for each class calls
+`objc_load_class()` (insert into the class table, set the dtable sentinel,
+root-class/metaclass fixups, `+load` delivery, protocol init), then
+`objc_resolve_class_links()`. Everything Swift's runtime does today through
+`objc_readClassPair()` / `swift_instantiateObjCClass()` becomes **load-time and
+free**.
+
+### 3.2 Dynamically instantiated classes (generic classes) → a small new hook
+
+A generic Swift class's metadata is allocated at runtime from a pattern, so it
+cannot be in a `.objc_init` class list. It needs the same treatment
+`objc_load_class()` gives emitted classes. That function is `PRIVATE`; the
+minimal libobjc2 change for this project is a public entry point:
+
+```c
+// libagora-objc: class_table.c
+OBJC_PUBLIC void objc_loadClassForSwift_np(Class cls)   // wraps objc_load_class()
+```
+
+plus selector interning for the class's method lists if Swift emits names
+instead of SELs (§4.3). `objc_load_class` already does the parts that
+`objc_registerClassPair` misses, which is the whole reason this hook is needed.
+
+## 4. The target ABI
+
+### 4.1 Class metadata = `struct objc_class` + Swift trailing fields
+
+Address point stays word 0 (so `Class` and `Metadata *` are the same pointer, as
+GNUstep requires). The first 17 words are exactly GNUstep's struct; Swift's own
+fields follow it.
+
+```c
+struct swift_gnustep_class {
+  /* 0x00 */ Class isa;                    // metaclass
+  /* 0x08 */ Class super_class;            // real pointer (v2 ABI) or name ptr
+  /* 0x10 */ const char *name;
+  /* 0x18 */ long version;
+  /* 0x20 */ unsigned long info;           // objc_class_flags, incl. Swift marker
+  /* 0x28 */ long instance_size;
+  /* 0x30 */ struct objc_ivar_list *ivars;
+  /* 0x38 */ struct objc_method_list *methods;
+  /* 0x40 */ void *dtable;                 // runtime-owned
+  /* 0x48 */ Class subclass_list;          // runtime-owned
+  /* 0x50 */ IMP cxx_construct;
+  /* 0x58 */ IMP cxx_destruct;
+  /* 0x60 */ Class sibling_class;          // runtime-owned
+  /* 0x68 */ struct objc_protocol_list *protocols;
+  /* 0x70 */ struct reference_list *extra_data;
+  /* 0x78 */ long abi_version;             // 3 = Swift
+  /* 0x80 */ struct objc_property_list *properties;
+  /* --- Swift-specific, offset fixed so IRGen and the runtime agree --- */
+  /* 0x88 */ uint32_t classFlags;          // UsesSwiftRefcounting, IsStaticSpecialization, …
+  /* 0x8c */ uint32_t instanceAddressPoint;
+  /* 0x90 */ uint16_t instanceAlignMask;
+  /* 0x92 */ uint16_t reserved;
+  /* 0x94 */ uint32_t classSize;           // total metadata size, bytes
+  /* 0x98 */ uint32_t reserved2;
+  /* 0xa0 */ const ClassDescriptor *description;
+  /* 0xa8 */ IVarDestroyer ivarDestroyer;
+  /* 0xb0 */ /* immediate members: vtable, field offsets, generic args, … */
+};
+```
+
+Notes:
+
+- **"Is Swift" is `abi_version == 3`**, not a bit in a data pointer. libobjc2
+  ignores unknown `abi_version` values today (`legacy.c` only special-cases the
+  gs v1 struct), and the value is available to the runtime without any pointer
+  arithmetic. `SWIFT_CLASS_IS_SWIFT_MASK`, `setAsTypeMetadata()` and the whole
+  §2.1 handoff bug disappear from this platform.
+- `MetadataPositiveSizeInWords` / `ClassSize` / the address point math are
+  computed from this header, so the vtable and field-offset vector still follow
+  the metadata at offsets the compiler chooses; libobjc2 never looks there.
+- `instance_size` must be the real instance size (libobjc2 allocates from it);
+  Swift's `InstanceSize` in the Apple layout was a separate field.
+- The metaclass is the same struct with `info & objc_class_flag_meta` and
+  `ivars = NULL`; libobjc2 wires `isa`/`super_class`/`sibling_class` at resolve.
+
+### 4.2 Methods
+
+Apple's `method_list_t` (`uint32 entsizeAndFlags; uint32 count; { int32 name;
+int32 types; int32 imp }[]`, relative) is replaced by GNUstep's
+`struct objc_method_list` (`method.h`):
+
+```c
+struct objc_method_list { struct objc_method_list *next; int count;
+                          size_t size; struct objc_method methods[]; };
+struct objc_method      { SEL selector; const char *types; IMP imp; };
+```
+
+`size` is per-entry so the runtime can skip unknown trailing fields; IRGen must
+emit `sizeof(struct objc_method)`. Selectors must be real `SEL`s from an emitted
+selector table (see §3.1), or be interned by the runtime hook (§3.2).
+
+### 4.3 Ivars
+
+GNUstep's `objc_ivar_list` with `ivar_offset` **indirection** (clang emits
+`__objc_ivar_offset_Root.isa.#`, and `objc_registerClassPair` rewrites the
+`Offset` pointers). Swift's `FieldOffsetVector` in the metadata stays the source
+of truth for Swift; the emitted ivar list exists for libobjc2 (KVC, layout
+introspection, `class_getInstanceVariable`).
+
+## 5. Change inventory
+
+### 5.1 `swift` (fork)
+
+| Area | Change |
+|---|---|
+| `include/swift/ABI/Metadata.h` | new layout variant for the GNUstep vendor (`SWIFT_OBJC_CLASS_ABI_GNUSTEP`): the struct above replaces `TargetAnyClassMetadataObjCInterop`; drop `Data`, `CacheData`, `getROData`, `setAsTypeMetadata` on this path; `isTypeMetadata()` = kind test |
+| `lib/IRGen/GenMeta.cpp` | `emitClassMetadataStructure`: emit the GNUstep header (name/version/info/instance_size/ivars/methods) and move `Flags`/`Description`/`IVarDestroyer` to the trailing block; `addClassDataPointer`/`addClassCacheData` gone; `getClassDataPointerHasSwiftMetadataBits` gone on this path; `getROData()` gone |
+| `lib/IRGen/GenClass.cpp` | `emitROData`/`emitRODataFields` replaced by GNUstep method/ivar/protocol/property lists; `objc_method_list` emission with `next`/`count`/`size`; selector table emission; `name` as a global string |
+| `lib/IRGen/Linking.cpp` | class/metaclass symbol spelling and the `objc_init` module globals (`__objc_load` constructor, `cls_begin`/`cls_end`, `sel_begin`/`sel_end`) |
+| `lib/IRGen/GenObjC.cpp` | stop emitting Apple `class_ro_t`-shaped metadata and `objc_readClassPair`-style registration |
+| `stdlib/public/runtime/Metadata.cpp`, `SwiftObject.mm`, `DynamicCast.cpp` | replace `getROData`/`Data`/mask users with the new fields; `swift_instantiateObjCClass` → the §3.2 hook; `isTypeMetadata` → `abi_version` |
+| `stdlib/public/runtime/GNUstepObjCCompatibility.mm` | drop the `objc_readClassPair`/`_objc_realizeClassFromSwift` stubs once registration is real |
+
+### 5.2 `libagora-objc`
+
+| Change | Status |
+|---|---|
+| `class.h` + `class_table.c`: public `objc_loadClass_np()` for runtime-instantiated (generic) classes | **done**, rebuilt and installed; verified by `probe4` |
+
+### 5.3 Blocking prerequisite — **met by a different route**
+
+The original argument was that a GNUstep class layout would make interop and
+non-interop code agree, so the bootstrap-compiled host libraries
+(`SwiftCompilerSources`, `lib_CompilerSwift*`) would stop conflicting with
+`libswiftCore`. That argument holds for the *class header*, but not for the
+stdlib ABI as a whole: `_runtime(_ObjC)` also changes `Array`'s storage type, so
+the host libraries and an interop stdlib disagree no matter what the class
+layout is. See [`SWIFT-PORT-HANDOFF.md`](SWIFT-PORT-HANDOFF.md) §2.4.
+
+The prerequisite is therefore met by **separating the runtimes**: the compiler
+runs on the non-interop host stdlib, the programs it produces run on the target
+stdlib. That removes the coupling for every future ABI decision, including this
+one, and is why S1 needs no build-system work.
+
+## 6. Staged plan with gates
+
+| Stage | Work | Gate |
+|---|---|---|
+| S0 | libobjc2 hook + probes | **passed**: `probe3` (static/loader path) and `probe4` (dynamic path via `objc_loadClass_np`) both register and dispatch, instance and class side |
+| S0a | compact target layout (option A of the handoff §4) + host/target runtime split | **passed**: `swiftc` type-checks, compiles and runs at `-Onone` and `-O`; `verify-swift-port.sh` green; every runtime TU compiles under layout 0; interop is one-way |
+| S1a | `SWIFT_OBJC_CLASS_LAYOUT` in `Runtime/Config.h` (0 compact / 1 Apple / 2 GNUstep), independent of `SWIFT_OBJC_INTEROP`, default preserved | **done and inert**: `Metadata.cpp` still compiles unchanged with the macro defined, and with `-DSWIFT_OBJC_CLASS_LAYOUT=2` nothing breaks yet because nothing reads it |
+| S1b | `TargetAnyClassMetadataGNUstep` + `Runtime::ObjCClassLayout` + three-way selection, then flip the default | **layout machinery done; migration measured and applied** — every runtime TU compiles under *both* layouts (see §6.1). Flipping the default now also needs IRGen, so it belongs with S1 |
+| S1 | Emit, for one trivial `@objc` class: GNUstep structs, name, method list, **selector table** (`struct objc_selector` + `SEL` array), `.objc_init`, constructor; close the probe3 gap (why interned selectors alone are not enough) | a Swift-linked binary's class is visible to `objc_getClass` from C before `main`, `respondsToSelector` is true, and `+load` delivery does not crash |
+| S2 | Instance-method and class-method dispatch from C and from ObjC onto a Swift class | `objc_msgSend` reaches Swift IMPs |
+| S3 | Instance layout: `instance_size`, ivar list with offset indirection, Swift field offsets still correct | values written from C are visible to Swift and vice versa |
+| S4 | Generic classes: runtime instantiation path via the §3.2 hook | `Array`/`_ContiguousArrayStorage` usable through ObjC |
+| S5 | Refcounting/ARC interop, `+alloc`, `UsesSwiftRefcounting`, `+load`/`+initialize` | Agora API taking `id` accepts a Swift instance |
+| S6 | Remove the Apple-layout remnants and the compatibility shims | full `swiftc` + Agora program |
+
+Every stage is independently testable, and S0 needs no compiler rebuild.
+
+### 6.0 Where the IRGen work attaches (scouted)
+
+- `lib/IRGen/MetadataLayout.h:168` `ClassMetadataLayout` computes `MetadataSize`,
+  `MetadataAddressPoint`, `VTableOffset`, `FieldOffsetVector` and
+  `NumImmediateMembers`. These derive from the ABI `TargetClassMetadata` type,
+  which IRGen includes from the same C++ header the runtime uses — so once
+  `SWIFT_OBJC_CLASS_LAYOUT=2`, the sizes follow automatically and only the
+  *emission order* needs hand-editing.
+- `lib/IRGen/GenMeta.cpp:4814` — the ordered field emission for class metadata
+  (`addClassFlags()` / `addClassDataPointer()` call site); this is where the
+  GNUstep header (`name`, `version`, `info`, `instance_size`, `ivars`, `methods`,
+  `dtable`, …) and the moved Swift fields get emitted.
+- `lib/IRGen/GenMeta.cpp` `ResilientClassMetadataBuilder::layout()`
+  (`addClassDataPointer`, `addMetaclass`) — the resilient/generic pattern, which
+  carries `ClassRODataOffset`/`MetaclassObjectOffset` and needs the analogous
+  GNUstep offsets.
+- `lib/IRGen/GenClass.cpp` `emitAndAddMethodList` / `emitRODataFields` — Apple
+  `method_list_t`/`class_ro_t` emitters to be replaced by
+  `struct objc_method_list` in `{imp, selector, types}` order, plus
+  `objc_method`/`objc_ivar`/selector-table data.
+- `lib/IRGen/Linking.cpp` — `objc_init` globals and the `__objc_load`
+  constructor.
+
+### 6.1a The emission order to transcribe (layout 2)
+
+For a class and its metaclass, in this order (this is what `mini.s` emits and
+what `probe3`/`probe4` proved dispatchable):
+
+| # | field | value / source |
+|---|---|---|
+| 0 | `isa` | metaclass global (metaclass object: itself for a root class) |
+| 1 | `super_class` | superclass metadata, or the *name* pointer when unresolved |
+| 2 | `name` | emitted `\0`-terminated C string, shared by class and metaclass |
+| 3 | `version` | `0` |
+| 4 | `info` | `objc_class_flag_meta` (1) on the metaclass, `0` otherwise; the runtime owns the rest |
+| 5 | `instance_size` | instance size in bytes (not Swift's `InstanceAlignMask` packing) |
+| 6 | `ivars` | emitted `objc_ivar_list`, `NULL` for the metaclass |
+| 7 | `methods` | emitted `objc_method_list` (`next`, `count`, `size`, then `{imp, selector, types}` entries) |
+| 8 | `dtable` | `0` — the runtime installs it |
+| 9 | `subclass_list` | `0` — runtime |
+| 10 | `cxx_construct` | `0` |
+| 11 | `cxx_destruct` | `0` |
+| 12 | `sibling_class` | `0` — runtime |
+| 13 | `protocols` | emitted protocol list, or `0` |
+| 14 | `extra_data` | `0` |
+| 15 | `abi_version` | `3` |
+| 16 | `properties` | emitted property list, or `0` |
+| 17… | Swift fields | `Flags`, `InstanceAddressPoint`, `InstanceSize`, `InstanceAlignMask`, `Reserved`, `ClassSize`, `ClassAddressPoint`, `Description`, `IVarDestroyer`, then the immediate members (vtable, field-offset vector, generic args) |
+
+`ClassMetadataAddressPoint` becomes 0 (the address point is word 0), and
+`MetadataSize` grows by 15 words relative to layout 1 — both fall out of
+`ClassMetadataLayout` once the ABI type is the GNUstep variant, which is why only
+the emission order above has to be written by hand.
+
+### 6.1 The interop-code migration, as measured
+
+Compiling each runtime translation unit with `-DSWIFT_OBJC_CLASS_LAYOUT=2`
+(`Metadata.cpp`, `SwiftObject.mm`, `DynamicCast.cpp`, `Casting.cpp`,
+`ReflectionMirrorObjC.mm`, `GNUstepObjCCompatibility.mm`, `MetadataLookup.cpp`,
+plus the whole `swiftRuntimeCore` and the compiler build) reduced the change set
+to **four files and five edits** — far smaller than the ~50 sites the earlier
+grep-based estimate suggested, because almost all interop code reads class
+metadata through `TargetClassMetadata`/accessors rather than the Apple-only
+header fields:
+
+| File | Change |
+|---|---|
+| `include/swift/ABI/Metadata.h` | `TargetMetadata::getObjCClassObject()` re-types via `void*` instead of `const_cast` to Apple's header; new `TargetObjCClassWrapperMetadata::getClass()` accessor returning the layout-selected metadata type |
+| `stdlib/public/runtime/DynamicCast.cpp` | `destObjCType->Class` → `->getClass()` |
+| `stdlib/public/runtime/Casting.cpp` | 2 sites → `->getClass()` |
+| `stdlib/public/runtime/Private.h` | `getClassObject()` → `wrapper->getClass()` |
+
+New machinery: `SWIFT_OBJC_CLASS_LAYOUT` and `SWIFT_GNUSTEP_CLASS_ABI_VERSION`
+(`Runtime/Config.h`), `ObjCClassLayout` on `InProcess`/`External`/
+`WithObjCInterop`/`NoObjCInterop` (`ABI/TargetLayout.h`), three-way selection in
+`ABI/MetadataRef.h`, and `TargetAnyClassMetadataGNUstep` in `ABI/Metadata.h`
+(17 words mirroring `libagora-objc/class.h`, then the Swift fields, with
+`isTypeMetadata()` = `ABIVersion == 3`).
+
+Verification: default layout still builds the whole toolchain green
+(`build67.log`, 0 errors) and `swiftc --version` works; every TU above compiles
+with layout 2; the only remaining step to activate it is IRGen emitting the same
+layout plus the `objc_init` registration, and flipping the default in
+`Runtime/Config.h`.
+
+## 7. Open questions / risks
+
+1. **Type encodings.** Swift emits Apple method type encodings
+   (`v24@0:8i16` style). GNUstep's runtime only uses `types` for introspection,
+   but KVC/KVO and `NSInvocation`-style consumers read them; needs a check.
+2. **Selector table (optimisation, not a blocker).** `sel_registerName()` is
+   sufficient for dispatch (proven by `probe3`/`probe4`), so an emitted
+   `__objc_selectors` table like clang's is optional. It is still worth doing
+   later: it lets method lists stay in read-only data and avoids one
+   registration call per selector.
+3. **Superclass as a name.** The v2 ABI allows `super_class` to be a *class name*
+   until resolved; a Swift-emitted subclass of a Swift class could use the direct
+   pointer, but cross-image (Swift class subclassing an imported ObjC class) must
+   follow whatever libobjc2 expects from clang.
+4. **Metaclass roots.** `objc_resolve_class()` expects the root class's metaclass
+   to be self-`isa`; Swift's root is `SwiftObject`, and `NSObject` bridging needs
+   the root-class chain to line up with Agora's `NSObject`.
+5. **`+load`/`+initialize`** will now actually run for Swift classes — Swift's
+   existing lazy-initialization must not fight the runtime.
+6. **Resilient/generic class patterns** (`GenericClassMetadataPattern`) carry
+   `MetaclassObjectOffset`/`ClassRODataOffset` today; those fields are Apple-ABI
+   specific and must be replaced by the new layout's offsets.
+7. **Swift's `-class_method` dispatch is unaffected** (it uses its own vtable
+   offsets, not `dtable`), which is what makes this design viable at all — worth
+   keeping as an invariant in review.
+
+## 8. Reproduce
+
+`swift-interop-probe/` is listed in `.gitignore` (it holds local probes), so
+these files live in the working tree only, like the two earlier probes.
+
+```sh
+cd swift-interop-probe/class-abi
+A=/home/kyle/Development/Agora
+for p in probe probe2 probe3 probe4; do
+  gcc -g -O0 -I$A/build-prefix/include $p.c -o $p -L$A/build-prefix/lib -lobjc -lBlocksRuntime
+done
+LD_LIBRARY_PATH=$A/build-prefix/lib ./probe   # registration OK, dispatch crashes on NULL dtable
+LD_LIBRARY_PATH=$A/build-prefix/lib ./probe2  # both dispatches OK (canonical public path)
+LD_LIBRARY_PATH=$A/build-prefix/lib ./probe3  # loader path: fully works (+load delivery included)
+LD_LIBRARY_PATH=$A/build-prefix/lib ./probe4  # dynamic path via objc_loadClass_np: fully works
+
+# clang's reference emission for the target ABI
+~/.agora-swift/bootstrap/usr/bin/clang -target x86_64-unknown-linux-gnu \
+  -fobjc-runtime=gnustep-2.0 -I$A/build-prefix/include -S -o mini.s mini.m
+```

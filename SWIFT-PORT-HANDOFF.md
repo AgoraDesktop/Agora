@@ -53,6 +53,9 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
 | strings | interpolation, Unicode (`"héllo 🌍"`), `String(repeating:)` |
 | concurrency types | `actor` declaration (not exercised at runtime) |
 | **Agora interop** | `import Foundation` (Agora's), `NSObject.alloc()`, `isKind(of:)`, `description()`, `object_getClass`/`class_getName` through libobjc2 |
+| **default flags** | `swiftc prog.swift` enables Objective-C interop and selects the GNUstep runtime ABI family without any `-Xfrontend` flags |
+| **super dispatch** | a Swift `super.` send to an imported class emits `objc_msg_lookup_super` + a direct IMP call, not Apple's `objc_msgSendSuper2`; such a program now **links** (semantics need S1/S5, see below) |
+| **the two probes** | `agora-import-probe`: 11/11 checks; `objc-to-swift-probe`: compiles and links, then traps in `objc_allocWithZone` when the Swift subclass is first allocated |
 
 **Not available yet**, and by design with the compact layout (see §4):
 
@@ -63,14 +66,24 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
 - No Foundation *bridging* of Swift values: `String` ↔ `NSString`, `Array` ↔
   `NSArray` and `Error` ↔ `NSError` all need the ObjC-object layout (and, for
   the value types, a Foundation overlay, which this toolchain does not build).
-- `__SwiftValue` bridging and the `SwiftNativeNS*` wrapper classes are
+- **Swift class instantiation.** A Swift class's `T()` uses the Objective-C
+  allocator (`__allocating_init` → `objc_allocWithZone`) whenever it inherits an
+  imported class, and libobjc2 then treats the Swift metadata as a class object.
+  With the compact layout that is invalid: the probe traps in
+  `objc_test_class_flag`. S1/S5.
+- **`NSObject()` sugar.** Even for a genuine Agora class the sugar goes through
+  `objc_allocWithZone`, which sends `+allocWithZone:`; Agora's `NSObject`
+  deliberately has no zone-taking API (`libagora-base/NSObject.h`), so the call
+  raises `NSInvalidArgumentException`. Use `.alloc()` — this is the open decision
+  in §5 item 5.
+- **Property-shaped imported accessors.** Agora declares `- (size_t)length` and
+  friends as methods (Apple and GNUstep declare a `length` property), so Swift
+  writes `text.length()`, not `text.length`. Not a port defect, but it is what
+  the probes had to be adapted to.
+- **`__SwiftValue` bridging and the `SwiftNativeNS*` wrapper classes** are
   Swift-refcounted Objective-C classes; with layout 0 they have no Swift heap
   header. Untested, expected to fail. Nothing in the verified programs reaches
   them.
-- The driver still passes `-disable-objc-interop` by default; interop programs
-  pass `-Xfrontend -enable-objc-interop -Xfrontend -objc-runtime-vendor=gnustep`
-  explicitly (see the verification script). Making the GNUstep target default
-  to interop is a small, separate driver change.
 
 ---
 
@@ -199,12 +212,59 @@ non-interop copy of *this* stdlib as the host runtime (it must stay
 ABI-identical to the one the bootstrap compiler produced the host tools with),
 or, the real answer, a proper host/target split in the CMake install.
 
+### 2.5 Interop became the default, and super sends changed ABI
+
+Two follow-ups from the previous handoff's §5 landed in this round.
+
+**Step 2 — the target defaults to interop.** `ToolChain::addCommonFrontendArgs`
+now pushes `-enable-objc-interop` for Linux instead of
+`-disable-objc-interop`, and `CompilerInvocation` defaults
+`ObjCRuntimeVendorKind` to `GNUstep` on a non-Darwin ELF target. The vendor is
+*not* passed by the driver: `-objc-runtime-vendor=` diagnoses "requires
+`-enable-objc-interop`", and inner builds (below) must be able to disable
+interop without also having to cancel a vendor flag. An explicit
+`-objc-runtime-vendor=` still wins, and `-Xfrontend -disable-objc-interop`
+still turns the whole thing off.
+
+This is not cosmetic. The installed stdlib is built with interop, and
+`_runtime(_ObjC)` changes the stdlib's own ABI (`Array`'s storage type, §2.4), so
+a program compiled without interop is compiled against a different standard
+library than the one it links. The verification script now proves the default
+by compiling its Agora program with **no** interop flags at all.
+
+One inner build cannot take the default: libdispatch's `Dispatch` overlay is
+not interop-aware (its shims use `id`-typed `dispatch_data_t`, which ARC
+rejects with bridged-cast errors). It is now built with
+`-Xfrontend -disable-objc-interop` —
+[`patches/0004-libdispatch-overlay-non-interop.patch`](swift-toolchain/patches/0004-libdispatch-overlay-non-interop.patch),
+applied to `~/.agora-swift/src/swift-corelibs-libdispatch`. The stdlib itself
+still gets interop through `SWIFT_STDLIB_ENABLE_OBJC_INTEROP`.
+
+**Super sends.** libobjc2 has no `objc_msgSendSuper2` (it exports
+`objc_msgSend`/`_stret` and the GCC-style `objc_msg_lookup_super`), so every
+Swift `super.` send into an imported class failed at **link** time with
+`undefined reference to objc_msgSendSuper2`. `getObjCMethodCallee` now has a
+GNUstep path: build the `objc_super`, call `objc_msg_lookup_super`, and call
+the returned IMP with `(self, _cmd, ...)` like any other method. Two details
+matter:
+
+- libobjc2 starts its search **at** `struct objc_super::class`, while Swift (for
+  Apple's `objc_msgSendSuper2`) stores the class that *contains* the method and
+  lets the runtime start at its superclass. IRGen therefore names the
+  superclass statically (`ClassDecl::getSuperclassDecl()`), which also avoids
+  asking libobjc2 about Swift metadata, which is not a class object at layout 0.
+- A `Peer` send (`objc_msgSendSuper`) already means "start at this class", so it
+  is left as-is.
+
+What is *not* verified yet is semantics: a Swift subclass of `NSObject` still
+cannot be allocated (next section), so nothing reaches the super method.
+
 ---
 
 ## 3. Change inventory
 
-`swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 36 files,
-~630 insertions. New this round, on top of the 29 files of the previous one:
+`swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 40 files,
+~743 insertions. New this round, on top of the 29 files of the previous one:
 
 | File | Change |
 |---|---|
@@ -213,6 +273,10 @@ or, the real answer, a proper host/target split in the CMake install.
 | `include/swift/ABI/MetadataRef.h` | `getObjCClass*` return the layout-selected type |
 | `lib/IRGen/IRGenModule.h` | `usesObjCClassObject()` |
 | `lib/IRGen/ClassMetadataVisitor.h`, `lib/IRGen/GenMeta.cpp`, `lib/IRGen/GenClass.cpp` | layout decisions follow `usesObjCClassObject()` |
+| `lib/Driver/ToolChains.cpp` | Linux defaults to `-enable-objc-interop` (and embedded Swift still turns it off) |
+| `lib/Frontend/CompilerInvocation.cpp` | non-Darwin ELF targets default `ObjCRuntimeVendorKind` to `GNUstep`; an explicit flag still wins |
+| `lib/IRGen/GenObjC.cpp` | GNUstep super sends: `objc_msg_lookup_super` + IMP call, with the superclass named statically |
+| `include/swift/Runtime/RuntimeFunctions.def` | `objc_msg_lookup_super` runtime declaration |
 | `stdlib/public/runtime/Metadata.cpp` | class-object-only blocks gated on layout 1 |
 | `stdlib/public/runtime/MetadataImpl.h` | `AnyObject` box retain/release through the checking helpers |
 | `stdlib/public/runtime/Casting.cpp`, `DynamicCast.cpp` | class-metatype casts without ObjC messaging |
@@ -224,7 +288,16 @@ Not in the patch, but part of the port:
 | File | Change |
 |---|---|
 | `swift-toolchain/scripts/build-swift-toolchain.sh` | installs the `swiftc` host-runtime wrapper (and removes the `swiftc` symlink first — writing through it overwrites `swift-frontend`) |
-| `swift-toolchain/scripts/verify-swift-port.sh` | the end-to-end gate: type-check, compile, run, `-O`, Agora interop |
+| `swift-toolchain/scripts/verify-swift-port.sh` | the end-to-end gate: type-check, compile, run, `-O`, Agora interop (now with no explicit interop flags) |
+| `swift-toolchain/patches/0004-libdispatch-overlay-non-interop.patch` | keeps the `Dispatch` overlay on the non-interop ABI the toolchain built it with |
+| `swift-interop-probe/scripts/run-native-probe.sh` | builds and runs both probes against the native toolchain (no SwiftPM) |
+| `swift-interop-probe/{AgoraProbeKit,Sources}` | adapted to Agora's headers (`length()` as a method, `.alloc()` instead of `NSObject()`), plus `AgoraProbeIsKindOfClassNamed` for class-cluster checks |
+
+Regenerate the fork patch after editing the source tree:
+
+```sh
+git -C ~/.agora-swift/src/swift diff > swift-toolchain/patches/0003-swift-enable-objc-interop.patch
+```
 
 ---
 
@@ -239,19 +312,32 @@ swift-toolchain/scripts/build-swift-toolchain.sh
 swift-toolchain/scripts/verify-swift-port.sh
 ```
 
-A program that uses Agora needs the interop flags and the module map:
+A program that uses Agora needs only the module map and the include/library
+paths — interop and the GNUstep runtime family are the default for this target:
 
 ```sh
 T=~/.agora-swift/toolchain/usr; A=/path/to/Agora
 "$T/bin/swiftc" -o prog prog.swift \
-  -Xfrontend -enable-objc-interop -Xfrontend -objc-runtime-vendor=gnustep \
   -Xcc -fmodule-map-file="$A/swift-interop-probe/agora-modules/module.modulemap" \
-  -Xcc -I"$A/build-prefix/include" -Xcc -fobjc-runtime=gnustep-2.0 \
+  -Xcc -I"$A/build-prefix/include" \
   -Xcc -Wno-incomplete-umbrella \
   -L"$A/build-prefix/lib" -lagora-base -lagora-core -lagora-dispatch \
   -lobjc -lBlocksRuntime -Xlinker -rpath -Xlinker "$A/build-prefix/lib"
 LD_LIBRARY_PATH="$A/build-prefix/lib" ./prog
 ```
+
+The same program with `-Xfrontend -disable-objc-interop` still compiles, for
+testing the non-interop path.
+
+Run both interop probes against the native toolchain (no SwiftPM needed):
+
+```sh
+swift-interop-probe/scripts/run-native-probe.sh
+```
+
+Current result: `agora-import-probe` 11/11; `objc-to-swift-probe` builds and
+links, then traps in `objc_allocWithZone` on the first Swift-class allocation,
+which is the S1/S5 gate rather than a probe defect.
 
 Debugging techniques that produced the findings above:
 
@@ -281,26 +367,33 @@ Debugging techniques that produced the findings above:
    `ABI/Metadata.h`), the probe evidence is in
    [`SWIFT-GNUSTEP-CLASS-ABI.md`](SWIFT-GNUSTEP-CLASS-ABI.md) §2, and the
    host/target split removed the build-system blocker. Work through the gates
-   S1 → S6 there.
-2. **Make interop the default for this target** in `lib/Driver/ToolChains.cpp`
-   (it still pushes `-disable-objc-interop` for every non-Darwin target) and
-   select `-objc-runtime-vendor=gnustep` from the driver, so `swiftc prog.swift`
-   does the right thing without the `-Xfrontend` flags.
-3. **Self-contained host runtime.** Replace the wrapper's dependence on
+   S1 → S6 there. The probes now put a precise first failure on the board: with
+   the compact layout, `SwiftResponder()` traps in
+   `objc_allocWithZone → objc_test_class_flag` because the Swift metadata is not
+   a class object. That is the first thing S1 fixes.
+2. **Self-contained host runtime.** Replace the wrapper's dependence on
    `~/.agora-swift/bootstrap` with a non-interop stdlib installed under the
    toolchain (`lib/swift/host/…`), or do the proper host/target split in the
-   CMake install.
-4. **Re-run the two original probes** (`swift-interop-probe/`) natively. They
-   were written for the published container; `agora-import-probe` should now
-   pass in its entirety (the shim `compat/ObjCInteropShim.c` is no longer
-   needed — the runtime exports those entry points), and `objc-to-swift-probe`
-   is the S5 gate and is expected to fail until Swift classes are class objects.
-5. **`+allocWithZone:`.** Agora's no-zone policy makes Swift's
-   `__allocating_init` sugar unusable on arbitrary imported classes
-   (`NSMutableArray()` aborts). Either give `NSObject` a compatibility
-   `+allocWithZone:` that ignores the zone (the README already flags this), or
-   document `.alloc()`-style construction. This is independent of the Swift
-   port.
+   CMake install. This is the only remaining build-system "cheat".
+3. **`+allocWithZone:` decision.** Confirmed by probe: `NSObject()` (and every
+   imported `T()`) goes through `objc_allocWithZone`, which sends
+   `+allocWithZone:`, which Agora's `NSObject` deliberately does not implement —
+   so the sugar raises `NSInvalidArgumentException`. Either add a compatibility
+   `+ (id)allocWithZone:(void *)zone { return [self alloc]; }` that preserves the
+   singleton door (`libagora-base/NSObject.h` explains why the door is `+alloc`),
+   or make `.alloc()`-style construction the documented Swift idiom. Not a
+   defect of the Swift port.
+4. **Property-shaped accessors in Agora's headers.** `- (size_t)length` imports
+   as `length()`, while Apple and GNUstep declare a `length` property. Writing
+   Swift against Agora therefore reads differently from writing it against
+   Cocoa. Converting the read-only accessors (`length`, `UTF8String`, …) to
+   `@property` declarations is source-compatible for Objective-C and would make
+   `text.length` work.
+5. **Keep the probes green.** `swift-interop-probe/scripts/run-native-probe.sh`
+   is the native harness; `agora-import-probe` is 11/11 today, and
+   `objc-to-swift-probe` becomes the S5 gate as soon as Swift classes are class
+   objects. The published-container `run-probe.sh` and
+   `compat/ObjCInteropShim.c` are now historical.
 
 ---
 
@@ -314,10 +407,16 @@ swift-toolchain/
 ├── patches/
 │   ├── 0001-libagora-base-objcxx-clean.patch   3 hunks / 2 files
 │   ├── 0002-libagora-core-objcxx-clean.patch   1 hunk  / 1 file
-│   └── 0003-swift-enable-objc-interop.patch   36 files, ~630 insertions
+│   ├── 0003-swift-enable-objc-interop.patch   40 files, ~743 insertions
+│   └── 0004-libdispatch-overlay-non-interop.patch  1 file (the Dispatch overlay)
 └── scripts/
     ├── build-swift-toolchain.sh               build + install (incl. wrapper)
     └── verify-swift-port.sh                   the end-to-end gate
+
+swift-interop-probe/
+├── scripts/run-probe.sh                       the original container harness
+├── scripts/run-native-probe.sh                the native harness (current)
+└── Sources/, AgoraProbeKit/                   the two probes + ObjC side-channel
 ```
 
 Related: `swift-interop-probe/` (the two probes),
@@ -344,6 +443,13 @@ the installed `swiftc` runs the compiler on the host (bootstrap) runtime, while
 produced programs get the toolchain's interop stdlib through their RUNPATH. That
 split is also what unblocks the destination ABI: the compiler no longer loads
 the target stdlib, so flipping the target class layout to GNUstep's no longer
-needs a two-stage build. Interop today is one-way — Swift messages Agora, Agora
-does not see Swift classes — which is exactly the S1 → S6 work in
-`SWIFT-GNUSTEP-CLASS-ABI.md`.
+needs a two-stage build. On top of that, Objective-C interop and the GNUstep
+runtime family are now the compiler's **default** for this target (a program
+needs no `-Xfrontend` flags), and Swift's `super.` sends into imported classes
+use libobjc2's `objc_msg_lookup_super` instead of the Apple-only
+`objc_msgSendSuper2`, so such programs link. The two probes were re-run
+natively: `agora-import-probe` passes every check, and `objc-to-swift-probe`
+compiles and links but traps in `objc_allocWithZone`, because a Swift subclass
+of `NSObject` is still not an Objective-C class object. Interop today is
+one-way — Swift messages Agora, Agora does not see Swift classes — which is
+exactly the S1 → S6 work in `SWIFT-GNUSTEP-CLASS-ABI.md`.

@@ -460,6 +460,28 @@ the ingest are Apple's.
   inset it adds, and `WSDesktopView` pads that area by the menu bar's height (`NSStatusBar -thickness`) plus ten
   points — MEASURED: the first icon's box begins at y = 34.
 
+### W1b — The application menu
+- **Deliverable:** `WSMainMenu` (the bar's seven titles and the application menu's rows), `WSAboutPanel`,
+  `WSPreferencesWindow`, and `WSApplication` as the two app-menu rows' target.
+- **Proves:** the application is a Mac application rather than a full-screen picture — it has a menu bar, an About,
+  and a Preferences that changes something real.
+- **Test:** `main_menu.m` (offscreen: the bar's shape, each row's target and shortcut mask, and what `-update`'s
+  enabling walk makes of every row); the desktop suite's SECOND SCENE, which reads the strip's ink with Workspace as
+  the active application and confirms the bar is only as wide as its menus.
+- **Done (2026-10-16):** seven menus — the application's own (About, Preferences…, Services, Hide, Hide Others,
+  Show All, Quit) plus File, Edit, View, Go, Window, Help — installed through `-[NSApplication setMainMenu:]`, which
+  inserts the application menu and moves Help last. **About and Preferences are real:** the first reads the bundle's
+  own `Info.plist` through `NSBundle` and draws the icon, the name, the version and the identifier; the second
+  changes the desktop icons' size through `WSMetadataStore` and SAVES it, so the `.agora` sidecar carries the
+  preference. **AND THE MENUS BESIDE IT ARE A SKELETON, MEASURED RATHER THAN ASSUMED:** every File, View and Go row
+  has no target and is greyed by `-update`'s walk; `workspace-main-menu` checks that, and pins the two rows that do
+  NOT behave that way — the Edit menu's five chain-routed rows, which this tier's base `NSResponder` implements as
+  forwarders, so the walk enables them where Apple's would not. **THREE FINDINGS, TWO OF THEM THE APPKIT'S**, are in
+  `workspace/PROVENANCE.md`: the key-equivalent mask is ZERO by default here where Apple's is Command (so every row
+  names its own); the bar's window was a RACE, now fixed at `-nextEventMatchingMask:` in `libagora-app`; and
+  clicking the first title opens the application menu (MEASURED: a window at level 101) which a flood of spurious
+  `NSLeftMouseDragged` events then dismisses — a menu-tracking bug to fix in the AppKit, recorded rather than hidden.
+
 ### W2 — The file window shell
 - **Deliverable:** `WSFinderWindowController` with toolbar, sidebar, path bar, status bar, the four-view
   switcher (only Icon works), Back/Forward history, and the Places list; a second window shows a second folder.

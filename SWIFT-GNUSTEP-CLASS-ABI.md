@@ -318,16 +318,36 @@ one, and is why S1 needs no build-system work.
 |---|---|---|
 | S0 | libobjc2 hook + probes | **passed**: `probe3` (static/loader path) and `probe4` (dynamic path via `objc_loadClass_np`) both register and dispatch, instance and class side |
 | S0a | compact target layout (option A of the handoff §4) + host/target runtime split | **passed**: `swiftc` type-checks, compiles and runs at `-Onone` and `-O`; `verify-swift-port.sh` green; every runtime TU compiles under layout 0; interop is one-way |
-| S1a | `SWIFT_OBJC_CLASS_LAYOUT` in `Runtime/Config.h` (0 compact / 1 Apple / 2 GNUstep), independent of `SWIFT_OBJC_INTEROP`, default preserved | **done and inert**: `Metadata.cpp` still compiles unchanged with the macro defined, and with `-DSWIFT_OBJC_CLASS_LAYOUT=2` nothing breaks yet because nothing reads it |
-| S1b | `TargetAnyClassMetadataGNUstep` + `Runtime::ObjCClassLayout` + three-way selection, then flip the default | **layout machinery done; migration measured and applied** — every runtime TU compiles under *both* layouts (see §6.1). Flipping the default now also needs IRGen, so it belongs with S1 |
-| S1 | Emit, for one trivial `@objc` class: GNUstep structs, name, method list, **selector table** (`struct objc_selector` + `SEL` array), `.objc_init`, constructor; close the probe3 gap (why interned selectors alone are not enough) | a Swift-linked binary's class is visible to `objc_getClass` from C before `main`, `respondsToSelector` is true, and `+load` delivery does not crash |
-| S2 | Instance-method and class-method dispatch from C and from ObjC onto a Swift class | `objc_msgSend` reaches Swift IMPs |
-| S3 | Instance layout: `instance_size`, ivar list with offset indirection, Swift field offsets still correct | values written from C are visible to Swift and vice versa |
-| S4 | Generic classes: runtime instantiation path via the §3.2 hook | `Array`/`_ContiguousArrayStorage` usable through ObjC |
-| S5 | Refcounting/ARC interop, `+alloc`, `UsesSwiftRefcounting`, `+load`/`+initialize` | Agora API taking `id` accepts a Swift instance |
+| S1a | `SWIFT_OBJC_CLASS_LAYOUT` in `Runtime/Config.h` (0 compact / 1 Apple / 2 GNUstep), independent of `SWIFT_OBJC_INTEROP`, default preserved | **done and inert**: `Metadata.cpp` still compiles unchanged with the macro defined |
+| S1b | `TargetAnyClassMetadataGNUstep` + `Runtime::ObjCClassLayout` + three-way selection, then flip the default | **layout machinery done; migration measured and applied** — every runtime TU compiles under *both* layouts (see §6.1) |
+| S1 | Emit, for a trivial `@objc` class: GNUstep structs, name, method list, **selector table**, `.objc_init`, constructor | **passed** with a test compiler built at layout 2 (`swift-toolchain/scripts/build-layout2-frontend.sh`): `objc_getClass` from a C constructor before `main`, `respondsToSelector`, `+load` via an ObjC category, dispatch — see the note below |
+| S2 | Instance-method and class-method dispatch from C and from ObjC onto a Swift class | **passed for the fixed/non-generic case**: `objc_msg_lookup` reaches `-greet` and `+classAnswer`; `objc-to-swift-probe` passes in full with the layout-2 compiler |
+| S3 | Instance layout: `instance_size`, ivar list with offset indirection, Swift field offsets still correct | **half passed**: the `objc_ivar_list` is emitted and keeps `instance_size` from being clobbered (see note); the C-write/Swift-read check is still to do |
+| S4 | Generic classes: runtime instantiation path via the §3.2 hook | **next**: the generic path still emits Apple-shaped patterns and fails at link time (`undefined reference to ._OBJC_METACLASS__TtCs12_SwiftObject`) |
+| S5 | Refcounting/ARC interop, `+alloc`, `UsesSwiftRefcounting`, `+load`/`+initialize` | **partly**: `+alloc`/`objc_allocWithZone` and `+load` work; refcounting still goes through libobjc2's free path (`deinit` does not run) until the runtime is built at layout 2 |
 | S6 | Remove the Apple-layout remnants and the compatibility shims | full `swiftc` + Agora program |
 
 Every stage is independently testable, and S0 needs no compiler rebuild.
+
+**S1 result (2026-10-17).** With `SWIFT_OBJC_CLASS_LAYOUT=2` and the emission
+work above, `swift-toolchain/scripts/verify-class-abi.sh` passes every
+check from C: the class is registered before `main`, its name and both method
+lists are visible, an Objective-C category on the Swift class is attached and its
+`+load` delivered, and `class_createInstance` + `objc_msg_lookup` dispatch to the
+Swift IMPs. Swift-side `Counter()` (via `objc_allocWithZone`), `super -init`,
+property access and `isKind(of:)` work as well. Two requirements surfaced that
+are easy to miss:
+
+- a Swift-defined class needs its own `._OBJC_METACLASS_<name>` object;
+  libobjc2 exports no metaclass symbols for imported classes, so the compiler's
+  previous mapping (metaclass reference → class symbol) is wrong for definitions;
+- a null `objc_ivar_list` is not harmless: libobjc2's
+  `objc_compute_ivar_offsets()` replaces `instance_size` with the superclass's,
+  after which every stored field is written past the allocation (a heap
+  corruption that shows up in a later `malloc`). The emitted ivar list fixes it.
+
+The remaining piece before the *default* can flip is S4: the stdlib is full of
+generic classes, and `GenericClassMetadataBuilder` still emits the Apple pattern.
 
 ### 6.0 Where the IRGen work attaches (scouted)
 
@@ -359,13 +379,13 @@ what `probe3`/`probe4` proved dispatchable):
 
 | # | field | value / source |
 |---|---|---|
-| 0 | `isa` | metaclass global (metaclass object: itself for a root class) |
-| 1 | `super_class` | superclass metadata, or the *name* pointer when unresolved |
+| 0 | `isa` | metaclass global; 0 in the metaclass object itself (runtime resolves) |
+| 1 | `super_class` | superclass metadata; 0 in the metaclass object (runtime resolves) |
 | 2 | `name` | emitted `\0`-terminated C string, shared by class and metaclass |
 | 3 | `version` | `0` |
 | 4 | `info` | `objc_class_flag_meta` (1) on the metaclass, `0` otherwise; the runtime owns the rest |
 | 5 | `instance_size` | instance size in bytes (not Swift's `InstanceAlignMask` packing) |
-| 6 | `ivars` | emitted `objc_ivar_list`, `NULL` for the metaclass |
+| 6 | `ivars` | emitted `objc_ivar_list`, `NULL` for the metaclass — **not** `NULL` for a class with no ObjC ivars: libobjc2 replaces `instance_size` with the superclass's when the list is null (see §6 note) |
 | 7 | `methods` | emitted `objc_method_list` (`next`, `count`, `size`, then `{imp, selector, types}` entries) |
 | 8 | `dtable` | `0` — the runtime installs it |
 | 9 | `subclass_list` | `0` — runtime |
@@ -378,10 +398,20 @@ what `probe3`/`probe4` proved dispatchable):
 | 16 | `properties` | emitted property list, or `0` |
 | 17… | Swift fields | `Flags`, `InstanceAddressPoint`, `InstanceSize`, `InstanceAlignMask`, `Reserved`, `ClassSize`, `ClassAddressPoint`, `Description`, `IVarDestroyer`, then the immediate members (vtable, field-offset vector, generic args) |
 
-`ClassMetadataAddressPoint` becomes 0 (the address point is word 0), and
-`MetadataSize` grows by 15 words relative to layout 1 — both fall out of
-`ClassMetadataLayout` once the ABI type is the GNUstep variant, which is why only
-the emission order above has to be written by hand.
+Two details that the implementation settled:
+
+- **The metaclass's own `isa`/`super_class` are emitted as 0.** Clang does the
+  same for `-fobjc-runtime=gnustep-2.0`; `objc_resolve_class()` fills both in
+  from the class object. The class's `isa` is the metaclass global.
+- **`ClassAddressPoint`/`ClassSize` keep their Swift meaning.** The metadata
+  allocation still starts with the layout-string/destructor/VWT prefix, so the
+  address point (which is also the `Class` pointer) is 24 bytes into it and
+  `ClassSize` is the whole allocation. libobjc2 never looks before the address
+  point, and the Swift runtime never looks at the GNUstep header, so the two
+  descriptions coexist. `MetadataSize` grows by the 17-word GNUstep header (net
+  +14 words relative to Apple's 3-word cache/`Data` trio), which falls out of
+  `ClassMetadataLayout` once the ABI type is the GNUstep variant — only the
+  emission order above had to be written by hand.
 
 ### 6.1 The interop-code migration, as measured
 
@@ -460,3 +490,17 @@ LD_LIBRARY_PATH=$A/build-prefix/lib ./probe4  # dynamic path via objc_loadClass_
 ~/.agora-swift/bootstrap/usr/bin/clang -target x86_64-unknown-linux-gnu \
   -fobjc-runtime=gnustep-2.0 -I$A/build-prefix/include -S -o mini.s mini.m
 ```
+
+**The S1 gate, with the compiler emitting the ABI** (the script builds a
+frontend-only layout-2 compiler against the installed stdlib, then checks the
+class from C):
+
+```sh
+swift-toolchain/scripts/verify-class-abi.sh
+```
+
+It prints `S1 gate: ok (registered, name/methods visible, +load delivered,
+dispatch = 42/7)`. `swift-toolchain/scripts/build-layout2-frontend.sh` on its
+own leaves `bin/swiftc-layout2` in the build tree so individual programs can be
+compiled against the destination ABI; a *full* `AGORA_SWIFT_CLASS_LAYOUT=2`
+`build-swift-toolchain.sh` is the S4→S6 experiment.

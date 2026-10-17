@@ -66,10 +66,12 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
 - No Foundation *bridging* of Swift values: `String` ↔ `NSString`, `Array` ↔
   `NSArray` and `Error` ↔ `NSError` all need the ObjC-object layout (and, for
   the value types, a Foundation overlay, which this toolchain does not build).
-- **Swift class instantiation.** A Swift class's `T()` uses the Objective-C
-  allocator (`__allocating_init` → `objc_allocWithZone`) whenever it inherits an
-  imported class, and libobjc2 then treats the Swift metadata as a class object.
-  With the compact layout that is invalid: the probe traps in
+- **Swift class instantiation.** Any Swift class that inherits an imported class
+  is instantiated through the Objective-C allocator: even with its own
+  initializer, `T(start:)` is emitted as `Counter.__allocating_init(start:)` →
+  `objc_allocWithZone`, and libobjc2 then treats the Swift metadata as a class
+  object. With the compact layout that is invalid: the probe (and a two-line
+  `class Counter: NSObject` with an explicit init) traps in
   `objc_test_class_flag`. S1/S5.
 - **`NSObject()` sugar.** Even for a genuine Agora class the sugar goes through
   `objc_allocWithZone`, which sends `+allocWithZone:`; Agora's `NSObject`
@@ -370,7 +372,10 @@ Debugging techniques that produced the findings above:
    S1 → S6 there. The probes now put a precise first failure on the board: with
    the compact layout, `SwiftResponder()` traps in
    `objc_allocWithZone → objc_test_class_flag` because the Swift metadata is not
-   a class object. That is the first thing S1 fixes.
+   a class object. A two-line `class Counter: NSObject { init(start:) { … } }`
+   reproduces it: Swift emits `__allocating_init` for every class with ObjC
+   ancestry, so *no* Swift subclass of an Agora class can be instantiated until
+   S1/S5. That is the first thing S1 fixes.
 2. **Self-contained host runtime.** Replace the wrapper's dependence on
    `~/.agora-swift/bootstrap` with a non-interop stdlib installed under the
    toolchain (`lib/swift/host/…`), or do the proper host/target split in the

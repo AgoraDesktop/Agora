@@ -1,0 +1,44 @@
+# The demo
+
+One window server, three clients, and a menu bar that belongs to whichever of them is **active**.
+
+```
+demo/agora-demo.sh [WIDTHxHEIGHT]      # 1280x720 by default; Ctrl-C stops it
+```
+
+It needs `window-server`, `workspace` and `libagora-app` built (`build/` in each). Nothing is installed and
+nothing is grabbed: the compositor runs nested on your X11 desktop with `--input host`, so it receives the input
+**your** session gives its window and takes nothing else. It is safe to leave open.
+
+## What you are looking at
+
+| layer | who draws it |
+|---|---|
+| the amber wallpaper | `window-server-test-client`, at `kCGDesktopWindowLevel` — the **Dock's** layer, eventually |
+| the icons and the menu bar | **Workspace**, whose icon window is transparent at `kCGDesktopIconWindowLevel` |
+| the window full of controls | **`appkit_controls_draw`**, an ordinary window — buttons, checkbox, radio, switch, sliders, a pop-up, a combo box, a text field, a scrolled table |
+
+**The menu bar has two owners, and that is the demonstration.** A menu bar belongs to the ACTIVE application.
+Workspace maps first and therefore owns it: `Workspace · File · Edit · View · Go · Window · Help`. Click the
+Controls window and its own menus replace them — because it called `-setMainMenu:` too. Click the desktop and
+Workspace's come back.
+
+## Two things it does deliberately, which are worth knowing before changing it
+
+- **Workspace is started first.** The compositor gives the keyboard to the first surface that maps
+  (`window-server/src/seat.c`, the initial-focus half of click-to-focus), so the application that should own the
+  bar is the one that maps first.
+- **`appkit_controls_draw` is given no `--seconds`.** That argument makes it pump its own event loop, and a
+  hand-pumped loop cannot drive a menu bar: `NSMenuView` fetches events only while `-[NSApplication isRunning]`.
+  With no argument the demo calls `-[NSApplication run]`, which is what its controls and its menus both want.
+
+## The measurements behind its shape
+
+- The wallpaper client redraws on **every frame callback**, so asking it for frames for ever makes it a
+  frame-rate generator: MEASURED at **233 composites a second and 86% of a core** for pixels that never change.
+  Hence `--frames 1 --hold` — one commit, then listen. The compositor also paces its own composite to 60 Hz, so a
+  greedy client cannot do that again. With both, the whole scene idles under 1%.
+- The host window is **activated and pinned above** the other host windows at startup (EWMH
+  `_NET_ACTIVE_WINDOW` + `_NET_WM_STATE_ABOVE`). A nested window that is buried receives **no clicks at all** —
+  they land on whatever the host desktop has there instead, which is what "I click File and nothing happens"
+  turned out to be.

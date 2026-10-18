@@ -592,7 +592,7 @@ registered. Both stay non-class-objects, as in S4.
 ## 3. Change inventory
 
 `swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 45 files,
-~1390 insertions. The layout/registration table is from the previous round, the
+~1570 insertions. The layout/registration table is from the previous round, the
 S1 emission from the round before this one, and S4/S4b are this round's
 addition. The libobjc2 side is
 `swift-toolchain/patches/0006-libagora-objc-loadClass-np.patch`.
@@ -860,7 +860,7 @@ swift-toolchain/
 ├── patches/
 │   ├── 0001-libagora-base-objcxx-clean.patch   3 hunks / 2 files
 │   ├── 0002-libagora-core-objcxx-clean.patch   1 hunk  / 1 file
-│   ├── 0003-swift-enable-objc-interop.patch   45 files, ~1390 insertions
+│   ├── 0003-swift-enable-objc-interop.patch   45 files, ~1570 insertions
 │   ├── 0004-libdispatch-overlay-non-interop.patch  1 file (the Dispatch overlay)
 │   ├── 0005-libagora-base-allocWithZone.patch      2 files (NSObject)
 │   └── 0006-libagora-objc-loadClass-np.patch       3 files (the runtime hook,

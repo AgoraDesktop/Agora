@@ -6,6 +6,18 @@ protocols, existentials, error handling and Unicode strings; and Swift can
 import Agora's `Foundation`, allocate its `NSObject` and message it. Verified by
 [`swift-toolchain/scripts/verify-swift-port.sh`](swift-toolchain/scripts/verify-swift-port.sh).
 
+**Library evolution's `Update` strategy works at layout 2; the class-ABI
+staging plan is complete.** A class whose stored property is a non-frozen
+struct from another module now links and runs: `swift_updateClassMetadata2`
+had a layout-1-only implementation, so at layout 2 the call did not even link.
+The layout-2 implementation recomputes the layout, fills the field-offset
+globals and mirrors `instance_size`; a class libobjc2 allocates from is built
+with the `Singleton` strategy instead (compute first, register after), because
+libobjc2 has no update hook and would otherwise allocate from a stale size. The
+gate builds a library-evolution module, compiles a client against v1, swaps in a
+v2 with one more struct field *without recompiling the client*, and verifies the
+runtime layout at `-Onone` and `-O` (§2.14).
+
 **The default is flipped: the installed toolchain is layout 2.** Since
 2026-10-17 `swiftc` and its stdlib are built with `SWIFT_OBJC_CLASS_LAYOUT=2`
 (`Runtime/Config.h` and `native-env.sh`), so Agora sees Swift classes as real
@@ -147,6 +159,7 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
 | **generic classes, layout 2** | runtime-instantiated metadata (`Box<T>`, `Pair<A,B>`, class-typed fields, generic subclasses), prespecialized metadata, `Array`/`Set`/`Dictionary`, casts between specializations, `AnyObject` boxing, `Mirror`, `deinit` of a generic instance |
 | **generic classes with an ObjC ancestor** | `class Box<T>: NSObject` is a registered GNUstep class object: unique mangled names, `-init` reaches the Swift initializer, `objc_getClass` round-trip, metaclass chain, `NSMutableArray` ownership, and `deinit` runs (S5) |
 | **resilient classes** (layout 2) | a library-evolution class with an ObjC ancestor is relocated at runtime, registered, and gets correct field offsets (including through a resilient superclass chain); a pure Swift resilient class stays a non-class-object; `class_getInstanceVariable`, sizes and `isKind(of:)` verified; its `deinit` runs (S5) |
+| **library evolution, resiliently sized members** (layout 2) | a class with a stored property of a non-frozen struct from another module: `Update` for a pure Swift class, `Singleton` for one libobjc2 allocates from; a client compiled against v1 runs against a v2 library whose struct grew, `-Onone` and `-O` |
 | **typed selectors** (S5) | one selector record per (name, encoding) in `__objc_selectors`, symbol-mangled like Clang's GNUstep emitter; typed send reaches Swift methods, including overrides of inherited selectors (`-dealloc`, `-init`); untyped sends keep working through the untyped slot; retain/release from C balances and `deinit` runs exactly once |
 | **default flags** | `swiftc prog.swift` enables Objective-C interop and selects the GNUstep runtime ABI family without any `-Xfrontend` flags |
 | **super dispatch** | a Swift `super.` send to an imported class emits `objc_msg_lookup_super` + a direct IMP call, not Apple's `objc_msgSendSuper2`; such a program links, and with the layout-2 test compiler `objc-to-swift-probe` verifies the semantics (`super -init` is reached) |
@@ -169,9 +182,12 @@ closed (S1-S6); these are independent of it:
   friends as methods (Apple and GNUstep declare a `length` property), so Swift
   writes `text.length()`, not `text.length`. Not a port defect, but it is what
   the probes had to be adapted to.
-- **Library evolution's `Update` strategy** (resiliently sized stored fields)
-  still fails to link: its runtime entry points (`swift_updateClassMetadata2`)
-  exist only at layout 1 (§5). Not reachable from the stdlib or the gates.
+- **Library evolution's runtime-layout classes** work (§2.14), with one
+  visibility rule: a class whose layout is only final at runtime is registered
+  with libobjc2 when its Swift metadata is first requested, so
+  `objc_getClass(name)` answers nil before that (the resilient path already
+  behaved this way at layout 2). Use `@objc(Name)` and take a Swift reference
+  first, or a fixed-layout class, if C code must find it at load time.
 - **The `SWIFT_OBJC_CLASS_LAYOUT=0` rollback path** is still compiled in
   (`#if` branches, zero runtime cost) and is not gated any more. S6 kept it on
   purpose (§2.13): it is the documented rollback and the non-Apple default of
@@ -843,17 +859,91 @@ not the Swift fork. Its regeneration command is now the safe one
 (`git diff HEAD`, which also catches the intent-to-add
 `TargetConditionals.h`).
 
+### 2.14 Library evolution: the `Update` strategy at layout 2
+
+Library evolution's *resiliently sized members* are the last class-layout gap.
+A class with a stored property whose type is a non-frozen struct from another
+module cannot know its instance layout at compile time. The compiler emits two
+strategies for it (§5 used to list this as open):
+
+- **`Update`** (pure Swift class): the metadata is emitted statically and the
+  metadata accessor calls `swift_updateClassMetadata2` before the first
+  allocation.
+- **`Singleton`** (at layout 2, any class libobjc2 allocates from): the metadata
+  is filled in and the class registered only after the layout is final, exactly
+  like the resilient path of S4c.
+
+Before this round `_swift_updateClassMetadataImpl` and both
+`swift_updateClassMetadata{,2}` wrappers were compiled only at layout 1, so a
+program with an `Update` class did not link:
+`undefined reference to 'swift_updateClassMetadata2'`. The layout-2
+implementation is the layout-neutral core of the layout-1 one:
+
+1. realize the superclass (returning its dependency), and check the statically
+   emitted superclass pointer against it (SwiftObject for a root class);
+2. `initClassFieldOffsetVector()` — recompute the field offset vector and the
+   instance size/alignment from the runtime superclass layout and the *real*
+   field layouts. At layout 2 this also writes the size into the GNUstep
+   `instance_size` word, which libobjc2 allocates from;
+3. `initGNUstepClassFieldOffsets()` — slide the field-offset globals that
+   compiled accesses load (they are also the `int *Offset` targets of the
+   emitted `objc_ivar_list`, so libobjc2's view stays consistent).
+
+**Why the ObjC-allocated case is Singleton, not Update.** The update pattern
+leans on the Objective-C runtime calling the class's update callback before it
+allocates (Darwin's `_objc_realizeClassFromSwift`). libobjc2 has no such hook,
+and it registers a class from `__objc_classes` at load time with the statically
+emitted - i.e. minimum - `instance_size`. A C-side `[cls alloc]` before the
+first Swift metadata access would therefore allocate too little. So
+`getClassMetadataStrategy()` now returns `Singleton` for a class that
+`Lowering::usesObjCAllocator()` and is compiled at layout 2; its method list and
+ivar list are still emitted statically, and `_swift_initClassMetadataImpl`
+registers it through `swift_instantiateObjCClass()` once the size is final.
+Pure Swift classes keep `Update` (Swift always runs the metadata accessor
+before allocating).
+
+Verified by
+[`swift-toolchain/scripts/verify-update-abi.sh`](swift-toolchain/scripts/verify-update-abi.sh),
+which is the first gate that tests *resilience* rather than a single build:
+
+- builds a library-evolution module v1 with a non-frozen `Payload { a, b }`;
+- compiles the client against v1: a pure Swift `PureHolder` (Update) and an
+  `@objc(ObjCHolder)` class (Singleton), plus a loop of 20k allocations;
+- rebuilds the module as v2 with `Payload { a, b, c }` — **the same initializer
+  symbol**, so the v1 client still links — and runs the *same client binary*
+  against it, `-Onone` and `-O`.
+
+| Check | v1 | v2 |
+|---|---|---|
+| pure-Swift holder fields | ok | ok |
+| ObjC-rooted holder fields, `@objc` method | ok | ok |
+| `class_getInstanceSize` = 8 + runtime `Payload` + 8 | 32 | 40 |
+| 20k allocations through the ObjC allocator | ok | ok |
+| `objc_getClass` before / after the Swift access | nil / found | nil / found |
+| both strategies present in the client IR | `swift_updateClassMetadata2` + `swift_initClassMetadata2` | same client |
+
+The lazy registration is deliberate and matches the resilient classes: a class
+whose layout is only final at runtime is not in `__objc_classes`, so
+`objc_getClass(name)` answers nil until the first Swift metadata access. C code
+that must find such a class at load time should use a fixed-layout class (or
+take a Swift reference first).
+
 ---
 
 ## 3. Change inventory
 
 `swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 45 files,
-~1810 insertions. The layout/registration table is from two rounds ago, the S1
-emission from three, S4/S4b from before that, and S5 and the flip from the
-previous round; S6 changed only the Agora-side scripts and docs, so the fork
-patch is unchanged. The libobjc2 side is
-`swift-toolchain/patches/0006-libagora-objc-loadClass-np.patch` (unchanged:
-neither S5, the flip nor S6 needs a runtime change).
+~1870 insertions. The layout/registration table is from two rounds ago, the S1
+emission from three, S4/S4b from before that, S5 and the flip from the previous
+round, and this round adds library evolution's `Update` strategy. S6 changed
+only the Agora-side scripts and docs. The libobjc2 side is
+`swift-toolchain/patches/0006-libagora-objc-loadClass-np.patch` (unchanged: no
+round since S4c has needed a runtime change).
+
+| File (library evolution) | Change |
+|---|---|
+| `stdlib/public/runtime/Metadata.cpp` | `_swift_updateClassMetadataImpl` + `swift_updateClassMetadata{,2}` are compiled at layout 1 **and** 2; the layout-2 body recomputes the field offset vector and size (`initClassFieldOffsetVector`), slides the field-offset globals (`initGNUstepClassFieldOffsets`) and mirrors `instance_size`. `swift_updatePureObjCClassMetadata` stays layout-1-only (it walks `class_ro_t`) |
+| `lib/IRGen/GenClass.cpp` | `getClassMetadataStrategy()`: an `Update` class that libobjc2 allocates from (`Lowering::usesObjCAllocator`) uses `Singleton` at layout 2, so the layout is final before the class is registered |
 
 | File (flip) | Change |
 |---|---|
@@ -975,6 +1065,10 @@ swift-toolchain/scripts/verify-generic-objc-abi.sh
 # method dispatch from Clang-compiled Objective-C, retain/release, no leak)
 swift-toolchain/scripts/verify-refcount-abi.sh
 
+# the library-evolution gate (same build tree; a class with a resiliently sized
+# member: Update and Singleton, and a client run against an evolved v2 library)
+swift-toolchain/scripts/verify-update-abi.sh
+
 # the S1/probe/language gates against the same layout-2 stdlib
 SKIP_BUILD=1 SWIFTC_LAYOUT2=$HOME/.agora-swift/src/build/agora-linux-x86_64/swift-linux-x86_64/bin/swiftc-layout2-stdlib \
   swift-toolchain/scripts/verify-class-abi.sh
@@ -1043,7 +1137,8 @@ done
   `libswiftCore` the test program links.
 - **Current results**: installed toolchain - `verify-swift-port.sh` all green
   (including S6's interop-export check), `run-native-probe.sh` 17/17 (only the
-  known `#selector` gap), and with
+  known `#selector` gap), the library-evolution gate green (`Update` +
+  `Singleton`, evolved v2 layout at `-Onone` and `-O`), and with
   `SWIFTC_LAYOUT2=$T/bin/swiftc STDLIB_DIR=$T/lib/swift`: `S1 gate: ok`,
   `S4 gate: ok`, `S4b/S4c gate: ok`, `S5 gate: ok`. `import Dispatch` (the
   no-interop layout-2 overlay) builds and runs.
@@ -1116,16 +1211,15 @@ Debugging techniques that produced the findings above:
    that initializer would miss - Swift's own `objc_msgSend(obj, init)` is
    untyped and works. Closing it means giving those initializers a synthesized
    `@16@0:8` encoding; nothing in the stdlib needs it.
-2. **Library evolution: the `Update` strategy.** A class with *resiliently sized
-   stored fields* (a non-frozen struct member from another module, not resilient
-   ancestry) uses `Update`/`FixedOrUpdate`, whose runtime entry points
-   (`swift_updateClassMetadata2` / `_swift_updateClassMetadataImpl`) are compiled
-   only at layout 1. Such a class fails to **link** at layout 0 and layout 2
-   alike, so this is a pre-existing gap rather than an S4c one; it needs a
-   layout-neutral implementation (recompute the layout, fill the field-offset
-   globals, mirror `instance_size`) before library evolution can be called
-   supported. The prespecialized-generic-with-ObjC-ancestor case stays
-   unreachable (see §2.10) until a stdlib-like module declares one.
+2. **Library evolution: the `Update` strategy - done** (§2.14). The runtime
+   entry points are implemented at layout 2 (recompute the layout, slide the
+   field-offset globals, mirror `instance_size`), and a class libobjc2 allocates
+   from is built with `Singleton` so its layout is final before registration.
+   The gate tests the actual promise: a client compiled against v1 runs against
+   a v2 library whose struct has one more field, at `-Onone` and `-O`. What is
+   still unimplemented is only the prespecialized-generic-with-ObjC-ancestor
+   case, which stays unreachable (see §2.10) until a stdlib-like module
+   declares one.
 3. **Flip the default - done** (§2.12). `Runtime/Config.h` and `native-env.sh`
    default to layout 2, the installed toolchain is layout 2, and every gate is
    green against it, including both probes. The flip also fixed layout 2 *
@@ -1195,9 +1289,12 @@ swift-toolchain/
     │                                          stdlib)
     ├── verify-generic-objc-abi.sh             the S4b/S4c gate (ObjC-ancestry
     │                                          generic and resilient classes)
-    └── verify-refcount-abi.sh                 the S5 gate (typed selectors:
-                                               deinit, retain/release, typed
-                                               dispatch from Objective-C)
+    ├── verify-refcount-abi.sh                 the S5 gate (typed selectors:
+    │                                          deinit, retain/release, typed
+    │                                          dispatch from Objective-C)
+    └── verify-update-abi.sh                   the library-evolution gate
+                                               (resiliently sized members:
+                                               Update + Singleton, evolved v2)
 
 swift-interop-probe/
 ├── scripts/run-native-probe.sh                the harness (the only one; the
@@ -1246,10 +1343,14 @@ retain/release from C balance. The default is flipped, so all of that is what
 the installed toolchain does, and S6 removed the last of the migration
 scaffolding: the bootstrap interop shim and the container probe harness are
 deleted, the duplicated vendor build flag is gone, and a gate keeps the shim
-dead by checking `libswiftCore`'s exports. What remains is not the class ABI:
-the `Update`-strategy classes of library evolution, the host-runtime packaging,
-and Foundation bridging. The rest of this summary is the previous rounds' record
-of how the compiler got here.
+dead by checking `libswiftCore`'s exports. Library evolution's last gap is
+closed as well: a class with a resiliently sized member works at layout 2 - the
+`Update` entry points recompute the layout in place for pure Swift classes, and
+a class libobjc2 allocates from is registered only after its layout is final -
+verified by running one client binary against two versions of its library. What
+remains is outside the class ABI: the host-runtime packaging and Foundation
+bridging. The rest of this summary is the previous rounds' record of how the
+compiler got here.
 
 The compiler compiles again. The trap was the class-metadata layout: the
 compiler's own Swift libraries are built by the bootstrap toolchain without

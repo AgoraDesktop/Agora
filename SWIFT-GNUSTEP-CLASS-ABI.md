@@ -482,10 +482,12 @@ metaclass at `getAddrOfCanonicalSpecializedGenericMetaclassObject()`'s symbol an
 a compile-time unique name; the failure mode until then is the pre-S4b
 `objc_allocWithZone` trap.
 
-A separate gap: the `Update`/`FixedOrUpdate` strategy (resiliently *sized* stored
-fields) calls `swift_updateClassMetadata2`, which is compiled only at layout 1,
-so such a class does not link at layout 0 either. That is orthogonal to class
-objects and is recorded in the handoff's next steps.
+A separate gap at the time: the `Update`/`FixedOrUpdate` strategy (resiliently
+*sized* stored fields) calls `swift_updateClassMetadata2`, which was compiled
+only at layout 1, so such a class did not link. It is implemented at layout 2
+now: the runtime recomputes the layout in place, and a class libobjc2 allocates
+from uses the `Singleton` strategy (layout final before registration). See
+handoff §2.14.
 
 **The flip (2026-10-17).** The default moved to layout 2 (`Runtime/Config.h`,
 `native-env.sh`), so all of the above is what the installed toolchain does;
@@ -513,8 +515,8 @@ ObjC ancestry (S4, handoff §2.8), runtime-instantiated generic classes with an
 imported ObjC ancestor (S4b, handoff §2.9), relocated resilient classes with one
 (S4c, handoff §2.10) and typed selector records (S5, §7.1) are implemented, and
 layout 2 is the installed default (handoff §2.12). The bullets below remain the
-map; the outstanding entries are prespecialized generic classes with an ObjC
-ancestor (unreachable today, see the S4c note) and the `Update` strategy.*
+map; the outstanding entry is the prespecialized generic class with an ObjC
+ancestor (unreachable today, see the S4c note).*
 
 - `lib/IRGen/MetadataLayout.h:168` `ClassMetadataLayout` computes `MetadataSize`,
   `MetadataAddressPoint`, `VTableOffset`, `FieldOffsetVector` and

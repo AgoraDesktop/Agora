@@ -6,7 +6,23 @@ protocols, existentials, error handling and Unicode strings; and Swift can
 import Agora's `Foundation`, allocate its `NSObject` and message it. Verified by
 [`swift-toolchain/scripts/verify-swift-port.sh`](swift-toolchain/scripts/verify-swift-port.sh).
 
-**This round: stage S4 of the class-ABI plan is proven.** With the compiler
+**This round closes S5: Swift methods are reached by *typed* Objective-C
+sends, so `deinit` runs.** The last functional gap in the class ABI was that
+libobjc2's release path sends the typed `dealloc_v16@0:8` selector while IRGen
+emitted untyped selector records: type-dependent dispatch is keyed by
+(name, encoding), and a class's dispatch table starts as its superclass's, so
+the typed send found `NSObject -dealloc` instead of the Swift destructor. IRGen
+now emits one selector record per (name, encoding), carrying the same encoding
+as the method entry and using Clang's own symbol mangling so the records merge.
+`deinit` runs for fixed, generic and resilient classes with Objective-C
+ancestry; retain/release from Objective-C balance; 50k allocate/init/release
+cycles neither leak nor climb in RSS. Typed dispatch from Clang-compiled
+Objective-C now reaches Swift methods in general, including overrides of
+inherited selectors (`-init` verified) and typed class-method sends.
+Reproduce with
+[`swift-toolchain/scripts/verify-refcount-abi.sh`](swift-toolchain/scripts/verify-refcount-abi.sh).
+
+**The previous round took S4 of the class-ABI plan.** With the compiler
 *and* the target standard library built at `SWIFT_OBJC_CLASS_LAYOUT=2`, generic
 Swift classes work: metadata instantiated at runtime, `Array`/`Set`/`Dictionary`
 (and their own generic classes), prespecialized generic metadata,
@@ -18,7 +34,7 @@ frontend: a generic class's metadata is built by the runtime, so a layout-0
 runtime and a layout-2 compiler disagree about where `InstanceSize` lives (the
 mixed build corrupts the heap for any generic field wider than a word).
 
-**Stage S1, proven last round and still green:** a test compiler built with
+**Stage S1, proven two rounds ago and still green:** a test compiler built with
 `SWIFT_OBJC_CLASS_LAYOUT=2` emits a Swift class with Objective-C ancestry as a
 real GNUstep `struct objc_class`. An Objective-C constructor finds it with
 `objc_getClass("Counter")` *before* `main`; `respondsToSelector` sees its
@@ -28,7 +44,7 @@ compiler `Counter()` (through `objc_allocWithZone`), `super -init`, field access
 and the whole `objc-to-swift-probe` work too. Reproduce with
 [`swift-toolchain/scripts/verify-class-abi.sh`](swift-toolchain/scripts/verify-class-abi.sh).
 
-**This round also took S4b: a *generic* class that inherits an imported
+**The round before took S4b: a *generic* class that inherits an imported
 Objective-C class is a class object too.** `class Box<T>: NSObject` is legal
 Swift (it cannot have `@objc` members, but it can inherit `NSObject`), and Swift
 allocates such a class through `objc_allocWithZone` and sends `-init` through the
@@ -53,17 +69,17 @@ are compiled against the superclass's minimum size and the runtime is expected
 to slide the globals). See
 [`swift-toolchain/scripts/verify-generic-objc-abi.sh`](swift-toolchain/scripts/verify-generic-objc-abi.sh).
 
-`deinit` of these classes still does not run — S5. It is now diagnosed: the
-method *is* in the class's list and `-dealloc` dispatches when called directly,
-but libobjc2's release path sends the *typed* `dealloc_v16@0:8` selector while
-our emitted selector records are untyped (the type-encoding gap of
-[`SWIFT-GNUSTEP-CLASS-ABI.md`](SWIFT-GNUSTEP-CLASS-ABI.md) §7.1), so the send
-falls back to `NSObject -dealloc` and the object is freed without the Swift
-destructor. Memory is reclaimed (RSS stays flat over 500k instances).
+`deinit` of these classes now runs — that was S5 (§2.11). The diagnosis was
+exact: the `-dealloc` thunk was in the class's method list and dispatched when
+called directly, but libobjc2's release path sends the *typed*
+`dealloc_v16@0:8` selector while our emitted selector records were untyped, and
+a class's dispatch table starts as its superclass's, so the typed slot still
+pointed at `NSObject -dealloc`: the object was freed and the Swift destructor
+skipped. Emitting typed records fixed it without changing the release path.
 
 The *installed* toolchain is still layout 0: the destination is now buildable and
-gated - S1, S2, S3, S4, S4b, S4c - and flipping the default is the next
-decision, ahead of S5/S6.
+gated - S1, S2, S3, S4, S4b, S4c, S5 - so flipping the default is the remaining
+decision, with S6 (the cleanup) after it.
 
 The wall described in the previous handoff ("one process, two class-metadata
 ABIs") is gone, and it was broken in two steps that are worth keeping distinct:
@@ -113,8 +129,9 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
 | concurrency types | `actor` declaration (not exercised at runtime) |
 | **Agora interop** | `import Foundation` (Agora's), `NSObject.alloc()`, `isKind(of:)`, `description()`, `object_getClass`/`class_getName` through libobjc2 |
 | **generic classes, layout 2** | runtime-instantiated metadata (`Box<T>`, `Pair<A,B>`, class-typed fields, generic subclasses), prespecialized metadata, `Array`/`Set`/`Dictionary`, casts between specializations, `AnyObject` boxing, `Mirror`, `deinit` of a generic instance |
-| **generic classes with an ObjC ancestor** | `class Box<T>: NSObject` is a registered GNUstep class object: unique mangled names, `-init` reaches the Swift initializer, `objc_getClass` round-trip, metaclass chain, `NSMutableArray` ownership; `deinit` still skipped (S5, typed-selector gap) |
-| **resilient classes** (layout 2) | a library-evolution class with an ObjC ancestor is relocated at runtime, registered, and gets correct field offsets (including through a resilient superclass chain); a pure Swift resilient class stays a non-class-object; `class_getInstanceVariable`, sizes and `isKind(of:)` verified |
+| **generic classes with an ObjC ancestor** | `class Box<T>: NSObject` is a registered GNUstep class object: unique mangled names, `-init` reaches the Swift initializer, `objc_getClass` round-trip, metaclass chain, `NSMutableArray` ownership, and `deinit` runs (S5) |
+| **resilient classes** (layout 2) | a library-evolution class with an ObjC ancestor is relocated at runtime, registered, and gets correct field offsets (including through a resilient superclass chain); a pure Swift resilient class stays a non-class-object; `class_getInstanceVariable`, sizes and `isKind(of:)` verified; its `deinit` runs (S5) |
+| **typed selectors** (S5) | one selector record per (name, encoding) in `__objc_selectors`, symbol-mangled like Clang's GNUstep emitter; typed send reaches Swift methods, including overrides of inherited selectors (`-dealloc`, `-init`); untyped sends keep working through the untyped slot; retain/release from C balances and `deinit` runs exactly once |
 | **default flags** | `swiftc prog.swift` enables Objective-C interop and selects the GNUstep runtime ABI family without any `-Xfrontend` flags |
 | **super dispatch** | a Swift `super.` send to an imported class emits `objc_msg_lookup_super` + a direct IMP call, not Apple's `objc_msgSendSuper2`; such a program links, and with the layout-2 test compiler `objc-to-swift-probe` verifies the semantics (`super -init` is reached) |
 | **the two probes** | `agora-import-probe`: all 11 checks; `objc-to-swift-probe`: compiles and links, then traps in `objc_allocWithZone` when the Swift subclass is first allocated with the *installed* toolchain — passes every check with the layout-2 compiler (frontend-only and layout-2-stdlib builds alike) |
@@ -122,9 +139,9 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
 
 **Not available yet in the *installed* (layout 0) toolchain.** At layout 2 (§2.7
 for fixed classes, §2.8 for generic classes) the class-object items below are
-done; they are listed here because the shipped toolchain is still layout 0, and
-because the remaining gaps (S4b, S5) are exactly the parts of this list that
-layout 2 does not close yet:
+done; they are listed here because the shipped toolchain is still layout 0. The
+class ABI itself is now closed (S1-S5); what remains here is either the layout
+flip or work that is independent of it (bridging, property-shaped accessors):
 
 - Swift classes are **not** Objective-C class objects in the installed
   toolchain: `@objc` members on them, subclassing Agora's `NSObject` in Swift,
@@ -133,11 +150,10 @@ layout 2 does not close yet:
   compiler a *fixed* Swift class is a class object (§2.7); *generic* classes are
   handled as non-class-objects (§2.8) and the stdlib rebuild is green.
 - **Generic classes with an imported Objective-C ancestor** (`class Box<T>:
-  NSObject`) are not class objects yet, so `Box(5)` still traps in
-  `objc_allocWithZone`: the pattern carries no metaclass and the class is never
-  registered with libobjc2. Legal Swift, not covered by the stdlib, broken in the
-  installed toolchain as well. This is S4b in
-  [`SWIFT-GNUSTEP-CLASS-ABI.md`](SWIFT-GNUSTEP-CLASS-ABI.md).
+  NSObject`): with the installed compiler `Box(5)` traps in `objc_allocWithZone`,
+  because the layout-0 pattern carries no metaclass and the class is never
+  registered with libobjc2. Fixed by S4b at layout 2 (§2.9); the installed
+  toolchain still has it. (Same for resilient classes, S4c, §2.10.)
 - No Foundation *bridging* of Swift values: `String` ↔ `NSString`, `Array` ↔
   `NSArray` and `Error` ↔ `NSError` all need the ObjC-object layout (and, for
   the value types, a Foundation overlay, which this toolchain does not build).
@@ -584,15 +600,16 @@ Objective-C runtime and verifies the class/metaclass shape, `-init`/`-dealloc`
 responders and the metaclass isa. A 16-thread pthread test instantiates the same
 generics concurrently (registration takes the runtime lock).
 
-**What is still missing (S5):** `deinit`. The class's `-dealloc` thunk is in the
-method list and dispatch reaches it when it is called directly, but libobjc2's
-release path sends the *typed* `dealloc_v16@0:8` selector, while the selector
-records IRGen emits are untyped. The typed lookup therefore misses the class's
-entry and falls back to `NSObject -dealloc`, so the object is freed and `deinit`
-is skipped (RSS stays flat over 500k instances). That is the type-encoding gap
-listed in [`SWIFT-GNUSTEP-CLASS-ABI.md`](SWIFT-GNUSTEP-CLASS-ABI.md) §7.1 -
-emitting typed selector records (or the correct per-method encodings) is the
-fix, and it belongs with S5's refcounting work.
+**`deinit` was still missing at that point (S5, now fixed in §2.11):** the
+class's `-dealloc` thunk was in the method list and dispatch reached it when it
+was called directly, but libobjc2's release path sends the *typed*
+`dealloc_v16@0:8` selector while the selector records IRGen emitted were
+untyped. The typed slot in the subclass's table is inherited from `NSObject`, so
+the send found `NSObject -dealloc` and the object was freed without the
+destructor (RSS stayed flat over 500k instances, which is why the leak was not
+visible). Typed selector records - §2.11 - are the fix, and the type-encoding
+question in [`SWIFT-GNUSTEP-CLASS-ABI.md`](SWIFT-GNUSTEP-CLASS-ABI.md) §7.1 is
+closed with it.
 
 **The resilient case is S4c (§2.10).** The *prespecialized* one is not: see
 §2.10's boundary note.
@@ -657,15 +674,90 @@ A separate, layout-independent gap surfaced while testing: a class with
 fails to link at layout 0 as well. It is not part of S4c but is worth its own
 item before library evolution is a supported use case.
 
+### 2.11 S5: typed selector records, so `deinit` runs
+
+The last functional gap was not in the class object at all. `-dealloc` was in
+the method list and sending it directly ran `deinit`, but releasing an object
+did not. The mechanism is worth stating precisely, because "emit the type
+encodings" sounds cosmetic and is not:
+
+- libobjc2 is built with `TYPE_DEPENDENT_DISPATCH`, so a selector **record**
+  `{name-or-index, types}` has one dtable index per *(name, type encoding)*
+  pair, not per name. `objc_release_fast_np` releases the last reference with
+  `[obj dealloc]`, compiled by Clang: a *typed* `dealloc_v16@0:8`.
+- A class's dispatch table **starts as its superclass's**. `NSObject -dealloc`
+  is a Clang-emitted typed record, so the subclass table already had the typed
+  `dealloc` slot filled with `NSObject`'s IMP. Swift's `-dealloc` thunk was
+  installed under the *untyped* `dealloc` index (and, in TDD mode, under the
+  untyped index of its own untyped record), so the typed lookup **hit** - the
+  wrong entry - and never reached the untyped fallback.
+- Therefore the record has to claim the method's encoding, i.e. `dealloc` has to
+  be emitted as `{dealloc, v16@0:8}` with the same index Clang's record has.
+
+The change is entirely in IRGen; the runtime and the stdlib are untouched:
+
+1. `getGNUstepSelector()` takes the selector *and* its type encoding, and emits
+   **one record per (name, encoding)**. The symbol is mangled exactly the way
+   Clang's GNUstep ABI v2 emitter mangles it - `.objc_selector_<name>_<encoding
+   with '@' replaced by '\1'>` - so a Swift record and a Clang record for the
+   same pair are the same symbol, merge at link time, and the linker also
+   resolves `__start___objc_selectors`/`__stop___objc_selectors` (Clang uses
+   section bounds on ELF, so `__objc_load` registers every record in the image,
+   including the new typed ones). The encoding string lives in
+   `.objc_sel_types_<mangled>`, again the symbol Clang uses.
+2. `collectGNUstepMethods()` recovers the encoding text from the method
+   descriptor's `types` constant (`typeEncodingText()`) and passes it to the
+   selector emitter, so the record and the method entry carry the **same**
+   encoding. The method entry's `types` field was already correct: `dealloc` had
+   `v16@0:8` all along; only the record was untyped.
+3. Two guards keep registration safe, because libobjc2's
+   `objc_register_selector()` asserts on an encoding containing `@"` (an object
+   type *name*): an encoding with a `"` in it, and a **null** encoding (a generic
+   initializer whose result type cannot be represented as a Clang type), keep
+   the untyped record. Swift's own send sites also keep using untyped records
+   (`getAddrOfObjCSelectorRef`), and untyped sends fall back to the untyped slot
+   that every method is installed under, so nothing that worked before depends
+   on the typed path.
+
+Verified by
+[`swift-toolchain/scripts/verify-refcount-abi.sh`](swift-toolchain/scripts/verify-refcount-abi.sh),
+`-Onone` and `-O`, through the public Objective-C API:
+
+| Check | Result |
+|---|---|
+| `deinit` of a pure class, a pure generic class, a fixed ObjC-ancestry class and a generic ObjC-ancestry class | 4/4 |
+| typed and untyped `-dealloc`/`-init` lookups return the *same* IMP for a Swift class | same |
+| typed Clang send reaches a Swift `@objc` method (`-read`) | 10 |
+| typed Clang *class* send reaches a Swift class method (`+version`) | 9 |
+| `[[DeinitBox alloc] init]` typed initialization reaches Swift's `override init()` | 7 |
+| retain/release from Objective-C balance; the destructor runs exactly once at the last release | ok |
+| 50k alloc/init/release cycles from ObjC: deinit count exact, RSS delta < 8 MB (measured ~1 MB) | ok |
+| a 400k-instance Swift loop: 400k deinits, RSS delta ~1 MB | ok |
+
+The same gate is what catches a regression: before the change the four `deinit`s
+are two (`deinit.swift`'s minimal repro printed `deinits: 2 (expected 4)`), and
+the typed/untyped IMP comparison fails for `dealloc` (different IMPs) even
+though `class_respondsToSelector` is true for both.
+
+`deinit` also runs for a **resilient** class with an ObjC ancestor (its static
+method list is installed on the runtime-relocated metadata); the S4b/S4c gate
+now asserts that too, as it does for `WithDeinit<T>`.
+
 ---
 
 ## 3. Change inventory
 
 `swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 45 files,
-~1700 insertions. The layout/registration table is from the previous round, the
-S1 emission from the round before this one, and S4/S4b are this round's
+~1790 insertions. The layout/registration table is from two rounds ago, the S1
+emission from three, S4/S4b from the previous round, and S5 is this round's
 addition. The libobjc2 side is
-`swift-toolchain/patches/0006-libagora-objc-loadClass-np.patch`.
+`swift-toolchain/patches/0006-libagora-objc-loadClass-np.patch` (unchanged this
+round: S5 needs no runtime change).
+
+| File (S5) | Change |
+|---|---|
+| `lib/IRGen/GenObjC.cpp` | `getGNUstepSelector()` takes the type encoding and emits one record per (name, encoding); Clang-compatible symbol and types-string mangling (`.objc_selector_<name>_<encoding, '@' -> '\1'>`); the encoding string is shared with Clang's `.objc_sel_types_<mangled>` |
+| `lib/IRGen/GenClass.{h,cpp}` | `getAddrOfGNUstepSelector()` grew the encoding; `GNUstepMethodEntry::typeEncoding` plus `typeEncodingText()` recover the method descriptor's encoding text; `isRegistrableTypeEncoding()` keeps a null or `@"...`-bearing encoding on the untyped record |
 
 | File (S4b) | Change |
 |---|---|
@@ -772,6 +864,10 @@ swift-toolchain/scripts/verify-generic-abi.sh
 # resilient classes built with -enable-library-evolution)
 swift-toolchain/scripts/verify-generic-objc-abi.sh
 
+# the S5 gate (same build tree; typed selector records: deinit, typed init and
+# method dispatch from Clang-compiled Objective-C, retain/release, no leak)
+swift-toolchain/scripts/verify-refcount-abi.sh
+
 # the S1/probe/language gates against the same layout-2 stdlib
 SKIP_BUILD=1 SWIFTC_LAYOUT2=$HOME/.agora-swift/src/build/agora-linux-x86_64/swift-linux-x86_64/bin/swiftc-layout2-stdlib \
   swift-toolchain/scripts/verify-class-abi.sh
@@ -799,7 +895,9 @@ AGORA_SWIFT_CLASS_LAYOUT=2 swift-toolchain/scripts/build-swift-toolchain.sh
   `bin/swift-frontend`, the **layout-2 stdlib** (`lib/swift/linux/libswiftCore.so`
   and its `.swiftmodule`s), `bin/swiftc-layout2` (frontend-only, installed
   stdlib) and `bin/swiftc-layout2-stdlib` (frontend + build-tree stdlib). It is
-  **not** installed; the installed stdlib is still the compact one.
+  **not** installed; the installed stdlib is still the compact one. This round
+  recompiled only `swift-frontend` (~1 min): S5 is an IRGen change, so the
+  layout-2 stdlib from the previous round is still current.
 - **Fork working tree** (`~/.agora-swift/src/swift`): all of patch 0003,
   uncommitted by design. The Agora repository has the doc update committed
   (`f28c8db`); `swift-toolchain/` and `swift-interop-probe/` are git-ignored
@@ -809,13 +907,14 @@ AGORA_SWIFT_CLASS_LAYOUT=2 swift-toolchain/scripts/build-swift-toolchain.sh
   `-DSWIFT_OBJC_CLASS_LAYOUT:` with an empty default, which resets the cache) or
   `cmake -DSWIFT_OBJC_CLASS_LAYOUT:STRING= <build dir>`. The next build then
   recompiles ~1100 compiler TUs and the stdlib.
-- **Current results**: `verify-swift-port.sh` all green;
+- **Current results**: `verify-swift-port.sh` all green (installed toolchain);
   `verify-class-abi.sh` `S1 gate: ok` (S1 + S3 checks); probes with the installed toolchain
   11/11 then the known `objc_allocWithZone` trap; the S4 gate green
-  (`S4 gate: ok`), the S4b/S4c gate green (`S4b/S4c gate: ok`); and with the layout-2
-  *stdlib* every gate green - S1, S4, S4b, language/runtime, and both probes
-  (17/17). `build-prefix/lib/libobjc.so.4` is the rebuilt runtime with
-  `objc_loadClass_np` and the lock.
+  (`S4 gate: ok`), the S4b/S4c gate green (`S4b/S4c gate: ok`), the S5 gate green
+  (`S5 gate: ok`); and with the layout-2 *stdlib* every gate green - S1, S4,
+  S4b/S4c, S5, language/runtime, and both probes (17/17).
+  `build-prefix/lib/libobjc.so.4` is the rebuilt runtime with
+  `objc_loadClass_np` and the lock (unchanged this round).
 
 A program that uses Agora needs only the module map and the include/library
 paths — interop and the GNUstep runtime family are the default for this target:
@@ -874,18 +973,15 @@ Debugging techniques that produced the findings above:
 
 ## 5. What to do next
 
-1. **S5: typed selector records, so `deinit` runs.** The diagnosis is in §2.9.
-   The class's `-dealloc` thunk is in the method list, and sending `-dealloc`
-   directly runs `deinit`; what misses is libobjc2's own release path, which
-   sends the *typed* `dealloc_v16@0:8` selector while IRGen emits **untyped**
-   selector records (one per name, in `__objc_selectors`). Emit typed records -
-   keyed by (name, type encoding) - and give every emitted method its real
-   encoding, including initializers (whose encoding is null today because
-   `getClangType()` cannot represent the generic result type). Then libobjc2's
-   typed send finds the class's entry and calls the Swift destructor. This is
-   also the general answer to the type-encoding question in
-   [`SWIFT-GNUSTEP-CLASS-ABI.md`](SWIFT-GNUSTEP-CLASS-ABI.md) §7.1: typed
-   dispatch from Objective-C code into Swift methods depends on it.
+1. **S5: typed selector records - done** (§2.11). Every method known to a
+   GNUstep method list gets a selector record keyed by (name, encoding), with
+   Clang's symbol mangling so the records merge; libobjc2's typed release send
+   now reaches the Swift `-dealloc` and `deinit` runs. One residual case is
+   documented, not hidden: an initializer whose encoding cannot be derived (a
+   generic `Self` result) keeps the untyped record, so a *typed* ObjC send to
+   that initializer would miss - Swift's own `objc_msgSend(obj, init)` is
+   untyped and works. Closing it means giving those initializers a synthesized
+   `@16@0:8` encoding; nothing in the stdlib needs it.
 2. **Library evolution: the `Update` strategy.** A class with *resiliently sized
    stored fields* (a non-frozen struct member from another module, not resilient
    ancestry) uses `Update`/`FixedOrUpdate`, whose runtime entry points
@@ -897,11 +993,14 @@ Debugging techniques that produced the findings above:
    supported. The prespecialized-generic-with-ObjC-ancestor case stays
    unreachable (see §2.10) until a stdlib-like module declares one.
 3. **Flip the default.** Everything needed to *build* the destination toolchain
-   now works: `AGORA_SWIFT_CLASS_LAYOUT=2 swift-toolchain/scripts/build-swift-toolchain.sh`
+   works: `AGORA_SWIFT_CLASS_LAYOUT=2 swift-toolchain/scripts/build-swift-toolchain.sh`
    installs a layout-2 compiler + stdlib, and every gate is green against a
-   layout-2 stdlib (§4). The default in `Runtime/Config.h` and `native-env.sh` is
-   deliberately still the compact layout; S5 (deinit) is the last functional gap
-   worth closing before making layout 2 the shipped ABI.
+   layout-2 stdlib (§4). With S5 closed there is no functional gap left in the
+   class ABI, so this is a decision: the default in `Runtime/Config.h` and
+   `native-env.sh` is deliberately still the compact layout, and flipping it
+   replaces the installed toolchain (the flip is what makes Agora see Swift
+   classes, not just the other way round). S6 - removing the Apple-layout
+   remnants and compatibility shims - follows, not precedes, the flip.
 4. **S3: read/write the ivars from C - done** (§2.7). The S1 gate looks the
    emitted field up with `class_getInstanceVariable`, reads its offset, and
    proves both directions.
@@ -921,9 +1020,9 @@ Debugging techniques that produced the findings above:
    `text.length` work.
 8. **Keep the gates green.** `verify-swift-port.sh` is the language/runtime
    gate; `verify-class-abi.sh` is the C-side S1/S3 gate;
-   `verify-generic-abi.sh` (S4) and `verify-generic-objc-abi.sh` (S4b) are the
-   two that need a layout-2 stdlib; `run-native-probe.sh` is the native probe
-   harness. The published-container `run-probe.sh` and
+   `verify-generic-abi.sh` (S4), `verify-generic-objc-abi.sh` (S4b/S4c) and
+   `verify-refcount-abi.sh` (S5) need a layout-2 stdlib; `run-native-probe.sh`
+   is the native probe harness. The published-container `run-probe.sh` and
    `compat/ObjCInteropShim.c` are now historical.
 
 ---
@@ -938,7 +1037,7 @@ swift-toolchain/
 ├── patches/
 │   ├── 0001-libagora-base-objcxx-clean.patch   3 hunks / 2 files
 │   ├── 0002-libagora-core-objcxx-clean.patch   1 hunk  / 1 file
-│   ├── 0003-swift-enable-objc-interop.patch   45 files, ~1700 insertions
+│   ├── 0003-swift-enable-objc-interop.patch   45 files, ~1790 insertions
 │   ├── 0004-libdispatch-overlay-non-interop.patch  1 file (the Dispatch overlay)
 │   ├── 0005-libagora-base-allocWithZone.patch      2 files (NSObject)
 │   └── 0006-libagora-objc-loadClass-np.patch       3 files (the runtime hook,
@@ -956,8 +1055,11 @@ swift-toolchain/
     │                                          class and its ivars)
     ├── verify-generic-abi.sh                  the S4 gate (needs the layout-2
     │                                          stdlib)
-    └── verify-generic-objc-abi.sh             the S4b/S4c gate (ObjC-ancestry
-                                               generic and resilient classes)
+    ├── verify-generic-objc-abi.sh             the S4b/S4c gate (ObjC-ancestry
+    │                                          generic and resilient classes)
+    └── verify-refcount-abi.sh                 the S5 gate (typed selectors:
+                                               deinit, retain/release, typed
+                                               dispatch from Objective-C)
 
 swift-interop-probe/
 ├── scripts/run-probe.sh                       the original container harness
@@ -992,11 +1094,15 @@ the stdlib has); S4b handles the rest of the common case: a generic class that
 inherits `NSObject` gets a GNUstep metaclass in its pattern, a unique mangled
 name per instantiation, its initializer/`-dealloc` method list, and registration
 through libobjc2's `objc_loadClass_np`, so `Box(5)` allocates, initializes and
-messages like any class object. What remains is `deinit`, which libobjc2's
-release path misses because the release sends a *typed* `dealloc` selector and
-Swift's selector records are untyped (S5), plus the prespecialized/resilient
-`Update`-strategy classes and typed selectors (S5). Flipping the shipped default
-to layout 2 is now a decision, not a blocker. The rest of this summary is the
+messages like any class object. S5 closed the last functional gap: selector
+records are typed now - one per (name, encoding), mangled like Clang's - so a
+typed send from Clang-compiled Objective-C (and from libobjc2's own release
+path, which sends `dealloc_v16@0:8`) reaches a Swift method. That is why
+`deinit` runs for fixed, generic and resilient classes with an Objective-C
+ancestor, why `-init`/`-dealloc` overrides are reachable from C, and why
+retain/release from C balance. What remains is not the class ABI: the
+`Update`-strategy classes of library evolution, the host-runtime packaging, and
+the decision to flip the shipped default to layout 2. The rest of this summary is the
 previous rounds' record of how the compiler got here.
 
 The compiler compiles again. The trap was the class-metadata layout: the

@@ -127,10 +127,12 @@ emitting these lists from IRGen must match this order exactly.
 Consequence for the design: **no emitted selector table is required for
 dispatch.** `probe3` interns its selectors with `sel_registerName()` and the
 loader-based path resolves them fine. clang additionally emits a
-`__objc_selectors` table (array of `SEL` in `struct objc_init.sel_begin..sel_end`)
-so that selectors can be pre-registered, which is worth mirroring later (it
-keeps method lists in read-only data and avoids a registration call per
-selector), but it is an optimisation, not a requirement.
+`__objc_selectors` table (array of `SEL`, bounded on ELF by
+`__start___objc_selectors`/`__stop___objc_selectors`) so that selectors can be
+pre-registered, and IRGen now emits the same table — first (S1) to keep method
+lists in read-only data, and since S5 it is **load-bearing**: the records are
+typed, one per (name, encoding), and that is how a typed send from Clang (or
+from libobjc2's release path) finds a Swift method. See §7.1.
 
 ### Why `objc_registerClassPair` is not the path for compiler-shaped classes
 
@@ -355,9 +357,9 @@ one, and is why S1 needs no build-system work.
 | S2 | Instance-method and class-method dispatch from C and from ObjC onto a Swift class | **passed for the fixed/non-generic case**: `objc_msg_lookup` reaches `-greet` and `+classAnswer`; `objc-to-swift-probe` passes in full with the layout-2 compiler |
 | S3 | Instance layout: `instance_size`, ivar list with offset indirection, Swift field offsets still correct | **passed**: the `objc_ivar_list` keeps `instance_size` from being clobbered, `class_getInstanceVariable` finds the Swift field and reports its offset, and the S1 gate proves both directions (C write -> Swift read, Swift write -> C read) |
 | S4 | Generic classes: metadata patterns that the layout-2 runtime can complete | **passed for generic classes without an imported ObjC ancestor** (which is all the stdlib has): the pattern carries no Apple extra data, the runtime initializes the GNUstep header with `ABIVersion = 3`, and a full layout-2 stdlib rebuild is green — see the note below. `class Box<T>: NSObject` needs the §3.2 hook and is split out as **S4b** |
-| S4b | Generic classes with an imported Objective-C ancestor: GNUstep metaclass in the pattern, unique ObjC name per instantiation, `objc_loadClass_np()` registration, method/ivar lists | **passed** for runtime-instantiated classes: `Box(Int)`, `Box(String)`, `Box<(Int, Int)>`, `Sub<Int>: Box<Int>`, nested `Box<Box<Int>>` are registered class objects, `-init` reaches the Swift initializer, and a 16-thread stress passes — see the note below. `deinit` still misses the typed `dealloc` selector (S5) |
+| S4b | Generic classes with an imported Objective-C ancestor: GNUstep metaclass in the pattern, unique ObjC name per instantiation, `objc_loadClass_np()` registration, method/ivar lists | **passed** for runtime-instantiated classes: `Box(Int)`, `Box(String)`, `Box<(Int, Int)>`, `Sub<Int>: Box<Int>`, nested `Box<Box<Int>>` are registered class objects, `-init` reaches the Swift initializer, a 16-thread stress passes, and (since S5) `deinit` runs — see the note below |
 | S4c | Resilient classes (library evolution) with an imported ObjC ancestor: static metaclass, class-side fields in the pattern, registration of the relocated metadata, field-offset globals | **passed**: `Sub: Base` and `GrandSub: Sub` relocate, register, and keep their field values; a pure Swift resilient class stays a non-class-object. The *prespecialized* generic-with-ObjC-ancestor case remains unreachable and unimplemented (see the S4c note) |
-| S5 | Refcounting/ARC interop, `+alloc`, `UsesSwiftRefcounting`, `+load`/`+initialize` | **partly**: `+alloc`/`objc_allocWithZone`, `+load` and pure-Swift refcounting work — with a layout-2 runtime a pure Swift class (generic or not) runs `deinit`. A class with ObjC ancestry still releases through libobjc2 (`NSObject -release` -> `objc_release` -> `gc->free_object`), so its `deinit` is skipped |
+| S5 | Refcounting/ARC interop, `+alloc`, `UsesSwiftRefcounting`, `+load`/`+initialize`, **typed selector records** | **passed**: selector records are emitted per (name, encoding) and carry the same encoding as the method entry, so Clang-compiled typed sends reach Swift methods — including a Swift override of an inherited typed selector, which is what libobjc2's release path needs. `deinit` runs for fixed, generic and resilient classes with ObjC ancestry; retain/release from Objective-C balance and the destructor runs exactly once; 50k alloc/init/release cycles neither leak nor climb in RSS. `+alloc`/`objc_allocWithZone` and `+load` work — see §7.1 |
 | S6 | Remove the Apple-layout remnants and the compatibility shims | full `swiftc` + Agora program |
 
 Every stage is independently testable, and S0 needs no compiler rebuild.
@@ -438,11 +440,11 @@ from the superclass's *ObjC* `instance_size` when the superclass is imported (a
 class with ObjC ancestry uses ObjC refcounting and has no inline Swift refcount
 word), and the emitted `objc_ivar_list` had `size` and `flags` swapped.
 
-The remaining gap is `deinit`: libobjc2's release path sends the typed
-`dealloc_v16@0:8` selector, but Swift's emitted selector records are untyped, so
-the typed lookup misses the class's `-dealloc` thunk and falls back to
-`NSObject -dealloc` (the object is freed; the Swift destructor is not run). That
-is §7.1, and it belongs with S5.
+`deinit` used to miss here: libobjc2's release path sends the typed
+`dealloc_v16@0:8` selector, and with untyped selector records the typed lookup
+found `NSObject -dealloc` (inherited in the subclass's dispatch table) instead of
+the class's `-dealloc` thunk, so the object was freed without the Swift
+destructor. S5 fixed that by emitting typed records (§7.1).
 
 Gate: `swift-toolchain/scripts/verify-generic-objc-abi.sh`.
 
@@ -591,22 +593,38 @@ layout plus the `objc_init` registration, and flipping the default in
 ## 7. Open questions / risks
 
 1. **Type encodings — measured, and they are not just introspection.** Swift
-   computes Apple-style encodings for its methods, but two things are missing
-   today: a generic initializer's encoding is **null** (the result type cannot be
-   represented as a Clang type), and the emitted GNUstep *selector records* are
-   **untyped** (one record per name, `__objc_selectors`, types = null). libobjc2
-   dispatches typed selectors by their type, so its own release path - which
-   sends `dealloc_v16@0:8` - does not find a Swift class's `-dealloc` thunk and
-   falls back to `NSObject -dealloc`. That is why `deinit` is skipped for Swift
-   classes with ObjC ancestry (S5). The fix is to emit typed selector records
-   keyed by (name, encoding) and give initializers a real encoding; untyped
-   sends (`sel_registerName`) keep working as the fallback. KVC/KVO and
-   `NSInvocation` read the same strings.
-2. **Selector table (optimisation, not a blocker).** `sel_registerName()` is
-   sufficient for dispatch (proven by `probe3`/`probe4`), so an emitted
-   `__objc_selectors` table like clang's is optional. It is still worth doing
-   later: it lets method lists stay in read-only data and avoids one
-   registration call per selector.
+   computes Apple-style encodings for its methods, and the method entries already
+   carried them; the *selector records* did not (one record per name, types =
+   null). libobjc2 keys type-dependent dispatch by (name, encoding), and a class's
+   dispatch table starts as its superclass's, so a typed send to an *overridden*
+   inherited selector found the superclass implementation: libobjc2's own release
+   path sends `dealloc_v16@0:8` and landed on `NSObject -dealloc`, which freed the
+   object without running `deinit`. S5 fixed it in IRGen (§4 of the handoff):
+   - one selector record per **(name, encoding)** in `__objc_selectors`, with the
+     record's `types` pointing at the encoding string the method entry uses;
+   - the record's **symbol is mangled exactly as Clang's GNUstep ABI v2 emitter
+     mangles it** (`.objc_selector_<name>_<encoding with '@' -> '\1'`), so a
+     Swift and a Clang record for the same pair merge into one, and the runtime
+     registers it once;
+   - a method whose encoding cannot be registered (libobjc2 rejects `@"..."`
+     object-type names) or is null keeps the **untyped** record, and Swift's own
+     send sites keep using untyped records: untyped sends fall back to the
+     untyped slot, which every method is also installed under, so nothing that
+     worked before depends on the typed path.
+
+   One gap remains, and it is benign: a generic initializer whose result type
+   cannot be represented as a Clang type still has a null encoding, so it keeps
+   the untyped record and a typed send to *that* initializer would not find it.
+   Swift's own `objc_msgSend(obj, init)` is untyped, so allocation+init works.
+   KVC/KVO and `NSInvocation` read the same `types` strings and now see real
+   encodings everywhere a Swift type maps to a Clang type.
+2. **Selector table — done, and now load-bearing.** `sel_registerName()` is
+   sufficient for the *untyped* dispatch `probe3`/`probe4` exercise, but not for
+   typed dispatch, which is what Clang-compiled senders and libobjc2's own
+   release path use. IRGen emits one typed record per (name, encoding) and
+   mangles its symbol like Clang's GNUstep emitter (§7.1). The remaining
+   difference from Clang is only cosmetic: a method whose encoding cannot be
+   registered keeps an untyped record.
 3. **Superclass as a name.** The v2 ABI allows `super_class` to be a *class name*
    until resolved; a Swift-emitted subclass of a Swift class could use the direct
    pointer, but cross-image (Swift class subclassing an imported ObjC class) must

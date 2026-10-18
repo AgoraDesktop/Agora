@@ -355,7 +355,8 @@ one, and is why S1 needs no build-system work.
 | S2 | Instance-method and class-method dispatch from C and from ObjC onto a Swift class | **passed for the fixed/non-generic case**: `objc_msg_lookup` reaches `-greet` and `+classAnswer`; `objc-to-swift-probe` passes in full with the layout-2 compiler |
 | S3 | Instance layout: `instance_size`, ivar list with offset indirection, Swift field offsets still correct | **passed**: the `objc_ivar_list` keeps `instance_size` from being clobbered, `class_getInstanceVariable` finds the Swift field and reports its offset, and the S1 gate proves both directions (C write -> Swift read, Swift write -> C read) |
 | S4 | Generic classes: metadata patterns that the layout-2 runtime can complete | **passed for generic classes without an imported ObjC ancestor** (which is all the stdlib has): the pattern carries no Apple extra data, the runtime initializes the GNUstep header with `ABIVersion = 3`, and a full layout-2 stdlib rebuild is green — see the note below. `class Box<T>: NSObject` needs the §3.2 hook and is split out as **S4b** |
-| S4b | Generic classes with an imported Objective-C ancestor: GNUstep metaclass in the pattern, unique ObjC name per instantiation, `objc_loadClass_np()` registration, method/ivar lists | **passed** for runtime-instantiated classes: `Box(Int)`, `Box(String)`, `Box<(Int, Int)>`, `Sub<Int>: Box<Int>`, nested `Box<Box<Int>>` are registered class objects, `-init` reaches the Swift initializer, and a 16-thread stress passes — see the note below. `deinit` still misses the typed `dealloc` selector (S5); prespecialized/resilient ObjC-ancestry classes are S4c |
+| S4b | Generic classes with an imported Objective-C ancestor: GNUstep metaclass in the pattern, unique ObjC name per instantiation, `objc_loadClass_np()` registration, method/ivar lists | **passed** for runtime-instantiated classes: `Box(Int)`, `Box(String)`, `Box<(Int, Int)>`, `Sub<Int>: Box<Int>`, nested `Box<Box<Int>>` are registered class objects, `-init` reaches the Swift initializer, and a 16-thread stress passes — see the note below. `deinit` still misses the typed `dealloc` selector (S5) |
+| S4c | Resilient classes (library evolution) with an imported ObjC ancestor: static metaclass, class-side fields in the pattern, registration of the relocated metadata, field-offset globals | **passed**: `Sub: Base` and `GrandSub: Sub` relocate, register, and keep their field values; a pure Swift resilient class stays a non-class-object. The *prespecialized* generic-with-ObjC-ancestor case remains unreachable and unimplemented (see the S4c note) |
 | S5 | Refcounting/ARC interop, `+alloc`, `UsesSwiftRefcounting`, `+load`/`+initialize` | **partly**: `+alloc`/`objc_allocWithZone`, `+load` and pure-Swift refcounting work — with a layout-2 runtime a pure Swift class (generic or not) runs `deinit`. A class with ObjC ancestry still releases through libobjc2 (`NSObject -release` -> `objc_release` -> `gc->free_object`), so its `deinit` is skipped |
 | S6 | Remove the Apple-layout remnants and the compatibility shims | full `swiftc` + Agora program |
 
@@ -445,14 +446,54 @@ is §7.1, and it belongs with S5.
 
 Gate: `swift-toolchain/scripts/verify-generic-objc-abi.sh`.
 
+**S4c result (2026-10-17).** A class from a library-evolution module with an
+imported ObjC ancestor has no statically emitted metadata: `ResilientClassMetadata`
+is a pattern, and `swift_relocateClassMetadata()` builds the metadata on the heap.
+It needs the same three things S4b needed, from static data:
+
+- a **static metaclass** - the class is not generic, so
+  `emitGNUstepMetaclassObject()` can define it (name, class-method list) and the
+  pattern points at it;
+- the class-side fields (`Name`, `InstanceMethods`, `Ivars`) in the pattern,
+  because the GNUstep class object keeps them in the class itself;
+- registration of the relocated metadata once `instance_size` is known.
+  `_swift_initClassMetadataImpl` now registers any runtime-built class whose
+  `isa` is non-null, and computes the per-instantiation name only when the class
+  does not already have a static one.
+
+One additional problem was *not* specific to the class object: a class whose
+superclass layout is opaque at compile time is compiled against the superclass's
+**minimum** size, and every stored-property access loads the real offset from a
+mutable global. Layout 1 fills those globals in `initObjCClass()`; layout 2 had
+nothing doing it, so a resilient class read its fields from the wrong offsets
+(`var v = 2` returned the superclass's field). `initGNUstepClassFieldOffsets()`
+now writes them back through the class's emitted `objc_ivar_list`, which is
+therefore emitted for *every* relocated class, class object or not.
+
+Boundary: a **prespecialized** generic class with an ObjC ancestor still has no
+metaclass (null `isa`, as in S4) and is not registered. It is unreachable in this
+toolchain - canonical metadata prespecialization only happens for the stdlib
+module here (a user module compiled with `-O -prespecialize-generic-metadata`,
+with or without library evolution, emits none), and the stdlib has no
+ObjC-ancestry generic classes. If it becomes reachable, it needs a GNUstep
+metaclass at `getAddrOfCanonicalSpecializedGenericMetaclassObject()`'s symbol and
+a compile-time unique name; the failure mode until then is the pre-S4b
+`objc_allocWithZone` trap.
+
+A separate gap: the `Update`/`FixedOrUpdate` strategy (resiliently *sized* stored
+fields) calls `swift_updateClassMetadata2`, which is compiled only at layout 1,
+so such a class does not link at layout 0 either. That is orthogonal to class
+objects and is recorded in the handoff's next steps.
+
 ### 6.0 Where the IRGen work attaches
 
 *Status: the fixed/non-generic path (S1, handoff §2.7), generic classes without
-ObjC ancestry (S4, handoff §2.8) and runtime-instantiated generic classes with an
-imported ObjC ancestor (S4b, handoff §2.9) are implemented. The bullets below
-remain the map; the outstanding entries are the resilient-class pattern (library
-evolution, not used by the stdlib), prespecialized generic classes with an ObjC
-ancestor (S4c), and typed selector records (S5, §7.1).*
+ObjC ancestry (S4, handoff §2.8), runtime-instantiated generic classes with an
+imported ObjC ancestor (S4b, handoff §2.9) and relocated resilient classes with
+one (S4c, handoff §2.10) are implemented. The bullets below remain the map; the
+outstanding entries are prespecialized generic classes with an ObjC ancestor
+(unreachable today, see the S4c note), the `Update` strategy, and typed selector
+records (S5, §7.1).*
 
 - `lib/IRGen/MetadataLayout.h:168` `ClassMetadataLayout` computes `MetadataSize`,
   `MetadataAddressPoint`, `VTableOffset`, `FieldOffsetVector` and

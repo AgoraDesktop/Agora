@@ -41,6 +41,18 @@ and installs the class's method list (the initializer and `-dealloc` thunks) so
 initialize, message and go into `NSMutableArray`s. Reproduce with
 [`swift-toolchain/scripts/verify-generic-objc-abi.sh`](swift-toolchain/scripts/verify-generic-objc-abi.sh).
 
+**S4c closes the resilient case.** A class from a library-evolution module with
+an imported ObjC ancestor has no statically emitted metadata at all: the runtime
+relocates it from a pattern. At layout 2 that pattern now carries the metaclass
+and the class-side fields (name, method list, ivar list) from the class's static
+data, and the relocated metadata is registered like S4b's. A pure Swift class
+with a resilient superclass keeps working as a plain Swift metadata object, and
+the field-offset globals of *every* runtime-relocated class are now filled in
+(without that, a resilient class's stored properties read the wrong slots: they
+are compiled against the superclass's minimum size and the runtime is expected
+to slide the globals). See
+[`swift-toolchain/scripts/verify-generic-objc-abi.sh`](swift-toolchain/scripts/verify-generic-objc-abi.sh).
+
 `deinit` of these classes still does not run — S5. It is now diagnosed: the
 method *is* in the class's list and `-dealloc` dispatches when called directly,
 but libobjc2's release path sends the *typed* `dealloc_v16@0:8` selector while
@@ -50,8 +62,8 @@ falls back to `NSObject -dealloc` and the object is freed without the Swift
 destructor. Memory is reclaimed (RSS stays flat over 500k instances).
 
 The *installed* toolchain is still layout 0: the destination is now buildable and
-gated - S1, S2, S3, S4, S4b - and flipping the default is the next decision,
-ahead of S5/S6.
+gated - S1, S2, S3, S4, S4b, S4c - and flipping the default is the next
+decision, ahead of S5/S6.
 
 The wall described in the previous handoff ("one process, two class-metadata
 ABIs") is gone, and it was broken in two steps that are worth keeping distinct:
@@ -102,6 +114,7 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
 | **Agora interop** | `import Foundation` (Agora's), `NSObject.alloc()`, `isKind(of:)`, `description()`, `object_getClass`/`class_getName` through libobjc2 |
 | **generic classes, layout 2** | runtime-instantiated metadata (`Box<T>`, `Pair<A,B>`, class-typed fields, generic subclasses), prespecialized metadata, `Array`/`Set`/`Dictionary`, casts between specializations, `AnyObject` boxing, `Mirror`, `deinit` of a generic instance |
 | **generic classes with an ObjC ancestor** | `class Box<T>: NSObject` is a registered GNUstep class object: unique mangled names, `-init` reaches the Swift initializer, `objc_getClass` round-trip, metaclass chain, `NSMutableArray` ownership; `deinit` still skipped (S5, typed-selector gap) |
+| **resilient classes** (layout 2) | a library-evolution class with an ObjC ancestor is relocated at runtime, registered, and gets correct field offsets (including through a resilient superclass chain); a pure Swift resilient class stays a non-class-object; `class_getInstanceVariable`, sizes and `isKind(of:)` verified |
 | **default flags** | `swiftc prog.swift` enables Objective-C interop and selects the GNUstep runtime ABI family without any `-Xfrontend` flags |
 | **super dispatch** | a Swift `super.` send to an imported class emits `objc_msg_lookup_super` + a direct IMP call, not Apple's `objc_msgSendSuper2`; such a program links, and with the layout-2 test compiler `objc-to-swift-probe` verifies the semantics (`super -init` is reached) |
 | **the two probes** | `agora-import-probe`: all 11 checks; `objc-to-swift-probe`: compiles and links, then traps in `objc_allocWithZone` when the Swift subclass is first allocated with the *installed* toolchain — passes every check with the layout-2 compiler (frontend-only and layout-2-stdlib builds alike) |
@@ -581,18 +594,75 @@ listed in [`SWIFT-GNUSTEP-CLASS-ABI.md`](SWIFT-GNUSTEP-CLASS-ABI.md) §7.1 -
 emitting typed selector records (or the correct per-method encodings) is the
 fix, and it belongs with S5's refcounting work.
 
-Two smaller boundaries: a *prespecialized* generic class with an ObjC ancestor
-(possible only in a module built with `-prespecialize-generic-metadata`, which
-the stdlib uses but never with an ObjC superclass) still gets no metaclass, and
-a *resilient* class with an ObjC ancestor (library evolution) is likewise not
-registered. Both stay non-class-objects, as in S4.
+**The resilient case is S4c (§2.10).** The *prespecialized* one is not: see
+§2.10's boundary note.
+
+### 2.10 S4c: resilient classes with an Objective-C ancestor
+
+A class in a module built with `-enable-library-evolution` whose superclass comes
+from another resilience domain has **no statically emitted metadata**:
+`getClassMetadataStrategy()` returns `Resilient`, the compiler emits a
+`ResilientClassMetadataPattern`, and `swift_relocateClassMetadata()` builds the
+metadata on the heap at first use. If that class inherits an imported ObjC class,
+Swift allocates it through `objc_allocWithZone` and the relocated metadata has to
+be a registered class object - the S1 machinery, but for heap metadata.
+
+What changed:
+
+- `TargetResilientClassMetadataPattern` gained the GNUstep class-side fields at
+  layout 2 (`Name`, `InstanceMethods`, `Ivars`); `ResilientClassMetadataBuilder`
+  defines the class's **static metaclass** with `emitGNUstepMetaclassObject()`
+  (the class is not generic, so its name and method/ivar lists are static) and
+  fills them. Unlike the generic case, the metaclass is not in the pattern's
+  extra data: it is the same object for the single relocated metadata instance.
+- `_swift_relocateClassMetadata()` installs them (metaclass as `isa`, name,
+  method list, ivar list) and `_swift_initClassMetadataImpl` registers the class
+  once `instance_size` is known. Registration is now keyed on `isa != nullptr`
+  rather than on "is generic", which covers generic (S4b) and resilient (S4c)
+  classes; a generic one computes a per-instantiation name, a resilient one uses
+  the static name from the pattern.
+- **Field-offset globals.** A class whose superclass layout is opaque at compile
+  time is compiled against the superclass's *minimum* size; every stored-property
+  access loads the real offset from a mutable global, and the runtime is expected
+  to slide it. Layout 1 does that in `initObjCClass()`; at layout 2 nothing did,
+  so a resilient class read its fields from the wrong slots (a `var v = 2` came
+  back as its superclass's field). `initGNUstepClassFieldOffsets()` now writes
+  the computed offsets back through the class's emitted `objc_ivar_list`, and the
+  ivar list is emitted for every relocated class - not only for class objects -
+  because that is where the globals' addresses live.
+
+Verified by the same gate (it now builds a `ResilientLib` module with
+`-enable-library-evolution` and an app that subclasses both its ObjC-rooted
+`Base` and its pure-Swift `PureBase`), `-Onone` and `-O`: `Sub: Base` and
+`GrandSub: Sub` relocate, register, keep their field values and report correct
+`instance_size`, ivar offsets, superclass and metaclass; `Pure: PureBase`
+relocates as a plain Swift metadata object.
+
+**Boundary - prespecialized generic classes.** A *prespecialized* generic class
+with an ObjC ancestor still gets no metaclass (it keeps S4's null `isa`). That
+case needs `SpecializedGenericClassMetadataBuilder` to emit a GNUstep metaclass
+at the *specialized* symbol plus a compile-time unique name, and it is not
+reachable today: canonical metadata prespecialization only happens for the
+stdlib module on this target (a user module compiled with `-O
+-prespecialize-generic-metadata`, with or without library evolution, emits no
+prespecialized class metadata; the canonical-use path requires statically
+addressable metadata), and the stdlib has no ObjC-ancestry generic classes. If a
+stdlib-like module ever declares one, the failure is the pre-S4b
+`objc_allocWithZone` trap, not silent corruption.
+
+A separate, layout-independent gap surfaced while testing: a class with
+*resiliently sized stored fields* (not resilient ancestry) uses the
+`Update`/`FixedOrUpdate` strategy, whose runtime entry points
+(`swift_updateClassMetadata2`) are compiled only at layout 1 - so such a class
+fails to link at layout 0 as well. It is not part of S4c but is worth its own
+item before library evolution is a supported use case.
 
 ---
 
 ## 3. Change inventory
 
 `swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 45 files,
-~1570 insertions. The layout/registration table is from the previous round, the
+~1700 insertions. The layout/registration table is from the previous round, the
 S1 emission from the round before this one, and S4/S4b are this round's
 addition. The libobjc2 side is
 `swift-toolchain/patches/0006-libagora-objc-loadClass-np.patch`.
@@ -606,6 +676,12 @@ addition. The libobjc2 side is
 | `stdlib/public/runtime/Metadata.cpp` | metaclass from the pattern, method/ivar lists, shared empty ivar list; `copyGenericClassObjCName()` hoisted to both class-object layouts; `initGNUstepGenericClassObjCName()`; registration and `instance_size` mirroring in `_swift_initClassMetadataImpl`; ObjC-superclass branch in `initClassFieldOffsetVector` |
 | `stdlib/public/runtime/SwiftObject.mm` | `swift_instantiateObjCClass()` calls `objc_loadClass_np()` at layout 2 |
 | `libagora-objc/{class.h,class_table.c}` | `objc_loadClass_np()` (S0 hook) plus the runtime lock around `objc_load_class()` (patch 0006) |
+
+| File (S4c) | Change |
+|---|---|
+| `include/swift/ABI/Metadata.h` | the resilient pattern's `Name`/`InstanceMethods`/`Ivars` relative pointers (layout 2) |
+| `lib/IRGen/GenMeta.cpp` | `ResilientClassMetadataBuilder`: a static GNUstep metaclass for an ObjC-ancestry resilient class, and the class-side fields in the pattern (the ivar list is emitted even for a pure Swift resilient class, for the field-offset globals) |
+| `stdlib/public/runtime/Metadata.cpp` | `initializeGNUstepClassHeader()` overload for the resilient pattern; registration for any runtime-built class with an `isa`; `initGNUstepClassFieldOffsets()` |
 
 | File (S4) | Change |
 |---|---|
@@ -692,7 +768,8 @@ swift-toolchain/scripts/verify-class-abi.sh
 # needed - a full stdlib rebuild is ~15-30 min)
 swift-toolchain/scripts/verify-generic-abi.sh
 
-# the S4b gate (same build tree; generic classes with an ObjC ancestor)
+# the S4b/S4c gate (same build tree; generic classes with an ObjC ancestor, and
+# resilient classes built with -enable-library-evolution)
 swift-toolchain/scripts/verify-generic-objc-abi.sh
 
 # the S1/probe/language gates against the same layout-2 stdlib
@@ -735,7 +812,7 @@ AGORA_SWIFT_CLASS_LAYOUT=2 swift-toolchain/scripts/build-swift-toolchain.sh
 - **Current results**: `verify-swift-port.sh` all green;
   `verify-class-abi.sh` `S1 gate: ok` (S1 + S3 checks); probes with the installed toolchain
   11/11 then the known `objc_allocWithZone` trap; the S4 gate green
-  (`S4 gate: ok`), the S4b gate green (`S4b gate: ok`); and with the layout-2
+  (`S4 gate: ok`), the S4b/S4c gate green (`S4b/S4c gate: ok`); and with the layout-2
   *stdlib* every gate green - S1, S4, S4b, language/runtime, and both probes
   (17/17). `build-prefix/lib/libobjc.so.4` is the rebuilt runtime with
   `objc_loadClass_np` and the lock.
@@ -809,15 +886,16 @@ Debugging techniques that produced the findings above:
    also the general answer to the type-encoding question in
    [`SWIFT-GNUSTEP-CLASS-ABI.md`](SWIFT-GNUSTEP-CLASS-ABI.md) §7.1: typed
    dispatch from Objective-C code into Swift methods depends on it.
-2. **S4c: the two remaining dynamic-class cases.** A *prespecialized* generic
-   class with an imported ObjC ancestor (only possible in a module built with
-   `-prespecialize-generic-metadata`) and a *resilient* class with one (library
-   evolution) still have no metaclass and are not registered with libobjc2.
-   Neither occurs in the stdlib. The same machinery as §2.9 applies; the
-   prespecialized case additionally needs the metaclass emitted at the
-   specialized symbol (`getAddrOfCanonicalSpecializedGenericMetaclassObject`),
-   and the resilient case needs a GNUstep counterpart of
-   `ResilientClassMetadataPattern::Metaclass`.
+2. **Library evolution: the `Update` strategy.** A class with *resiliently sized
+   stored fields* (a non-frozen struct member from another module, not resilient
+   ancestry) uses `Update`/`FixedOrUpdate`, whose runtime entry points
+   (`swift_updateClassMetadata2` / `_swift_updateClassMetadataImpl`) are compiled
+   only at layout 1. Such a class fails to **link** at layout 0 and layout 2
+   alike, so this is a pre-existing gap rather than an S4c one; it needs a
+   layout-neutral implementation (recompute the layout, fill the field-offset
+   globals, mirror `instance_size`) before library evolution can be called
+   supported. The prespecialized-generic-with-ObjC-ancestor case stays
+   unreachable (see §2.10) until a stdlib-like module declares one.
 3. **Flip the default.** Everything needed to *build* the destination toolchain
    now works: `AGORA_SWIFT_CLASS_LAYOUT=2 swift-toolchain/scripts/build-swift-toolchain.sh`
    installs a layout-2 compiler + stdlib, and every gate is green against a
@@ -860,7 +938,7 @@ swift-toolchain/
 ├── patches/
 │   ├── 0001-libagora-base-objcxx-clean.patch   3 hunks / 2 files
 │   ├── 0002-libagora-core-objcxx-clean.patch   1 hunk  / 1 file
-│   ├── 0003-swift-enable-objc-interop.patch   45 files, ~1570 insertions
+│   ├── 0003-swift-enable-objc-interop.patch   45 files, ~1700 insertions
 │   ├── 0004-libdispatch-overlay-non-interop.patch  1 file (the Dispatch overlay)
 │   ├── 0005-libagora-base-allocWithZone.patch      2 files (NSObject)
 │   └── 0006-libagora-objc-loadClass-np.patch       3 files (the runtime hook,
@@ -878,8 +956,8 @@ swift-toolchain/
     │                                          class and its ivars)
     ├── verify-generic-abi.sh                  the S4 gate (needs the layout-2
     │                                          stdlib)
-    └── verify-generic-objc-abi.sh             the S4b gate (generic classes with
-                                               an ObjC ancestor)
+    └── verify-generic-objc-abi.sh             the S4b/S4c gate (ObjC-ancestry
+                                               generic and resilient classes)
 
 swift-interop-probe/
 ├── scripts/run-probe.sh                       the original container harness
@@ -917,9 +995,9 @@ through libobjc2's `objc_loadClass_np`, so `Box(5)` allocates, initializes and
 messages like any class object. What remains is `deinit`, which libobjc2's
 release path misses because the release sends a *typed* `dealloc` selector and
 Swift's selector records are untyped (S5), plus the prespecialized/resilient
-dynamic-class cases (S4c). Flipping the shipped default to layout 2 is now a
-decision, not a blocker. The rest of this summary is the previous rounds' record
-of how the compiler got here.
+`Update`-strategy classes and typed selectors (S5). Flipping the shipped default
+to layout 2 is now a decision, not a blocker. The rest of this summary is the
+previous rounds' record of how the compiler got here.
 
 The compiler compiles again. The trap was the class-metadata layout: the
 compiler's own Swift libraries are built by the bootstrap toolchain without

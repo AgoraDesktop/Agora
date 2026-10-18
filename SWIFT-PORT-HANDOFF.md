@@ -92,10 +92,10 @@ pointed at `NSObject -dealloc`: the object was freed and the Swift destructor
 skipped. Emitting typed records fixed it without changing the release path.
 
 The installed toolchain is layout 2, and the class ABI is complete: S1, S2, S3,
-S4, S4b, S4c and S5 are all shipped and gated. What is left is S6 (removing the
-Apple-layout remnants and compatibility shims), library evolution's `Update`
-strategy, and work that is independent of the class layout (Foundation
-bridging, property-shaped accessors).
+S4, S4b, S4c, S5 and S6 are all shipped and gated. What is left is library
+evolution's `Update` strategy and work that is independent of the class layout
+(Foundation bridging, property-shaped accessors, the self-contained host
+runtime).
 
 The wall described in the previous handoff ("one process, two class-metadata
 ABIs") is gone, and it was broken in two steps that are worth keeping distinct:
@@ -154,7 +154,7 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
 | **Swift -> Agora class objects** (layout 2, test compiler) | class emitted as a GNUstep `struct objc_class` + metaclass; `objc_getClass` before `main`; `respondsToSelector`; instance and class dispatch from C; category attachment and `+load`; `Counter()` via `objc_allocWithZone`; ivar list keeps `instance_size` intact and is usable from C (`class_getInstanceVariable`, offsets, read/write both ways) |
 
 **What the installed (layout 2) toolchain still does not do.** The class ABI is
-closed (S1-S5); these are independent of it:
+closed (S1-S6); these are independent of it:
 
 - No Foundation **bridging** of Swift values: `String` ↔ `NSString`, `Array` ↔
   `NSArray` and `Error` ↔ `NSError` need a Foundation overlay, which this
@@ -172,8 +172,11 @@ closed (S1-S5); these are independent of it:
 - **Library evolution's `Update` strategy** (resiliently sized stored fields)
   still fails to link: its runtime entry points (`swift_updateClassMetadata2`)
   exist only at layout 1 (§5). Not reachable from the stdlib or the gates.
-- **S6** (removing the Apple-layout remnants, the `SWIFT_OBJC_CLASS_LAYOUT=0`
-  path's dead weight, and the compatibility shims) has not been started.
+- **The `SWIFT_OBJC_CLASS_LAYOUT=0` rollback path** is still compiled in
+  (`#if` branches, zero runtime cost) and is not gated any more. S6 kept it on
+  purpose (§2.13): it is the documented rollback and the non-Apple default of
+  upstream, while Darwin keeps layout 1. Only the Agora-side shims and the
+  redundant build flags were removed.
 
 ---
 
@@ -799,16 +802,58 @@ Verified after the install, against the **installed** compiler and stdlib:
 `nm $T/lib/swift/linux/libswiftCore.so | grep _OBJC_METACLASS__TtCs12_SwiftObject`
 is the one-line check that the installed stdlib really is the layout-2 one.
 
+### 2.13 S6: the compatibility shims and redundant flags are gone
+
+S6 is the cleanup stage of the class-ABI plan, and it is deliberately *not* a
+rewrite of the fork: the ABI is shipped, and the remaining `#if
+SWIFT_OBJC_CLASS_LAYOUT` branches are kept for Darwin (layout 1) and for the
+documented rollback (layout 0). What was actually dead, and is now gone:
+
+1. **`swift-toolchain/compat/ObjCInteropShim.c` - deleted.** It supplied
+   `objc_opt_self`, `swift_getObjCClassMetadata`,
+   `swift_getObjCClassFromMetadata` and
+   `swift_getObjCClassFromMetadataConditional` when the built `libswiftCore`
+   did not export them. The fork's runtime exports the first three
+   (`GNUstepObjCCompatibility.mm` and `Metadata.cpp`); the fourth has no
+   `SWIFT_RUNTIME_EXPORT` upstream and is only called inside the runtime
+   (`MetadataLookup.cpp`, `ProtocolConformance.cpp`), so a program never needed
+   it. Nothing referenced the file any more; it is not in any build.
+2. **`swift-interop-probe/scripts/run-probe.sh` - deleted.** It drove the
+   published aarch64 container image, which predates the class-ABI work and
+   cannot observe the current state. `run-native-probe.sh` is the harness, and
+   `swift-interop-probe/README.md` now documents only that (it also stopped
+   claiming the Objective-C→Swift probe fails, which the flip made untrue).
+3. **A duplicated build flag - removed.**
+   `SWIFT_EXPERIMENTAL_EXTRA_FLAGS` carried
+   `-Xfrontend -objc-runtime-vendor=gnustep`, and `SwiftSource.cmake` already
+   passes exactly that for a non-Apple interop build (and the frontend defaults
+   the vendor to GNUstep for a non-Darwin ELF target, `CompilerInvocation.cpp`).
+   The stdlib now compiles with one fewer redundant flag. The other two entries
+   stay, with their reasons now written down: `-validate-tbd-against-ir=none`
+   (the TBD checker does not know the ObjC class symbols interop emits) and
+   `-sil-disable-pass=code-sinking` (predates this work; untested without it).
+4. **A gate that keeps the shim dead.** `verify-swift-port.sh` now resolves the
+   `libswiftCore` the interop test program actually loads and asserts that it
+   exports `objc_opt_self`, `swift_getObjCClassMetadata` and
+   `swift_getObjCClassFromMetadata`. A regression that stopped exporting them
+   would otherwise reintroduce the "every user must link a shim" state silently.
+
+The published patch is unaffected: S6 changed the Agora-side scripts and docs,
+not the Swift fork. Its regeneration command is now the safe one
+(`git diff HEAD`, which also catches the intent-to-add
+`TargetConditionals.h`).
+
 ---
 
 ## 3. Change inventory
 
 `swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 45 files,
 ~1810 insertions. The layout/registration table is from two rounds ago, the S1
-emission from three, S4/S4b from the previous round, S5 and the flip from this
-one. The libobjc2 side is
-`swift-toolchain/patches/0006-libagora-objc-loadClass-np.patch` (unchanged this
-round: S5 and the flip need no runtime change).
+emission from three, S4/S4b from before that, and S5 and the flip from the
+previous round; S6 changed only the Agora-side scripts and docs, so the fork
+patch is unchanged. The libobjc2 side is
+`swift-toolchain/patches/0006-libagora-objc-loadClass-np.patch` (unchanged:
+neither S5, the flip nor S6 needs a runtime change).
 
 | File (flip) | Change |
 |---|---|
@@ -990,8 +1035,15 @@ done
 - **To change the layout**: `AGORA_SWIFT_CLASS_LAYOUT=0` (or `2`, the default)
   `swift-toolchain/scripts/build-swift-toolchain.sh`. The build script always
   passes `-DSWIFT_OBJC_CLASS_LAYOUT:` explicitly, so the cache cannot go stale.
-- **Current results**: installed toolchain - `verify-swift-port.sh` all green,
-  `run-native-probe.sh` 17/17 (only the known `#selector` gap), and with
+- **S6 state**: `swift-toolchain/compat/` and
+  `swift-interop-probe/scripts/run-probe.sh` are deleted, and the stdlib's
+  `SWIFT_EXPERIMENTAL_EXTRA_FLAGS` no longer carries the duplicated
+  `-objc-runtime-vendor=gnustep` (so this round recompiled the Swift stdlib,
+  ~5 minutes). The language gate's new export check runs against whichever
+  `libswiftCore` the test program links.
+- **Current results**: installed toolchain - `verify-swift-port.sh` all green
+  (including S6's interop-export check), `run-native-probe.sh` 17/17 (only the
+  known `#selector` gap), and with
   `SWIFTC_LAYOUT2=$T/bin/swiftc STDLIB_DIR=$T/lib/swift`: `S1 gate: ok`,
   `S4 gate: ok`, `S4b/S4c gate: ok`, `S5 gate: ok`. `import Dispatch` (the
   no-interop layout-2 overlay) builds and runs.
@@ -1079,35 +1131,40 @@ Debugging techniques that produced the findings above:
    green against it, including both probes. The flip also fixed layout 2 *
    without* interop (the Dispatch overlay), which had no implementation. The
    rollback is `AGORA_SWIFT_CLASS_LAYOUT=0 <build script>`; the previous install
-   is kept at `~/.agora-swift/toolchain.layout0-backup`. What is left of the
-   staging plan is **S6**: remove the Apple-layout remnants, the now-dead
-   compact-layout paths in IRGen/runtime, and the compatibility shims
-   (`compat/ObjCInteropShim.c`, `ObjCInteropShim` references in the build).
-4. **S3: read/write the ivars from C - done** (§2.7). The S1 gate looks the
+   is kept at `~/.agora-swift/toolchain.layout0-backup`.
+4. **S6 - done** (§2.13). The dead bootstrap shim (`compat/ObjCInteropShim.c`)
+   and the container probe harness are deleted, the duplicated
+   `-objc-runtime-vendor=gnustep` build flag is gone, and the language gate now
+   asserts that the interop entry points come from `libswiftCore`. The
+   `#if SWIFT_OBJC_CLASS_LAYOUT` branches stay: Darwin uses layout 1, and layout
+   0 is the documented rollback. What the plan calls "Apple-layout remnants" in
+   the *fork* is therefore intentionally retained; what was dead in the Agora
+   tree is not.
+5. **S3: read/write the ivars from C - done** (§2.7). The S1 gate looks the
    emitted field up with `class_getInstanceVariable`, reads its offset, and
    proves both directions.
-5. **Self-contained host runtime.** Replace the wrapper's dependence on
+6. **Self-contained host runtime.** Replace the wrapper's dependence on
    `~/.agora-swift/bootstrap` with a non-interop stdlib installed under the
    toolchain (`lib/swift/host/...`), or do the proper host/target split in the
    CMake install. This is the only remaining build-system "cheat".
-6. **`+allocWithZone:` - done** (§2.6). `NSObject()` and every imported `T()`
+7. **`+allocWithZone:` - done** (§2.6). `NSObject()` and every imported `T()`
    now work through a compatibility door that forwards to `+alloc`, so a
    subclass's singleton override still wins. Swift classes now use it for real
    (§2.7, §2.9).
-7. **Property-shaped accessors in Agora's headers.** `- (size_t)length` imports
+8. **Property-shaped accessors in Agora's headers.** `- (size_t)length` imports
    as `length()`, while Apple and GNUstep declare a `length` property. Writing
    Swift against Agora therefore reads differently from writing it against
    Cocoa. Converting the read-only accessors (`length`, `UTF8String`, ...) to
    `@property` declarations is source-compatible for Objective-C and would make
    `text.length` work.
-8. **Keep the gates green.** `verify-swift-port.sh` is the language/runtime
+9. **Keep the gates green.** `verify-swift-port.sh` is the language/runtime
    gate and now runs the *installed* layout-2 toolchain; `verify-class-abi.sh`
    is the C-side S1/S3 gate; `verify-generic-abi.sh` (S4),
    `verify-generic-objc-abi.sh` (S4b/S4c) and `verify-refcount-abi.sh` (S5)
    check the stdlib too (`STDLIB_DIR`); `run-native-probe.sh` is the native
    probe harness and passes 17/17 against the installed toolchain. The
-   published-container `run-probe.sh` and `compat/ObjCInteropShim.c` are now
-   historical (S6 deletes them).
+   published-container `run-probe.sh` and `compat/ObjCInteropShim.c` were
+   deleted in S6 (§2.13).
 
 ---
 
@@ -1116,8 +1173,6 @@ Debugging techniques that produced the findings above:
 ```
 swift-toolchain/
 ├── README.md                                  build/run instructions
-├── compat/ObjCInteropShim.c                   no longer needed (kept for the
-│                                              published container)
 ├── patches/
 │   ├── 0001-libagora-base-objcxx-clean.patch   3 hunks / 2 files
 │   ├── 0002-libagora-core-objcxx-clean.patch   1 hunk  / 1 file
@@ -1128,11 +1183,10 @@ swift-toolchain/
 │                                                   its lock, the SONAME)
 └── scripts/
     ├── build-swift-toolchain.sh               build + install (incl. wrapper)
-    ├── build-layout2-frontend.sh              S1 test compiler only (frontend
-    │                                          at layout 2 + swiftc-layout2)
-    ├── build-layout2-stdlib.sh                S4 experiment: frontend AND
-    │                                          stdlib at layout 2 (not
-    │                                          installed) + swiftc-layout2-stdlib
+    ├── build-layout2-frontend.sh              rebuild the in-tree frontend
+    │                                          (+ swiftc-layout2 wrapper)
+    ├── build-layout2-stdlib.sh                rebuild frontend AND stdlib in
+    │                                          the tree (+ swiftc-layout2-stdlib)
     ├── native-env.sh                          paths; AGORA_SWIFT_CLASS_LAYOUT
     ├── verify-swift-port.sh                   the language/runtime gate
     ├── verify-class-abi.sh                    the S1/S3 gate (C sees the Swift
@@ -1146,8 +1200,9 @@ swift-toolchain/
                                                dispatch from Objective-C)
 
 swift-interop-probe/
-├── scripts/run-probe.sh                       the original container harness
-├── scripts/run-native-probe.sh                the native harness (current)
+├── scripts/run-native-probe.sh                the harness (the only one; the
+│                                              container harness was deleted)
+├── class-abi/                                 the four standalone ABI probes
 └── Sources/, AgoraProbeKit/                   the two probes + ObjC side-channel
 ```
 
@@ -1188,10 +1243,13 @@ path, which sends `dealloc_v16@0:8`) reaches a Swift method. That is why
 `deinit` runs for fixed, generic and resilient classes with an Objective-C
 ancestor, why `-init`/`-dealloc` overrides are reachable from C, and why
 retain/release from C balance. The default is flipped, so all of that is what
-the installed toolchain does. What remains is not the class ABI: the
-`Update`-strategy classes of library evolution, the host-runtime packaging, S6's
-cleanup, and Foundation bridging. The rest of this summary is the previous
-rounds' record of how the compiler got here.
+the installed toolchain does, and S6 removed the last of the migration
+scaffolding: the bootstrap interop shim and the container probe harness are
+deleted, the duplicated vendor build flag is gone, and a gate keeps the shim
+dead by checking `libswiftCore`'s exports. What remains is not the class ABI:
+the `Update`-strategy classes of library evolution, the host-runtime packaging,
+and Foundation bridging. The rest of this summary is the previous rounds' record
+of how the compiler got here.
 
 The compiler compiles again. The trap was the class-metadata layout: the
 compiler's own Swift libraries are built by the bootstrap toolchain without

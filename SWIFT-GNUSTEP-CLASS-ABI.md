@@ -360,7 +360,7 @@ one, and is why S1 needs no build-system work.
 | S4b | Generic classes with an imported Objective-C ancestor: GNUstep metaclass in the pattern, unique ObjC name per instantiation, `objc_loadClass_np()` registration, method/ivar lists | **passed** for runtime-instantiated classes: `Box(Int)`, `Box(String)`, `Box<(Int, Int)>`, `Sub<Int>: Box<Int>`, nested `Box<Box<Int>>` are registered class objects, `-init` reaches the Swift initializer, a 16-thread stress passes, and (since S5) `deinit` runs — see the note below |
 | S4c | Resilient classes (library evolution) with an imported ObjC ancestor: static metaclass, class-side fields in the pattern, registration of the relocated metadata, field-offset globals | **passed**: `Sub: Base` and `GrandSub: Sub` relocate, register, and keep their field values; a pure Swift resilient class stays a non-class-object. The *prespecialized* generic-with-ObjC-ancestor case remains unreachable and unimplemented (see the S4c note) |
 | S5 | Refcounting/ARC interop, `+alloc`, `UsesSwiftRefcounting`, `+load`/`+initialize`, **typed selector records** | **passed**: selector records are emitted per (name, encoding) and carry the same encoding as the method entry, so Clang-compiled typed sends reach Swift methods — including a Swift override of an inherited typed selector, which is what libobjc2's release path needs. `deinit` runs for fixed, generic and resilient classes with ObjC ancestry; retain/release from Objective-C balance and the destructor runs exactly once; 50k alloc/init/release cycles neither leak nor climb in RSS. `+alloc`/`objc_allocWithZone` and `+load` work — see §7.1 |
-| S6 | Remove the Apple-layout remnants and the compatibility shims | full `swiftc` + Agora program |
+| S6 | Remove the Apple-layout remnants and the compatibility shims | **passed**: the bootstrap interop shim (`swift-toolchain/compat/`) and the container probe harness are deleted, the duplicated vendor build flag is gone, and `verify-swift-port.sh` asserts that the interop entry points come from `libswiftCore`. The layout `#if` branches are deliberately kept (Darwin layout 1, layout 0 rollback) — handoff §2.13 |
 
 Every stage is independently testable, and S0 needs no compiler rebuild.
 
@@ -497,6 +497,14 @@ asserts without interop. Such a compilation now emits GNUstep-shaped metadata
 with a null `isa` and a null root superclass - no metaclass, name, method list
 or `__objc_classes` entry - which is the same identity-free state a generic
 class already uses. See the handoff §2.12.
+
+**S6 (2026-10-17).** The staging plan is complete. The cleanup removed the
+bootstrap shim and the container harness, dropped the duplicated
+`-objc-runtime-vendor=gnustep` build flag, and added a check that `libswiftCore`
+exports the interop entry points a program needs. The three-way layout knob
+stays: Darwin compiles the Apple path (layout 1) and `AGORA_SWIFT_CLASS_LAYOUT=0`
+is the documented rollback, so the `#if` branches are not dead code in the
+source — they are the fork's rebasable shape. See the handoff §2.13.
 
 ### 6.0 Where the IRGen work attaches
 
@@ -688,7 +696,7 @@ It prints `S1 gate: ok (registered, name/methods visible, +load delivered,
 dispatch = 42/7, ivar offset = 8 and readable both ways)`. `swift-toolchain/scripts/build-layout2-frontend.sh` on its
 own leaves `bin/swiftc-layout2` in the build tree so individual programs can be
 compiled against the destination ABI; a *full* `AGORA_SWIFT_CLASS_LAYOUT=2`
-`build-swift-toolchain.sh` is the S4→S6 experiment. The S4 gate on its own is
+`build-swift-toolchain.sh` is the S4→S6 install. The S4 gate on its own is
 `swift-toolchain/scripts/verify-generic-abi.sh`, which builds the layout-2
 frontend and stdlib in the build tree (via `build-layout2-stdlib.sh`) without
 touching the installed toolchain.

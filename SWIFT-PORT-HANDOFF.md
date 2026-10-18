@@ -127,10 +127,10 @@ pointed at `NSObject -dealloc`: the object was freed and the Swift destructor
 skipped. Emitting typed records fixed it without changing the release path.
 
 The installed toolchain is layout 2, and the class ABI is complete: S1, S2, S3,
-S4, S4b, S4c, S5 and S6 are all shipped and gated. What is left is library
-evolution's `Update` strategy and work that is independent of the class layout
-(Foundation bridging, property-shaped accessors, the self-contained host
-runtime).
+S4, S4b, S4c, S5 and S6 are all shipped and gated, as are library evolution's
+runtime-layout classes, the self-contained host runtime and Foundation
+bridging. The toolchain is usable for real Swift-on-Agora programs; what is left
+is the Cocoa value-type *API surface* and S6-style polish (§5).
 
 The wall described in the previous handoff ("one process, two class-metadata
 ABIs") is gone, and it was broken in two steps that are worth keeping distinct:
@@ -204,10 +204,12 @@ closed (S1-S6); these are independent of it:
   fail at layout 0 (no Swift heap header); at layout 2 they carry one. Only the
   class-identity side is exercised (`__SwiftValue` above); their Foundation
   bridging paths are still untested because there is no overlay to drive them.
-- **Property-shaped imported accessors.** Agora declares `- (size_t)length` and
-  friends as methods (Apple and GNUstep declare a `length` property), so Swift
-  writes `text.length()`, not `text.length`. Not a port defect, but it is what
-  the probes had to be adapted to.
+- **Property-shaped accessors - done** (§2.17). Agora's read-only getters
+  (`length`, `UTF8String`, `count`, `firstObject`, `allKeys`, `domain`, `code`,
+  `userInfo`, ...) are `@property` declarations now, so Swift reads
+  `text.length`, `array.count`, `error.domain` the way it reads Cocoa. This is
+  source-compatible with the Objective-C API (a readonly property *is* its
+  getter).
 - **Library evolution's runtime-layout classes** work (§2.14), with one
   visibility rule: a class whose layout is only final at runtime is registered
   with libobjc2 when its Swift metadata is first requested, so
@@ -1093,6 +1095,50 @@ implicit `let s: NSString = someStringVariable` coercion is rejected - by
 upstream Swift too. Literal-to-`NSString` coercion works upstream only because
 of those re-declarations.
 
+
+### 2.17 Property-shaped accessors
+
+Cocoa declares its read-only getters as `@property`s (`length`, `count`,
+`firstObject`, `domain`, `code`, `userInfo`, `UTF8String`, ...), and Agora
+declared them as plain methods - so Swift read `text.length()` where Cocoa code
+reads `text.length`. The headers now declare the property form (patch
+`0009-libagora-base-property-shaped-accessors.patch`, 19 headers):
+
+| Class | Properties |
+|---|---|
+| `NSString` | `length`, `UTF8String` |
+| `NSArray` | `count`, `firstObject`, `lastObject` |
+| `NSDictionary` | `count`, `allKeys`, `allValues` |
+| `NSSet` | `count`, `anyObject`, `allObjects` |
+| `NSOrderedSet` | `count`, `firstObject`, `lastObject` |
+| `NSError` | `domain`, `code`, `userInfo`, `localizedDescription`, `localizedFailureReason` |
+| `NSData` | `length`, `bytes` |
+| `NSDate` | `timeIntervalSinceReferenceDate` |
+| `NSIndexPath` | `length` |
+| `NSIndexSet` | `count`, `firstIndex`, `lastIndex` |
+| `NSNumber` / `NSValue` / `NSDecimalNumber` | `objCType` |
+| `NSException` | `userInfo` |
+| `NSHashTable` | `count`, `allObjects` |
+| `NSMapTable`, `NSPointerArray` | `count` |
+| `NSTimer`, `NSUserActivity` | `userInfo` |
+
+This is source-compatible for Objective-C, because a readonly property *is* its
+getter: the selectors, implementations and ABI do not change, and every
+`[obj length]` still compiles. It is a *source change for Swift* in two ways
+worth knowing: the call syntax (`text.length`), and the imported name of
+`UTF8String`, which becomes the property spelling `utf8String`. The probes, the
+gate scripts and the Foundation overlay were updated; the ABI doc's old note
+that "Swift writes `text.length()`" is gone.
+
+Verified by compiling and running a program that reads every converted property
+through the importer (`length`, `utf8String`, `count`, `firstObject`/
+`lastObject`, `allKeys`/`allValues`, `anyObject`/`allObjects`, `domain`/`code`/
+`userInfo`/`localizedDescription`, `data.length`/`bytes`,
+`timeIntervalSinceReferenceDate`, `length` on `NSIndexPath`, `count`/`firstIndex`/
+`lastIndex` on `NSIndexSet`, `objCType`, `userInfo` on `NSTimer`), plus the full
+gate suite (language/runtime with bridging, both probes, S1, S4, S4b/S4c, S5,
+library evolution).
+
 ---
 
 ## 3. Change inventory
@@ -1112,6 +1158,7 @@ is `0006-libagora-objc-loadClass-np.patch` plus the new
 | `lib/IRGen/GenDecl.cpp` | at layout 2 an extension's category takes that path instead of Apple's `category_t *` list |
 | `libagora-base/NSString.m` | `+newTaggedNSStringWithASCIIBytes_:length_:` answers nil (the Darwin SPI the stdlib probes; nil = use the storage fallback) |
 | `libagora-objc/dtable.c` | `rebaseDtableRecursive()` reinstalls each of the class's own methods under its *untyped* selector index too (TDD mode), so `class_setSuperclass` does not lose an override to the new parent |
+| `libagora-base/*.h` (19 files) | the read-only getters become `@property` declarations (§2.17; patch 0009), so Swift reads `text.length`, not `text.length()` |
 
 | File (library evolution) | Change |
 |---|---|
@@ -1191,7 +1238,7 @@ Not in the patch, but part of the port:
 | `swift-toolchain/patches/0004-libdispatch-overlay-non-interop.patch` | keeps the `Dispatch` overlay on the non-interop ABI the toolchain built it with |
 | `swift-toolchain/patches/0005-libagora-base-allocWithZone.patch` | the `NSObject` compatibility door (applied to the `libagora-base` working tree, like 0001/0002) |
 | `swift-interop-probe/scripts/run-native-probe.sh` | builds and runs both probes against the native toolchain (no SwiftPM); `SWIFTC=` selects the layout-2 compiler |
-| `swift-interop-probe/{AgoraProbeKit,Sources}` | adapted to Agora's headers (`length()` as a method, `.alloc()` instead of `NSObject()`), plus `AgoraProbeIsKindOfClassNamed` for class-cluster checks |
+| `swift-interop-probe/{AgoraProbeKit,Sources}` | adapted to Agora's headers (`.alloc()` instead of `NSObject()`; the accessors read as properties since §2.17), plus `AgoraProbeIsKindOfClassNamed` for class-cluster checks |
 | `swift-toolchain/scripts/build-layout2-frontend.sh` | configures the existing build tree with `SWIFT_OBJC_CLASS_LAYOUT=2`, builds only `swift-frontend`, and writes a `swiftc-layout2` wrapper (S1 test compiler) |
 | `swift-toolchain/scripts/build-layout2-stdlib.sh` | builds the layout-2 frontend **and target stdlib** in the build tree (not installed) and writes `swiftc-layout2-stdlib`; the S4 experiment |
 | `swift-toolchain/scripts/verify-class-abi.sh` | the S1 gate: C-side registration/dispatch/`+load` checks against a Swift class |
@@ -1439,12 +1486,11 @@ Debugging techniques that produced the findings above:
    now work through a compatibility door that forwards to `+alloc`, so a
    subclass's singleton override still wins. Swift classes now use it for real
    (§2.7, §2.9).
-9. **Property-shaped accessors in Agora's headers.** `- (size_t)length` imports
-   as `length()`, while Apple and GNUstep declare a `length` property. Writing
-   Swift against Agora therefore reads differently from writing it against
-   Cocoa. Converting the read-only accessors (`length`, `UTF8String`, ...) to
-   `@property` declarations is source-compatible for Objective-C and would make
-   `text.length` work.
+9. **Property-shaped accessors - done** (§2.17). The read-only getters are
+   `@property` declarations, so Swift reads `text.length`, `array.count`,
+   `error.domain`. One consequence worth knowing: the Swift *names* follow the
+   property (`utf8String`, not `UTF8String()`), so call sites written against
+   the method spelling were updated.
 10. **Keep the gates green.** `verify-swift-port.sh` is the language/runtime
    gate and now runs the *installed* layout-2 toolchain; `verify-class-abi.sh`
    is the C-side S1/S3 gate; `verify-generic-abi.sh` (S4),
@@ -1471,8 +1517,10 @@ swift-toolchain/
 │   │                                               its lock, the SONAME)
 │   ├── 0007-libagora-base-tagged-string-probe.patch 1 file (NSString, the
 │   │                                               stdlib's tagged-string SPI)
-│   └── 0008-libagora-objc-dtable-rebase-untyped.patch 1 file (the dtable
-│                                                   rebuild after class_setSuperclass)
+│   ├── 0008-libagora-objc-dtable-rebase-untyped.patch 1 file (the dtable
+│   │                                               rebuild after class_setSuperclass)
+│   └── 0009-libagora-base-property-shaped-accessors.patch 19 headers (readonly
+│                                                   getters declared as properties)
 ├── foundation-overlay/
 │   └── FoundationOverlay.swift                the Swift Foundation overlay:
 │                                              String/Array/Dictionary/Set,
@@ -1578,6 +1626,8 @@ as its underlying module) that gives `as`/`as?` conversions for `String`,
 `Substring`, `Array`, `Dictionary`, `Set`, the numeric types and `Error` <->
 `NSError`, including `CustomNSError`/`LocalizedError`; what it does not do is
 re-declare Agora's API surface so `NSString *` parameters import as `String`.
+The read-only getters are `@property` declarations too, so Swift reads
+`text.length`, `array.count` and `error.domain` the way it reads Cocoa.
 Getting there needed two fixes worth remembering: Swift-emitted categories are
 GNUstep structs in `__objc_cats` (not Apple's pointer list), and libobjc2's
 dtable rebuild after `class_setSuperclass` has to keep the untyped dispatch

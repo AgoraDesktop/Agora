@@ -197,6 +197,17 @@ OBJC_PUBLIC void objc_loadClassForSwift_np(Class cls)   // wraps objc_load_class
 plus selector interning for the class's method lists if Swift emits names
 instead of SELs (§4.3). `objc_load_class` already does the parts that
 `objc_registerClassPair` misses, which is the whole reason this hook is needed.
+The hook is implemented as `objc_loadClass_np` (wrapping `objc_load_class` and
+`objc_send_initialize`) and proven by `probe4`.
+
+S4 showed the case is narrower than "every generic class": a generic Swift class
+**cannot have `@objc` members**, so unless it inherits an imported Objective-C
+class its instances are never allocated by `objc_allocWithZone` and no
+Objective-C code ever holds them. Those classes are handled without the hook -
+their metadata is Swift metadata (marked by `ABIVersion`), not a class object
+(handoff §2.8). The hook is needed for a generic class *with* an imported ObjC
+ancestor (`class Box<T>: NSObject`), which is S4b, and there the metaclass must
+live in the pattern's extra data because libobjc2 writes dispatch state into it.
 
 ## 4. The target ABI
 
@@ -341,8 +352,9 @@ one, and is why S1 needs no build-system work.
 | S1 | Emit, for a trivial `@objc` class: GNUstep structs, name, method list, **selector table**, `.objc_init`, constructor | **passed** with a test compiler built at layout 2 (`swift-toolchain/scripts/build-layout2-frontend.sh`): `objc_getClass` from a C constructor before `main`, `respondsToSelector`, `+load` via an ObjC category, dispatch — see the note below |
 | S2 | Instance-method and class-method dispatch from C and from ObjC onto a Swift class | **passed for the fixed/non-generic case**: `objc_msg_lookup` reaches `-greet` and `+classAnswer`; `objc-to-swift-probe` passes in full with the layout-2 compiler |
 | S3 | Instance layout: `instance_size`, ivar list with offset indirection, Swift field offsets still correct | **half passed**: the `objc_ivar_list` is emitted and keeps `instance_size` from being clobbered (see note); the C-write/Swift-read check is still to do |
-| S4 | Generic classes: runtime instantiation path via the §3.2 hook | **next**: the generic path still emits Apple-shaped patterns and fails at link time (`undefined reference to ._OBJC_METACLASS__TtCs12_SwiftObject`) |
-| S5 | Refcounting/ARC interop, `+alloc`, `UsesSwiftRefcounting`, `+load`/`+initialize` | **partly**: `+alloc`/`objc_allocWithZone` and `+load` work; refcounting still goes through libobjc2's free path (`deinit` does not run) until the runtime is built at layout 2 |
+| S4 | Generic classes: metadata patterns that the layout-2 runtime can complete | **passed for generic classes without an imported ObjC ancestor** (which is all the stdlib has): the pattern carries no Apple extra data, the runtime initializes the GNUstep header with `ABIVersion = 3`, and a full layout-2 stdlib rebuild is green — see the note below. `class Box<T>: NSObject` needs the §3.2 hook and is split out as **S4b** |
+| S4b | Generic classes with an imported Objective-C ancestor: GNUstep metaclass in the pattern, unique ObjC name per instantiation, `objc_loadClass_np()` registration | **next**: `Box(5)` still traps in `objc_allocWithZone` (also in the installed layout-0 toolchain) |
+| S5 | Refcounting/ARC interop, `+alloc`, `UsesSwiftRefcounting`, `+load`/`+initialize` | **partly**: `+alloc`/`objc_allocWithZone`, `+load` and pure-Swift refcounting work — with a layout-2 runtime a pure Swift class (generic or not) runs `deinit`. A class with ObjC ancestry still releases through libobjc2 (`NSObject -release` -> `objc_release` -> `gc->free_object`), so its `deinit` is skipped |
 | S6 | Remove the Apple-layout remnants and the compatibility shims | full `swiftc` + Agora program |
 
 Every stage is independently testable, and S0 needs no compiler rebuild.
@@ -364,14 +376,45 @@ are easy to miss:
   after which every stored field is written past the allocation (a heap
   corruption that shows up in a later `malloc`). The emitted ivar list fixes it.
 
-The remaining piece before the *default* can flip is S4: the stdlib is full of
-generic classes, and `GenericClassMetadataBuilder` still emits the Apple pattern.
+**S4 result (2026-10-17).** A generic class's metadata is built at runtime, so
+S4 needed both sides of the ABI: IRGen stops adding Apple's `class_ro_t`/
+metaclass extra data to the generic pattern at layout 2 (that extra data, and
+the `._OBJC_METACLASS__TtCs12_SwiftObject` reference it carried, was the link
+failure), and the runtime's `initializeClassMetadataFromPattern` /
+`_swift_relocateClassMetadata` now initialize the GNUstep header for
+runtime-built metadata — empty ObjC fields and
+`ABIVersion = SWIFT_GNUSTEP_CLASS_ABI_VERSION`, which is this layout's
+`isTypeMetadata()` marker and what selects Swift refcounting.
+
+Two things are worth keeping:
+
+- **The stdlib rebuild is the test, not a formality.** With a layout-2 frontend
+  and the layout-0 stdlib, `Box<Int>` appears to work: generated code reads
+  `InstanceSize` at the layout-2 offset while the layout-0 runtime writes it at
+  the compact offset, so the field stays 0 and the allocation is too small. The
+  failure is a later `malloc` assertion, and only for generic fields wider than a
+  word (`Box<String>`, `Box<(Int, Int)>`). The build-tree layout-2 stdlib makes
+  it all agree.
+- **A generic class still cannot be an Objective-C class object in this design.**
+  `isa`/`name`/`methods`/`ivars` stay empty and the class is never registered;
+  `ABIVersion` is what tells the runtime it is Swift metadata. Prespecialized
+  generic metadata (`-prespecialize-generic-metadata`, used for the stdlib) is
+  emitted the same way, with a null `isa` instead of a static metaclass. That is
+  sufficient for the stdlib and for generic classes without an imported ObjC
+  ancestor; the ObjC-ancestor case is S4b.
+
+Gate: `swift-toolchain/scripts/verify-generic-abi.sh` (layout-2 compiler **and**
+stdlib, built in the build tree by `build-layout2-stdlib.sh`). The S1 gate, the
+language/runtime gate and both probes are also green against that same layout-2
+stdlib.
 
 ### 6.0 Where the IRGen work attaches
 
-*Status: the fixed/non-generic path is implemented (S1, see §6 and the handoff
-§2.7). The bullets below remain the map; the outstanding entries are the
-resilient/generic pattern and the runtime pattern initializer (S4).*
+*Status: the fixed/non-generic path (S1, see §6 and the handoff §2.7) and the
+generic-class path without ObjC ancestry (S4, handoff §2.8) are implemented. The
+bullets below remain the map; the outstanding entries are the resilient-class
+pattern (library evolution, not used by the stdlib) and the dynamic-class
+registration of S4b.*
 
 - `lib/IRGen/MetadataLayout.h:168` `ClassMetadataLayout` computes `MetadataSize`,
   `MetadataAddressPoint`, `VTableOffset`, `FieldOffsetVector` and
@@ -487,7 +530,10 @@ layout plus the `objc_init` registration, and flipping the default in
    existing lazy-initialization must not fight the runtime.
 6. **Resilient/generic class patterns** (`GenericClassMetadataPattern`) carry
    `MetaclassObjectOffset`/`ClassRODataOffset` today; those fields are Apple-ABI
-   specific and must be replaced by the new layout's offsets.
+   specific and must be replaced by the new layout's offsets. S4 sidesteps this
+   for generic classes by emitting *no* extra data at layout 2 (nothing in the
+   stdlib needs it); a resilient class with imported ObjC ancestry would still
+   need the S4b machinery, and library evolution is not used by the stdlib.
 7. **Swift's `-class_method` dispatch is unaffected** (it uses its own vtable
    offsets, not `dtable`), which is what makes this design viable at all — worth
    keeping as an invariant in review.
@@ -525,4 +571,7 @@ It prints `S1 gate: ok (registered, name/methods visible, +load delivered,
 dispatch = 42/7)`. `swift-toolchain/scripts/build-layout2-frontend.sh` on its
 own leaves `bin/swiftc-layout2` in the build tree so individual programs can be
 compiled against the destination ABI; a *full* `AGORA_SWIFT_CLASS_LAYOUT=2`
-`build-swift-toolchain.sh` is the S4→S6 experiment.
+`build-swift-toolchain.sh` is the S4→S6 experiment. The S4 gate on its own is
+`swift-toolchain/scripts/verify-generic-abi.sh`, which builds the layout-2
+frontend and stdlib in the build tree (via `build-layout2-stdlib.sh`) without
+touching the installed toolchain.

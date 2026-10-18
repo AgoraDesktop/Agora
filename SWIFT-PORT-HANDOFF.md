@@ -81,7 +81,7 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
 |---|---|
 | parser / Sema / SIL | empty file, multi-file-free single-file programs, `-O` pipelines |
 | classes | allocation, deinit, inheritance, `super`, vtables, field offsets |
-| generics | generic classes (`_ContiguousArrayStorage`), `Array`, `Set`, `Dictionary`, prespecialised metadata (installed layout 0; a Swift-defined generic class under layout 2 is the S4 blocker) |
+| generics | generic classes (`_ContiguousArrayStorage`), `Array`, `Set`, `Dictionary`, prespecialised metadata (installed layout 0 and, for the S4 gate, under a layout-2 compiler *and* stdlib) |
 | existentials | class existentials (`[any P]`), `AnyObject` boxes holding Swift classes |
 | errors | `throw` / `catch` / `try?`, native error boxes (`ErrorObjectNative.cpp`) |
 | strings | interpolation, Unicode (`"héllo 🌍"`), `String(repeating:)` |
@@ -362,8 +362,8 @@ The emission work for stage S1 of
 verified. It is deliberately **not** the installed default yet:
 `SWIFT_OBJC_CLASS_LAYOUT` still resolves to 0 (`Runtime/Config.h`), so the
 working toolchain and stdlib are untouched, and a second compiler is built with
-`SWIFT_OBJC_CLASS_LAYOUT=2` for the gate. Flipping the default needs S4
-(generic-class patterns) first; the stdlib is full of generic classes.
+`SWIFT_OBJC_CLASS_LAYOUT=2` for the gate. (S4, the generic-class patterns that
+used to stand between this compiler and a layout-2 toolchain, is done - §2.8.)
 
 For a class with Objective-C ancestry, layout 2 now emits:
 
@@ -841,6 +841,9 @@ and `objc-to-swift-probe`
 compiled and linked but trapped in `objc_allocWithZone`, because a Swift
 subclass of `NSObject` was not an Objective-C class object. At that point
 interop was one-way — Swift messaged Agora, Agora did not see Swift classes —
-which is the S1 → S6 work in `SWIFT-GNUSTEP-CLASS-ABI.md`. This round took S1:
-the layout-2 test compiler makes fixed Swift classes class objects, and S4
-(generic patterns) is what stands between it and the default.
+which is the S1 → S6 work in `SWIFT-GNUSTEP-CLASS-ABI.md`. A previous round took
+S1: the layout-2 test compiler makes fixed Swift classes class objects. This
+round took S4: with a layout-2 stdlib, generic classes work as well, so the
+destination toolchain is buildable and gated; S4b (generic classes with an ObjC
+ancestor) and S5 (refcounting for classes with ObjC ancestry) are what remain
+before the default flips.

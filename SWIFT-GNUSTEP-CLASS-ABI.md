@@ -359,7 +359,7 @@ one, and is why S1 needs no build-system work.
 | S4 | Generic classes: metadata patterns that the layout-2 runtime can complete | **passed for generic classes without an imported ObjC ancestor** (which is all the stdlib has): the pattern carries no Apple extra data, the runtime initializes the GNUstep header with `ABIVersion = 3`, and a full layout-2 stdlib rebuild is green — see the note below. `class Box<T>: NSObject` needs the §3.2 hook and is split out as **S4b** |
 | S4b | Generic classes with an imported Objective-C ancestor: GNUstep metaclass in the pattern, unique ObjC name per instantiation, `objc_loadClass_np()` registration, method/ivar lists | **passed** for runtime-instantiated classes: `Box(Int)`, `Box(String)`, `Box<(Int, Int)>`, `Sub<Int>: Box<Int>`, nested `Box<Box<Int>>` are registered class objects, `-init` reaches the Swift initializer, a 16-thread stress passes, and (since S5) `deinit` runs — see the note below |
 | S4c | Resilient classes (library evolution) with an imported ObjC ancestor: static metaclass, class-side fields in the pattern, registration of the relocated metadata, field-offset globals | **passed**: `Sub: Base` and `GrandSub: Sub` relocate, register, and keep their field values; a pure Swift resilient class stays a non-class-object. The *prespecialized* generic-with-ObjC-ancestor case remains unreachable and unimplemented (see the S4c note) |
-| S5 | Refcounting/ARC interop, `+alloc`, `UsesSwiftRefcounting`, `+load`/`+initialize`, **typed selector records** | **passed**: selector records are emitted per (name, encoding) and carry the same encoding as the method entry, so Clang-compiled typed sends reach Swift methods — including a Swift override of an inherited typed selector, which is what libobjc2's release path needs. `deinit` runs for fixed, generic and resilient classes with ObjC ancestry; retain/release from Objective-C balance and the destructor runs exactly once; 50k alloc/init/release cycles neither leak nor climb in RSS. `+alloc`/`objc_allocWithZone` and `+load` work — see §7.1 |
+| S5 | Refcounting/ARC interop, `+alloc`, `UsesSwiftRefcounting`, `+load`/`+initialize`, **typed selector records** | **passed**: selector records are emitted per (name, encoding) and carry the same encoding as the method entry, so Clang-compiled typed sends reach Swift methods — including a Swift override of an inherited typed selector, which is what libobjc2's release path needs. `deinit` runs for fixed, generic and resilient classes with ObjC ancestry; retain/release from Objective-C balance and the destructor runs exactly once; 50k alloc/init/release cycles neither leak nor climb in RSS. `+alloc`/`objc_allocWithZone` and `+load` work — see §7.1. One runtime fix surfaced later (handoff §2.16): after `class_setSuperclass` (how the Swift runtime reparents its `SwiftNativeNS*`/`__SwiftNativeNSError` classes to Foundation's), libobjc2 rebuilt the dtable without the class's own methods in their *untyped* slots, so an untyped Swift send reached the new superclass's implementation |
 | S6 | Remove the Apple-layout remnants and the compatibility shims | **passed**: the bootstrap interop shim (`swift-toolchain/compat/`) and the container probe harness are deleted, the duplicated vendor build flag is gone, and `verify-swift-port.sh` asserts that the interop entry points come from `libswiftCore`. The layout `#if` branches are deliberately kept (Darwin layout 1, layout 0 rollback) — handoff §2.13 |
 
 Every stage is independently testable, and S0 needs no compiler rebuild.
@@ -380,6 +380,14 @@ are easy to miss:
   `objc_compute_ivar_offsets()` replaces `instance_size` with the superclass's,
   after which every stored field is written past the allocation (a heap
   corruption that shows up in a later `malloc`). The emitted ivar list fixes it.
+- **categories had to change shape too (found during Foundation bridging).** A
+  category Swift emits for the `@objc` members of an extension is a GNUstep
+  `struct objc_category` sitting directly in `__objc_cats` (libobjc2 walks the
+  section as structs and finds the class by *name*), not Apple's
+  `category_t *` in a pointer list - and it must be in `llvm.used`, because the
+  loader reaches it through the section bounds. Without the fix the stdlib's own
+  `__StringStorage` bridges were invisible (`-[NSString length]` raised on the
+  base class). See handoff §2.16.
 
 **S4 result (2026-10-17).** A generic class's metadata is built at runtime, so
 S4 needed both sides of the ABI: IRGen stops adding Apple's `class_ro_t`/

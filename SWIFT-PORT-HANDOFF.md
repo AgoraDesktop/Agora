@@ -6,6 +6,20 @@ protocols, existentials, error handling and Unicode strings; and Swift can
 import Agora's `Foundation`, allocate its `NSObject` and message it. Verified by
 [`swift-toolchain/scripts/verify-swift-port.sh`](swift-toolchain/scripts/verify-swift-port.sh).
 
+**Foundation bridging works: the toolchain now ships a Swift Foundation
+overlay.** `String`/`Substring` ↔ `NSString`, `Array` ↔ `NSArray`, `Dictionary` ↔
+`NSDictionary`, `Set` ↔ `NSSet`, `Int`/`Double`/`Bool` ↔ `NSNumber`, and
+`Error` ↔ `NSError` (including `CustomNSError` and `LocalizedError`) convert
+with `as`/`as?`, and the runtime's error box is a full NSError whose
+domain/code/userInfo come from the Swift error. The overlay is built against
+Agora's Clang `Foundation` with `-import-underlying-module` - the way Darwin's
+Foundation overlay is built - and installed next to the target stdlib, so
+`import Foundation` picks it up with no extra flags. Two bugs had to be fixed on
+the way: Swift-emitted categories (the `@objc` members of *extensions*, which is
+how the stdlib's own string bridges are declared) were emitted in Apple's shape
+into a section libobjc2 never reads, and libobjc2's dtable rebuild after
+`class_setSuperclass` lost a subclass's untyped dispatch slot. §2.16.
+
 **The installed toolchain is self-contained: it no longer needs
 `~/.agora-swift/bootstrap` at run time.** The compiler is a host tool, so it
 must run on a non-interop, compact-layout stdlib that the target install does
@@ -178,11 +192,14 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
 **What the installed (layout 2) toolchain still does not do.** The class ABI is
 closed (S1-S6); these are independent of it:
 
-- No Foundation **bridging** of Swift values: `String` ↔ `NSString`, `Array` ↔
-  `NSArray` and `Error` ↔ `NSError` need a Foundation overlay, which this
-  toolchain does not build. `AnyObject` boxes work (`__SwiftValue` is reachable
-  and class-identifiable again at layout 2 - `42 as AnyObject` reports
-  `__SwiftValue`), but they are Swift boxes, not bridged Foundation objects.
+- Foundation **bridging** works through the overlay (§2.16), with the boundary
+  Swift itself draws: `as`/`as?` conversions between the bridged types, and
+  bridging at `id` parameters, are supported; an imported `NSString *` /
+  `NSArray *` parameter still *imports* as the Objective-C class (so call it
+  with `as NSString`, the same spelling the upstream corelibs toolchain needs
+  for a variable), because the overlay does not re-declare Agora's Foundation
+  API surface in Swift. That re-declaration (the Cocoa value-type surface) is
+  the remaining piece.
 - **`__SwiftValue` and the `SwiftNativeNS*` wrapper classes** were expected to
   fail at layout 0 (no Swift heap header); at layout 2 they carry one. Only the
   class-identity side is exercised (`__SwiftValue` above); their Foundation
@@ -995,17 +1012,106 @@ ordinary OS ones: glibc/libstdc++/libm/libz/libuuid and the system
 `libobjc.so.4` that the compiler binary has always linked (it does not call into
 it).
 
+
+### 2.16 Foundation bridging: the Swift Foundation overlay
+
+The standard library leaves the value bridges to a **Foundation overlay**; this
+toolchain only had Agora's *Clang* `Foundation`, which is why `"x" as NSString`
+did not compile. The overlay is now a real Swift module of the same name, built
+with `-module-name Foundation -import-underlying-module` against Agora's module
+map - the layout Darwin uses for its own overlay - and installed next to the
+target stdlib:
+
+```
+usr/lib/swift/linux/Foundation.swiftmodule/x86_64-unknown-linux-gnu.swiftmodule
+usr/lib/swift/linux/libFoundation.so
+```
+
+`import Foundation` finds it through the resource dir (`-module-link-name
+Foundation` autolinks the library); users need no extra flags. What it
+declares (`swift-toolchain/foundation-overlay/FoundationOverlay.swift`):
+
+| Bridge | Direction |
+|---|---|
+| `String`, `Substring` ↔ `NSString` | UTF-16 through `-initWithCharacters:length:` / `-getCharacters:range:` |
+| `Array` ↔ `NSArray`, `Dictionary` ↔ `NSDictionary`, `Set` ↔ `NSSet` | copies into/out of Agora's mutable collections; elements bridge with `_bridgeAnythingToObjectiveC` |
+| `Int`, `Double`, `Bool` ↔ `NSNumber` | the `+numberWith…` factories and the `…Value` accessors |
+| `Error` ↔ `NSError` | `_convertErrorToNSError`/`_convertNSErrorToError` (the names SILGen looks up) plus `NSError: Error` |
+| `CustomNSError`, `LocalizedError` | the protocols, their defaults, and `_getErrorDefaultUserInfo` (the symbol the runtime `dlsym`s to fill an NSError's userInfo) |
+
+Bridging is deliberately by **copying**, not through the stdlib's
+`SwiftNativeNS*` machinery: those classes are reparented to Darwin's
+CoreFoundation classes and the fast paths send CoreFoundation SPI to them
+(`+newTaggedNSStringWithASCIIBytes_:length_:`, which Agora's `NSString` does not
+implement and which raised on the base class).
+
+**Two bugs this exposed.**
+
+1. **Swift-emitted categories.** `@objc` members declared in an *extension* are
+   emitted as an Objective-C category (that is where the stdlib's own
+   `__StringStorage` bridges live). At layout 2 the category was emitted in
+   Apple's shape (`category_t *` in a pointer list, in a section libobjc2 never
+   reads). It is now a GNUstep `struct objc_category` - `{name, class_name,
+   instance_methods, class_methods, protocols, properties, class_properties}` -
+   placed directly in `__objc_cats` (Clang's GNUstep section name) and added to
+   `llvm.used`, because the loader reaches it through the section bounds and
+   nothing in the module references it. Without this, `__StringStorage` had only
+   `-init`: every `@objc(length)` etc. was missing and the error path aborted in
+   `-[NSString length]`.
+2. **The dtable rebuild lost untyped dispatch.** The Swift runtime reparents
+   `__SwiftNativeNSError` to Agora's `NSError` with `class_setSuperclass`, which
+   makes libobjc2 rebuild the class's dispatch table. `rebaseDtableRecursive`
+   collected the class's own methods by their *typed* selector indices and then
+   filled the *untyped* slot from the new parent - and Swift sends use untyped
+   selectors. `-domain` therefore reached `NSError -domain` (which reads
+   `_domain` at offset 8, i.e. nil) instead of `__SwiftNativeNSError -domain`.
+   Every method is now installed under its untyped index as well, matching
+   `installMethodInDtable`.
+3. **A one-line Agora shim.** The stdlib's own `String._bridgeToObjectiveCImpl()`
+   probes `+[NSString newTaggedNSStringWithASCIIBytes_:length_:]` for the
+   Darwin tagged-pointer fast path and it is *sent* to the class, so an
+   unimplemented selector raises. Agora's `NSString` now answers it with nil
+   ("no tagged representation"), which makes the stdlib fall back to
+   `__StringStorage` - a Swift-native NSString reparented under Agora's
+   `NSString`, which the runtime's error-domain bridging uses.
+
+Verified by
+[`swift-toolchain/scripts/build-foundation-overlay.sh`](swift-toolchain/scripts/build-foundation-overlay.sh)'s
+self-check (run at install time with `env -i`) and by the language gate's
+bridging section, which converts in both directions, round-trips `[String]`,
+`[String: Int]` and `Set<Int>`, bridges `Int` through `NSNumber`, turns a
+`throw` into an `NSError` with the default domain/code, and checks that a
+`CustomNSError`'s domain/code/userInfo reach the `NSError`.
+
+**Boundary.** What is *not* here is the Cocoa value-type API surface: on Darwin
+`NSString *` parameters import as `String`, `NSArray *` as `[Any]`, and
+`NSError(domain:code:userInfo:)` takes Swift types, because the Darwin overlay
+re-declares those APIs in Swift. This overlay does not, so an imported
+`NSString *` parameter is still `NSString` (write `"x" as NSString`, which is
+also what the upstream corelibs toolchain requires for a *variable*), and the
+implicit `let s: NSString = someStringVariable` coercion is rejected - by
+upstream Swift too. Literal-to-`NSString` coercion works upstream only because
+of those re-declarations.
+
 ---
 
 ## 3. Change inventory
 
 `swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 45 files,
-~1870 insertions. The layout/registration table is from two rounds ago, the S1
-emission from three, S4/S4b from before that, S5 and the flip from the previous
-round, and this round adds library evolution's `Update` strategy. S6 changed
-only the Agora-side scripts and docs. The libobjc2 side is
-`swift-toolchain/patches/0006-libagora-objc-loadClass-np.patch` (unchanged: no
-round since S4c has needed a runtime change).
+~1950 insertions. The layout/registration table is from two rounds ago, the S1
+emission from three, S4/S4b from before that, S5 and the flip from earlier, and
+this round adds library evolution's `Update` strategy and GNUstep-shaped
+categories. S6 changed only the Agora-side scripts and docs. The libobjc2 side
+is `0006-libagora-objc-loadClass-np.patch` plus the new
+`0008-libagora-objc-dtable-rebase-untyped.patch`; the Agora-side shim is
+`0007-libagora-base-tagged-string-probe.patch`.
+
+| File (bridging) | Change |
+|---|---|
+| `lib/IRGen/GenClass.{h,cpp}` | `emitGNUstepCategory()`: a `struct objc_category` with GNUstep method lists; `emitGNUstepCategoryData()` puts it in `__objc_cats` and marks it used |
+| `lib/IRGen/GenDecl.cpp` | at layout 2 an extension's category takes that path instead of Apple's `category_t *` list |
+| `libagora-base/NSString.m` | `+newTaggedNSStringWithASCIIBytes_:length_:` answers nil (the Darwin SPI the stdlib probes; nil = use the storage fallback) |
+| `libagora-objc/dtable.c` | `rebaseDtableRecursive()` reinstalls each of the class's own methods under its *untyped* selector index too (TDD mode), so `class_setSuperclass` does not lose an override to the new parent |
 
 | File (library evolution) | Change |
 |---|---|
@@ -1114,7 +1220,8 @@ addition, and a plain `git diff` omits it.
 # headers or IRGen change)
 swift-toolchain/scripts/build-swift-toolchain.sh
 
-# the language/runtime gate (installed toolchain, now layout 2)
+# the language/runtime gate (installed toolchain, now layout 2; also checks
+# the Foundation overlay's value bridges)
 swift-toolchain/scripts/verify-swift-port.sh
 
 # the S1 gate (layout-2 test compiler; builds the frontend if needed)
@@ -1196,6 +1303,12 @@ done
 - **To change the layout**: `AGORA_SWIFT_CLASS_LAYOUT=0` (or `2`, the default)
   `swift-toolchain/scripts/build-swift-toolchain.sh`. The build script always
   passes `-DSWIFT_OBJC_CLASS_LAYOUT:` explicitly, so the cache cannot go stale.
+- **Foundation overlay**: `usr/lib/swift/linux/Foundation.swiftmodule/` and
+  `libFoundation.so`, built by
+  `swift-toolchain/scripts/build-foundation-overlay.sh` (called by
+  `build-swift-toolchain.sh` after the install). It belongs to the *installed*
+  toolchain; the build-tree compiler does not have it, which is why the
+  language gate skips the bridging check when `VERIFY_SWIFTC` points there.
 - **Self-contained install**: `usr/lib/swift/host/runtime/` (the six host Swift
   runtime libraries), `usr/bin/clang` (a staged copy of the bootstrap clang) and
   `usr/lib/clang/21`; `usr/bin/swiftc` resolves the runtime relative to itself.
@@ -1316,17 +1429,23 @@ Debugging techniques that produced the findings above:
    bootstrap tree is needed to *build* the toolchain, not to use it. What a
    target program still needs is Agora's own prefix (`-L$AGORA_PREFIX/lib`);
    that is the product, not a build cheat.
-7. **`+allocWithZone:` - done** (§2.6). `NSObject()` and every imported `T()`
+7. **Foundation bridging - done, with a named boundary** (§2.16). The overlay
+   ships the value bridges and `Error` ↔ `NSError`. What remains of "Cocoa
+   parity" is the value-type *API surface*: re-declaring Agora's Foundation
+   methods in Swift so `NSString *` parameters import as `String` and
+   `NSError(domain:code:userInfo:)` takes Swift types, as the Darwin overlay
+   does.
+8. **`+allocWithZone:` - done** (§2.6). `NSObject()` and every imported `T()`
    now work through a compatibility door that forwards to `+alloc`, so a
    subclass's singleton override still wins. Swift classes now use it for real
    (§2.7, §2.9).
-8. **Property-shaped accessors in Agora's headers.** `- (size_t)length` imports
+9. **Property-shaped accessors in Agora's headers.** `- (size_t)length` imports
    as `length()`, while Apple and GNUstep declare a `length` property. Writing
    Swift against Agora therefore reads differently from writing it against
    Cocoa. Converting the read-only accessors (`length`, `UTF8String`, ...) to
    `@property` declarations is source-compatible for Objective-C and would make
    `text.length` work.
-9. **Keep the gates green.** `verify-swift-port.sh` is the language/runtime
+10. **Keep the gates green.** `verify-swift-port.sh` is the language/runtime
    gate and now runs the *installed* layout-2 toolchain; `verify-class-abi.sh`
    is the C-side S1/S3 gate; `verify-generic-abi.sh` (S4),
    `verify-generic-objc-abi.sh` (S4b/S4c) and `verify-refcount-abi.sh` (S5)
@@ -1345,13 +1464,25 @@ swift-toolchain/
 ├── patches/
 │   ├── 0001-libagora-base-objcxx-clean.patch   3 hunks / 2 files
 │   ├── 0002-libagora-core-objcxx-clean.patch   1 hunk  / 1 file
-│   ├── 0003-swift-enable-objc-interop.patch   45 files, ~1790 insertions
+│   ├── 0003-swift-enable-objc-interop.patch   45 files, ~1950 insertions
 │   ├── 0004-libdispatch-overlay-non-interop.patch  1 file (the Dispatch overlay)
 │   ├── 0005-libagora-base-allocWithZone.patch      2 files (NSObject)
-│   └── 0006-libagora-objc-loadClass-np.patch       3 files (the runtime hook,
-│                                                   its lock, the SONAME)
+│   ├── 0006-libagora-objc-loadClass-np.patch       3 files (the runtime hook,
+│   │                                               its lock, the SONAME)
+│   ├── 0007-libagora-base-tagged-string-probe.patch 1 file (NSString, the
+│   │                                               stdlib's tagged-string SPI)
+│   └── 0008-libagora-objc-dtable-rebase-untyped.patch 1 file (the dtable
+│                                                   rebuild after class_setSuperclass)
+├── foundation-overlay/
+│   └── FoundationOverlay.swift                the Swift Foundation overlay:
+│                                              String/Array/Dictionary/Set,
+│                                              NSNumber, Error <-> NSError,
+│                                              CustomNSError/LocalizedError
 └── scripts/
-    ├── build-swift-toolchain.sh               build + install (incl. wrapper)
+    ├── build-swift-toolchain.sh               build + install (incl. wrapper,
+    │                                          host runtime, clang, overlay)
+    ├── build-foundation-overlay.sh            build + install the overlay and
+    │                                          self-check it
     ├── build-layout2-frontend.sh              rebuild the in-tree frontend
     │                                          (+ swiftc-layout2 wrapper)
     ├── build-layout2-stdlib.sh                rebuild frontend AND stdlib in
@@ -1391,6 +1522,8 @@ lib/swift/host/compiler/       the compiler's Swift libraries (swift-syntax, ...
 lib/clang/21/                  clang's resource directory
 lib/swift/linux/               the target stdlib (interop, layout 2) - what
                                produced programs link through RUNPATH
+lib/swift/linux/Foundation.swiftmodule/   the Foundation overlay (value
+lib/swift/linux/libFoundation.so          bridges, Error <-> NSError)
 ```
 
 Related: `swift-interop-probe/` (the two probes),
@@ -1438,12 +1571,20 @@ closed as well: a class with a resiliently sized member works at layout 2 - the
 `Update` entry points recompute the layout in place for pure Swift classes, and
 a class libobjc2 allocates from is registered only after its layout is final -
 verified by running one client binary against two versions of its library. What
-remains is outside the class ABI: Foundation bridging (and the
-property-shaped accessors). The installed toolchain no longer borrows the
-bootstrap's runtime either: it ships the host Swift runtime and clang it needs
-and resolves them relative to itself, so the bootstrap is build-time only. The
-rest of this summary is the previous rounds' record of how the compiler got
-here.
+remains is outside the class ABI: Foundation bridging and the
+property-shaped accessors. Bridging has arrived with a named boundary: the
+toolchain ships a Swift Foundation overlay (built with Agora's Clang Foundation
+as its underlying module) that gives `as`/`as?` conversions for `String`,
+`Substring`, `Array`, `Dictionary`, `Set`, the numeric types and `Error` <->
+`NSError`, including `CustomNSError`/`LocalizedError`; what it does not do is
+re-declare Agora's API surface so `NSString *` parameters import as `String`.
+Getting there needed two fixes worth remembering: Swift-emitted categories are
+GNUstep structs in `__objc_cats` (not Apple's pointer list), and libobjc2's
+dtable rebuild after `class_setSuperclass` has to keep the untyped dispatch
+slot. The installed toolchain no longer borrows the bootstrap's runtime either:
+it ships the host Swift runtime and clang it needs and resolves them relative to
+itself, so the bootstrap is build-time only. The rest of this summary is the
+previous rounds' record of how the compiler got here.
 
 The compiler compiles again. The trap was the class-metadata layout: the
 compiler's own Swift libraries are built by the bootstrap toolchain without

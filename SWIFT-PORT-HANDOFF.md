@@ -6,6 +6,15 @@ protocols, existentials, error handling and Unicode strings; and Swift can
 import Agora's `Foundation`, allocate its `NSObject` and message it. Verified by
 [`swift-toolchain/scripts/verify-swift-port.sh`](swift-toolchain/scripts/verify-swift-port.sh).
 
+**The installed toolchain is self-contained: it no longer needs
+`~/.agora-swift/bootstrap` at run time.** The compiler is a host tool, so it
+must run on a non-interop, compact-layout stdlib that the target install does
+not have; the wrapper used to borrow the bootstrap's. The toolchain now ships
+that runtime under `lib/swift/host/runtime/` (plus the host clang it links
+with), and the wrapper resolves both relative to itself. Verified by moving the
+bootstrap tree away and running the language gate, both probes, and the S1, S5
+and library-evolution gates against the installed toolchain (§2.15).
+
 **Library evolution's `Update` strategy works at layout 2; the class-ABI
 staging plan is complete.** A class whose stored property is a non-frozen
 struct from another module now links and runs: `swift_updateClassMetadata2`
@@ -928,6 +937,64 @@ whose layout is only final at runtime is not in `__objc_classes`, so
 that must find such a class at load time should use a fixed-layout class (or
 take a Swift reference first).
 
+
+### 2.15 The host runtime is now shipped with the toolchain
+
+The compiler is a *host tool*: it was built by the bootstrap toolchain, and its
+own Swift libraries (`lib/swift/host/compiler/*.so`, swift-syntax etc.) are
+ABI-locked to that toolchain's stdlib - non-interop, compact class layout. The
+stdlib installed for Agora is the opposite (interop, layout 2); `_runtime(_ObjC)`
+changes `Array`'s storage type and the class header, so the compiler process
+cannot load the target stdlib. Until this round the installed `swiftc` was a
+wrapper that set `LD_LIBRARY_PATH` to `~/.agora-swift/bootstrap/...`, and the
+`clang` symlink in `usr/bin` pointed into the same tree: the install only worked
+on the machine (and in the directory) that built it.
+
+What the install does now (all in `build-swift-toolchain.sh`, after
+`--install-swift`):
+
+1. **Stage the host runtime.** Copy the six shared libraries the compiler
+   process loads from the bootstrap's `lib/swift/linux` into
+   `usr/lib/swift/host/runtime/`: `libswiftCore`, `libswift_Concurrency`,
+   `libswiftGlibc`, `libswift_Builtin_float`, `libBlocksRuntime`,
+   `libdispatch`. (That is the exact `ldd` closure under the old wrapper; a
+   `README` there records why and where they come from - the bootstrap Swift
+   release, Apache 2.0 with Runtime Library Exception.)
+2. **Stage the host clang.** The legacy driver shells out to `clang` to link and
+   looks for it next to the frontend. The bootstrap's single static
+   `clang-21` binary is copied to `usr/bin/clang` (with `clang++` as a relative
+   symlink) and its `lib/clang/21` resource directory to `usr/lib/clang`.
+3. **Make the wrapper relocatable.** `swiftc` no longer hard-codes a bootstrap
+   path: it computes `$bindir/../lib/swift/host/runtime` from its own resolved
+   location, puts that first on `LD_LIBRARY_PATH`, and execs the frontend.
+   `AGORA_SWIFT_HOST_RUNTIME` still overrides it (the build-tree wrappers use
+   that).
+4. **Self-check the install.** With a clean environment (`env -i`, no bootstrap
+   on any path) it compiles, links and runs a `print` program using only the
+   toolchain plus Agora's prefix. The prefix is still needed because the stdlib
+   autolinks Agora's Foundation - that is the product, not a build cheat.
+
+Verified by moving `~/.agora-swift/bootstrap` aside entirely and running against
+the installed toolchain:
+
+| Check | Result |
+|---|---|
+| `swiftc --version` | works |
+| clean-env `swiftc` compile + link + run (staged clang, no PATH to the bootstrap) | works |
+| `verify-swift-port.sh` (language/runtime + interop + S6 export check) | all green |
+| `run-native-probe.sh` (both probes, ObjC side built with the staged clang) | 17/17 |
+| S1/S3, S5 and library-evolution gates against the installed `swiftc` | green |
+| `ldd` of the compiler | every Swift lib from `usr/lib/swift/host/runtime` |
+
+The build still needs the bootstrap toolchain (it compiles the compiler), but
+the *installed* toolchain does not. The two build-tree wrappers
+(`bin/swiftc-layout2*`) still point at the bootstrap runtime on purpose: they
+exist to test an uninstalled compiler change, in a tree that was just built with
+the bootstrap. Remaining external dependencies of the installed toolchain are
+ordinary OS ones: glibc/libstdc++/libm/libz/libuuid and the system
+`libobjc.so.4` that the compiler binary has always linked (it does not call into
+it).
+
 ---
 
 ## 3. Change inventory
@@ -1129,6 +1196,12 @@ done
 - **To change the layout**: `AGORA_SWIFT_CLASS_LAYOUT=0` (or `2`, the default)
   `swift-toolchain/scripts/build-swift-toolchain.sh`. The build script always
   passes `-DSWIFT_OBJC_CLASS_LAYOUT:` explicitly, so the cache cannot go stale.
+- **Self-contained install**: `usr/lib/swift/host/runtime/` (the six host Swift
+  runtime libraries), `usr/bin/clang` (a staged copy of the bootstrap clang) and
+  `usr/lib/clang/21`; `usr/bin/swiftc` resolves the runtime relative to itself.
+  `grep -rl agora-swift/bootstrap` over the whole installed tree finds nothing,
+  and the build script's final self-check compiles, links and runs a program
+  with `env -i`.
 - **S6 state**: `swift-toolchain/compat/` and
   `swift-interop-probe/scripts/run-probe.sh` are deleted, and the stdlib's
   `SWIFT_EXPERIMENTAL_EXTRA_FLAGS` no longer carries the duplicated
@@ -1237,10 +1310,12 @@ Debugging techniques that produced the findings above:
 5. **S3: read/write the ivars from C - done** (§2.7). The S1 gate looks the
    emitted field up with `class_getInstanceVariable`, reads its offset, and
    proves both directions.
-6. **Self-contained host runtime.** Replace the wrapper's dependence on
-   `~/.agora-swift/bootstrap` with a non-interop stdlib installed under the
-   toolchain (`lib/swift/host/...`), or do the proper host/target split in the
-   CMake install. This is the only remaining build-system "cheat".
+6. **Self-contained host runtime - done** (§2.15). The toolchain installs the
+   host Swift runtime it needs under `lib/swift/host/runtime/` and the host
+   clang it links with, and `swiftc` resolves both relative to itself; the
+   bootstrap tree is needed to *build* the toolchain, not to use it. What a
+   target program still needs is Agora's own prefix (`-L$AGORA_PREFIX/lib`);
+   that is the product, not a build cheat.
 7. **`+allocWithZone:` - done** (§2.6). `NSObject()` and every imported `T()`
    now work through a compatibility door that forwards to `+alloc`, so a
    subclass's singleton override still wins. Swift classes now use it for real
@@ -1303,6 +1378,21 @@ swift-interop-probe/
 └── Sources/, AgoraProbeKit/                   the two probes + ObjC side-channel
 ```
 
+Installed layout (what makes the toolchain self-contained, §2.15), under
+`$OPEN_SWIFT_TOOLCHAIN_DESTDIR/usr`:
+
+```
+bin/swiftc                     wrapper: host runtime + swift-frontend
+bin/clang, bin/clang++         staged host C compiler (links Swift programs)
+bin/swift-frontend             the compiler (do not use directly: it would load
+                               the target stdlib via its own RUNPATH)
+lib/swift/host/runtime/        the compiler's own stdlib (non-interop, layout 0)
+lib/swift/host/compiler/       the compiler's Swift libraries (swift-syntax, ...)
+lib/clang/21/                  clang's resource directory
+lib/swift/linux/               the target stdlib (interop, layout 2) - what
+                               produced programs link through RUNPATH
+```
+
 Related: `swift-interop-probe/` (the two probes),
 `../SWIFT-INTEROP-INVESTIGATION.md`, `../SWIFT-TOOLCHAIN-INTEGRATION.md`,
 `../SWIFT-GNUSTEP-CLASS-ABI.md`.
@@ -1348,9 +1438,12 @@ closed as well: a class with a resiliently sized member works at layout 2 - the
 `Update` entry points recompute the layout in place for pure Swift classes, and
 a class libobjc2 allocates from is registered only after its layout is final -
 verified by running one client binary against two versions of its library. What
-remains is outside the class ABI: the host-runtime packaging and Foundation
-bridging. The rest of this summary is the previous rounds' record of how the
-compiler got here.
+remains is outside the class ABI: Foundation bridging (and the
+property-shaped accessors). The installed toolchain no longer borrows the
+bootstrap's runtime either: it ships the host Swift runtime and clang it needs
+and resolves them relative to itself, so the bootstrap is build-time only. The
+rest of this summary is the previous rounds' record of how the compiler got
+here.
 
 The compiler compiles again. The trap was the class-metadata layout: the
 compiler's own Swift libraries are built by the bootstrap toolchain without

@@ -352,7 +352,7 @@ one, and is why S1 needs no build-system work.
 | S0 | libobjc2 hook + probes | **passed**: `probe3` (static/loader path) and `probe4` (dynamic path via `objc_loadClass_np`) both register and dispatch, instance and class side |
 | S0a | compact target layout (option A of the handoff §4) + host/target runtime split | **passed**: `swiftc` type-checks, compiles and runs at `-Onone` and `-O`; `verify-swift-port.sh` green; every runtime TU compiles under layout 0; interop is one-way |
 | S1a | `SWIFT_OBJC_CLASS_LAYOUT` in `Runtime/Config.h` (0 compact / 1 Apple / 2 GNUstep), independent of `SWIFT_OBJC_INTEROP`, default preserved | **done and inert**: `Metadata.cpp` still compiles unchanged with the macro defined |
-| S1b | `TargetAnyClassMetadataGNUstep` + `Runtime::ObjCClassLayout` + three-way selection, then flip the default | **layout machinery done; migration measured and applied** — every runtime TU compiles under *both* layouts (see §6.1) |
+| S1b | `TargetAnyClassMetadataGNUstep` + `Runtime::ObjCClassLayout` + three-way selection, then flip the default | **done, and flipped (2026-10-17)**: every runtime TU compiles under *both* layouts (§6.1), and the default is now 2 in `Runtime/Config.h` and `native-env.sh` — the installed toolchain is layout 2 (handoff §2.12) |
 | S1 | Emit, for a trivial `@objc` class: GNUstep structs, name, method list, **selector table**, `.objc_init`, constructor | **passed** with a test compiler built at layout 2 (`swift-toolchain/scripts/build-layout2-frontend.sh`): `objc_getClass` from a C constructor before `main`, `respondsToSelector`, `+load` via an ObjC category, dispatch — see the note below |
 | S2 | Instance-method and class-method dispatch from C and from ObjC onto a Swift class | **passed for the fixed/non-generic case**: `objc_msg_lookup` reaches `-greet` and `+classAnswer`; `objc-to-swift-probe` passes in full with the layout-2 compiler |
 | S3 | Instance layout: `instance_size`, ivar list with offset indirection, Swift field offsets still correct | **passed**: the `objc_ivar_list` keeps `instance_size` from being clobbered, `class_getInstanceVariable` finds the Swift field and reports its offset, and the S1 gate proves both directions (C write -> Swift read, Swift write -> C read) |
@@ -487,15 +487,26 @@ fields) calls `swift_updateClassMetadata2`, which is compiled only at layout 1,
 so such a class does not link at layout 0 either. That is orthogonal to class
 objects and is recorded in the handoff's next steps.
 
+**The flip (2026-10-17).** The default moved to layout 2 (`Runtime/Config.h`,
+`native-env.sh`), so all of the above is what the installed toolchain does;
+`objc-to-swift-probe` passes end to end against it. One implementation gap
+surfaced only in the full build: a layout-2 build also compiles code with
+`-disable-objc-interop` (libdispatch's `Dispatch` overlay), and "layout 2" had
+been written as "has a class object", which asks Sema for a metaclass and
+asserts without interop. Such a compilation now emits GNUstep-shaped metadata
+with a null `isa` and a null root superclass - no metaclass, name, method list
+or `__objc_classes` entry - which is the same identity-free state a generic
+class already uses. See the handoff §2.12.
+
 ### 6.0 Where the IRGen work attaches
 
 *Status: the fixed/non-generic path (S1, handoff §2.7), generic classes without
 ObjC ancestry (S4, handoff §2.8), runtime-instantiated generic classes with an
-imported ObjC ancestor (S4b, handoff §2.9) and relocated resilient classes with
-one (S4c, handoff §2.10) are implemented. The bullets below remain the map; the
-outstanding entries are prespecialized generic classes with an ObjC ancestor
-(unreachable today, see the S4c note), the `Update` strategy, and typed selector
-records (S5, §7.1).*
+imported ObjC ancestor (S4b, handoff §2.9), relocated resilient classes with one
+(S4c, handoff §2.10) and typed selector records (S5, §7.1) are implemented, and
+layout 2 is the installed default (handoff §2.12). The bullets below remain the
+map; the outstanding entries are prespecialized generic classes with an ObjC
+ancestor (unreachable today, see the S4c note) and the `Update` strategy.*
 
 - `lib/IRGen/MetadataLayout.h:168` `ClassMetadataLayout` computes `MetadataSize`,
   `MetadataAddressPoint`, `VTableOffset`, `FieldOffsetVector` and

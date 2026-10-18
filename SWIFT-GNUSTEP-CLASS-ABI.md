@@ -351,7 +351,7 @@ one, and is why S1 needs no build-system work.
 | S1b | `TargetAnyClassMetadataGNUstep` + `Runtime::ObjCClassLayout` + three-way selection, then flip the default | **layout machinery done; migration measured and applied** — every runtime TU compiles under *both* layouts (see §6.1) |
 | S1 | Emit, for a trivial `@objc` class: GNUstep structs, name, method list, **selector table**, `.objc_init`, constructor | **passed** with a test compiler built at layout 2 (`swift-toolchain/scripts/build-layout2-frontend.sh`): `objc_getClass` from a C constructor before `main`, `respondsToSelector`, `+load` via an ObjC category, dispatch — see the note below |
 | S2 | Instance-method and class-method dispatch from C and from ObjC onto a Swift class | **passed for the fixed/non-generic case**: `objc_msg_lookup` reaches `-greet` and `+classAnswer`; `objc-to-swift-probe` passes in full with the layout-2 compiler |
-| S3 | Instance layout: `instance_size`, ivar list with offset indirection, Swift field offsets still correct | **half passed**: the `objc_ivar_list` is emitted and keeps `instance_size` from being clobbered (see note); the C-write/Swift-read check is still to do |
+| S3 | Instance layout: `instance_size`, ivar list with offset indirection, Swift field offsets still correct | **passed**: the `objc_ivar_list` keeps `instance_size` from being clobbered, `class_getInstanceVariable` finds the Swift field and reports its offset, and the S1 gate proves both directions (C write -> Swift read, Swift write -> C read) |
 | S4 | Generic classes: metadata patterns that the layout-2 runtime can complete | **passed for generic classes without an imported ObjC ancestor** (which is all the stdlib has): the pattern carries no Apple extra data, the runtime initializes the GNUstep header with `ABIVersion = 3`, and a full layout-2 stdlib rebuild is green — see the note below. `class Box<T>: NSObject` needs the §3.2 hook and is split out as **S4b** |
 | S4b | Generic classes with an imported Objective-C ancestor: GNUstep metaclass in the pattern, unique ObjC name per instantiation, `objc_loadClass_np()` registration | **next**: `Box(5)` still traps in `objc_allocWithZone` (also in the installed layout-0 toolchain) |
 | S5 | Refcounting/ARC interop, `+alloc`, `UsesSwiftRefcounting`, `+load`/`+initialize` | **partly**: `+alloc`/`objc_allocWithZone`, `+load` and pure-Swift refcounting work — with a layout-2 runtime a pure Swift class (generic or not) runs `deinit`. A class with ObjC ancestry still releases through libobjc2 (`NSObject -release` -> `objc_release` -> `gc->free_object`), so its `deinit` is skipped |
@@ -568,7 +568,7 @@ swift-toolchain/scripts/verify-class-abi.sh
 ```
 
 It prints `S1 gate: ok (registered, name/methods visible, +load delivered,
-dispatch = 42/7)`. `swift-toolchain/scripts/build-layout2-frontend.sh` on its
+dispatch = 42/7, ivar offset = 8 and readable both ways)`. `swift-toolchain/scripts/build-layout2-frontend.sh` on its
 own leaves `bin/swiftc-layout2` in the build tree so individual programs can be
 compiled against the destination ABI; a *full* `AGORA_SWIFT_CLASS_LAYOUT=2`
 `build-swift-toolchain.sh` is the S4→S6 experiment. The S4 gate on its own is

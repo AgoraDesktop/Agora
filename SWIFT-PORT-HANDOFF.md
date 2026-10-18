@@ -91,7 +91,7 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
 | **default flags** | `swiftc prog.swift` enables Objective-C interop and selects the GNUstep runtime ABI family without any `-Xfrontend` flags |
 | **super dispatch** | a Swift `super.` send to an imported class emits `objc_msg_lookup_super` + a direct IMP call, not Apple's `objc_msgSendSuper2`; such a program links, and with the layout-2 test compiler `objc-to-swift-probe` verifies the semantics (`super -init` is reached) |
 | **the two probes** | `agora-import-probe`: all 11 checks; `objc-to-swift-probe`: compiles and links, then traps in `objc_allocWithZone` when the Swift subclass is first allocated with the *installed* toolchain — passes every check with the layout-2 compiler (frontend-only and layout-2-stdlib builds alike) |
-| **Swift -> Agora class objects** (layout 2, test compiler) | class emitted as a GNUstep `struct objc_class` + metaclass; `objc_getClass` before `main`; `respondsToSelector`; instance and class dispatch from C; category attachment and `+load`; `Counter()` via `objc_allocWithZone`; ivar list keeps `instance_size` intact |
+| **Swift -> Agora class objects** (layout 2, test compiler) | class emitted as a GNUstep `struct objc_class` + metaclass; `objc_getClass` before `main`; `respondsToSelector`; instance and class dispatch from C; category attachment and `+load`; `Counter()` via `objc_allocWithZone`; ivar list keeps `instance_size` intact and is usable from C (`class_getInstanceVariable`, offsets, read/write both ways) |
 
 **Not available yet in the *installed* (layout 0) toolchain.** At layout 2 (§2.7
 for fixed classes, §2.8 for generic classes) the class-object items below are
@@ -407,11 +407,14 @@ from an Objective-C constructor, `objc_getClass("Counter")` finds the class
 before `main`; `class_getName` is `Counter`; `respondsToSelector` is true for
 `-greet` and `+classAnswer`; an Objective-C category's `+load` is attached and
 delivered; and `class_createInstance` + `objc_msg_lookup` dispatch to the Swift
-IMPs (`42`/`7`). The Swift side works as well: `Counter()`, `super -init`,
-property access, `isKind(of:)`, String and Array operations. With the same
-compiler, `objc-to-swift-probe` passes **every** check (the only remaining item
-is its pre-existing `[gap]`: this toolchain still has no `ObjectiveC` overlay
-for `#selector`).
+IMPs (`42`/`7`). The gate also finishes S3: `class_getInstanceVariable` finds
+`start` in the emitted ivar list and reports its offset, a value C writes at that
+offset is read back through a Swift accessor, and a value Swift writes is read
+back by C. The Swift side works as well: `Counter()`, `super -init`, property
+access, `isKind(of:)`, String and Array operations. With the same compiler,
+`objc-to-swift-probe` passes **every** check (the only remaining item is its
+pre-existing `[gap]`: this toolchain still has no `ObjectiveC` overlay for
+`#selector`).
 
 Build and run it (the target stdlib is not rebuilt; programs use the installed
 one):
@@ -473,7 +476,7 @@ against the layout-2 stdlib, and by running the other three gates against the
 | Gate | Result (layout-2 compiler + layout-2 stdlib) |
 |---|---|
 | `verify-generic-abi.sh` (new, S4) | generic classes, 200 instantiations, collections, casts, `AnyObject`, `Mirror`, `deinit` |
-| `verify-class-abi.sh` (S1) | `S1 gate: ok` (fixed class registered, methods, `+load`, dispatch) |
+| `verify-class-abi.sh` (S1) | `S1 gate: ok` (fixed class registered, methods, `+load`, dispatch, ivar offsets and C/Swift read-write) |
 | `verify-swift-port.sh` | all checks, `-Onone` and `-O`, plus Agora interop |
 | `run-native-probe.sh` | `agora-import-probe` 11/11; `objc-to-swift-probe` all checks (only the known `[gap]`) |
 
@@ -620,7 +623,7 @@ AGORA_SWIFT_CLASS_LAYOUT=2 swift-toolchain/scripts/build-swift-toolchain.sh
   `cmake -DSWIFT_OBJC_CLASS_LAYOUT:STRING= <build dir>`. The next build then
   recompiles ~1100 compiler TUs and the stdlib.
 - **Current results**: `verify-swift-port.sh` all green;
-  `verify-class-abi.sh` `S1 gate: ok`; probes with the installed toolchain
+  `verify-class-abi.sh` `S1 gate: ok` (S1 + S3 checks); probes with the installed toolchain
   11/11 then the known `objc_allocWithZone` trap; the S4 gate green
   (`S4 gate: ok`); and with the layout-2 *stdlib* every gate green - S1, S4,
   language/runtime, and both probes (17/17).
@@ -721,10 +724,11 @@ Debugging techniques that produced the findings above:
    `native-env.sh` is deliberately still the compact layout; flipping it is a
    decision to take once S4b/S5 either land or are consciously deferred (they
    are both pre-existing gaps in the installed toolchain, not regressions).
-4. **S3 finish: read/write the ivars from C.** The ivar list is emitted now
-   (that is what keeps `instance_size` alive, §2.7); the remaining check is that
-   a value written through `object_setIvar` is visible to Swift and vice
-   versa, and that `class_getInstanceVariable` reports the offsets.
+4. **S3: read/write the ivars from C - done** (§2.7). The S1 gate now also looks
+   the emitted field up with `class_getInstanceVariable`, reads its offset, and
+   proves both directions: a value C writes at that offset is read back by a
+   Swift accessor, and a value Swift writes is read back by C. The ivar list is
+   what keeps `instance_size` alive in the first place (§2.7).
 5. **Self-contained host runtime.** Replace the wrapper's dependence on
    `~/.agora-swift/bootstrap` with a non-interop stdlib installed under the
    toolchain (`lib/swift/host/...`), or do the proper host/target split in the

@@ -128,9 +128,10 @@ skipped. Emitting typed records fixed it without changing the release path.
 
 The installed toolchain is layout 2, and the class ABI is complete: S1, S2, S3,
 S4, S4b, S4c, S5 and S6 are all shipped and gated, as are library evolution's
-runtime-layout classes, the self-contained host runtime and Foundation
-bridging. The toolchain is usable for real Swift-on-Agora programs; what is left
-is the Cocoa value-type *API surface* and S6-style polish (§5).
+runtime-layout classes, the self-contained host runtime, Foundation bridging and
+the Cocoa-shaped API surface. The toolchain is usable for real Swift-on-Agora
+programs; what is left is polish (§5), plus the importer work that rewriting
+every imported signature with `swift_bridge` would need.
 
 The wall described in the previous handoff ("one process, two class-metadata
 ABIs") is gone, and it was broken in two steps that are worth keeping distinct:
@@ -1085,16 +1086,22 @@ bridging section, which converts in both directions, round-trips `[String]`,
 `throw` into an `NSError` with the default domain/code, and checks that a
 `CustomNSError`'s domain/code/userInfo reach the `NSError`.
 
-**Boundary.** What is *not* here is the Cocoa value-type API surface: on Darwin
-`NSString *` parameters import as `String`, `NSArray *` as `[Any]`, and
-`NSError(domain:code:userInfo:)` takes Swift types, because the Darwin overlay
-re-declares those APIs in Swift. This overlay does not, so an imported
-`NSString *` parameter is still `NSString` (write `"x" as NSString`, which is
-also what the upstream corelibs toolchain requires for a *variable*), and the
-implicit `let s: NSString = someStringVariable` coercion is rejected - by
-upstream Swift too. Literal-to-`NSString` coercion works upstream only because
-of those re-declarations.
-
+**The Cocoa-shaped API surface (§2.18).** The overlay also re-declares the
+parts of Foundation that Swift should spell with its own types: `NSArray`,
+`NSDictionary` and `NSSet` are `Sequence`, `NSError(domain:code:userInfo:)`
+takes a Swift `String` and `[String: Any]`, `NSString(string:)` takes a Swift
+`String`, and `NSObject` is `Hashable` (which `AnyHashable` needs for an
+Objective-C key; the `ObjectiveC` overlay that normally provides it is not
+built here). What remains out of reach is *rewriting every imported signature*:
+`NSString *` parameters still import as `NSString`, because the headers carry no
+`swift_bridge` attribute, and adding one is not currently viable - the importer
+rewrites the signature but the native-to-foreign thunk then passes the Swift
+value's *storage* where the Objective-C class pointer is expected (a Swift
+`Dictionary` handed to `-[NSError initWithDomain:code:userInfo:]` crashed in
+`-copy`). That is an importer/thunk ABI gap, not an overlay one; the
+hand-written surface above covers the entry points programs actually call, and
+`"x" as NSString` remains the spelling for the rest (upstream corelibs requires
+it for a *variable* too).
 
 ### 2.17 Property-shaped accessors
 
@@ -1138,6 +1145,47 @@ through the importer (`length`, `utf8String`, `count`, `firstObject`/
 `lastIndex` on `NSIndexSet`, `objCType`, `userInfo` on `NSTimer`), plus the full
 gate suite (language/runtime with bridging, both probes, S1, S4, S4b/S4c, S5,
 library evolution).
+
+### 2.18 The Cocoa-shaped API surface
+
+With bridging in place, the last ergonomic gap was what an *imported signature*
+looks like: `NSString *` is `NSString` (so `"x" as NSString`), `NSError`'s
+initializer took `NSString`/`NSDictionary`, and the collection classes did not
+iterate. The overlay now re-declares the parts a program actually calls, on top
+of the Objective-C API:
+
+| Declared in the overlay | Effect |
+|---|---|
+| `NSArray: Sequence`, `NSDictionary: Sequence`, `NSSet: Sequence` | `for x in nsArray`, `for (k, v) in nsDictionary`, `for _ in nsSet` (elements are `Any`, the shape an unparameterized `NSArray` has in Swift) |
+| `extension NSError { convenience init?(domain: String, code: Int, userInfo: [String: Any]?) }` | `NSError(domain: "d", code: 1, userInfo: ["k": "v"])` |
+| `extension NSString { convenience init(string: String) }` | `NSString(string: "abc")` |
+| `extension NSObject: Equatable, Hashable` | `AnyHashable` can hold an Objective-C object; without it a bridged `[AnyHashable: Any]` dictionary **silently drops its entries** (`key as? AnyHashable` fails) - the `ObjectiveC` overlay that provides this on Darwin is not built here |
+
+`extension NSObject: Equatable, Hashable` is the subtle one: `AnyHashable` is
+what an `NSDictionary` bridges to, and the stdlib's `AnyHashable` hashing of an
+Objective-C object goes through `NSObject`'s `hash`/`isEqual:`. With the
+conformance the error `userInfo` round-trips; without it, `e.userInfo` looked
+empty/garbage (`count 8` for one entry).
+
+**Why not `swift_bridge`?** The clean way to make *every* imported
+`NSString *`/`NSArray *` a Swift `String`/`[Any]` is the Clang attribute the
+Darwin SDK carries (`__attribute__((swift_bridge("Swift.String")))`). Adding it
+to Agora's headers produces the right *signatures* but not the right *calls*:
+IRGen expands the foreign method's signature from the rewritten (Swift) types,
+finds no bridging to do, and passes the Swift value's representation - e.g. a
+`Dictionary`'s storage pointer - where the Objective-C class pointer belongs.
+The process dies in `-[NSError initWithDomain:code:userInfo:]`'s `-copy` of
+`__EmptyDictionarySingleton`. Fixing that means teaching the native-to-foreign
+thunk that a `swift_bridge`d parameter still needs a `_bridgeToObjectiveC`
+conversion (or the importer keeping the unbridged type in the SIL signature) -
+an upstream-sized change, deliberately not attempted here. The attributes were
+added, exercised, and removed; the overlay's hand-written surface is the
+supported path.
+
+Verified by the language gate's bridging section: `NSError(domain:code:userInfo:)`
+with Swift values, iteration over all three collection classes, `NSString(string:)`,
+and `NSObject` in `AnyHashable` - plus the whole gate suite (both probes, S1,
+S4, S4b/S4c, S5, library evolution) against the installed toolchain.
 
 ---
 
@@ -1476,12 +1524,14 @@ Debugging techniques that produced the findings above:
    bootstrap tree is needed to *build* the toolchain, not to use it. What a
    target program still needs is Agora's own prefix (`-L$AGORA_PREFIX/lib`);
    that is the product, not a build cheat.
-7. **Foundation bridging - done, with a named boundary** (§2.16). The overlay
-   ships the value bridges and `Error` ↔ `NSError`. What remains of "Cocoa
-   parity" is the value-type *API surface*: re-declaring Agora's Foundation
-   methods in Swift so `NSString *` parameters import as `String` and
-   `NSError(domain:code:userInfo:)` takes Swift types, as the Darwin overlay
-   does.
+7. **Foundation bridging and the Cocoa-shaped surface - done** (§2.16,
+   §2.18). The overlay ships the value bridges, `Error` ↔ `NSError`, and the
+   hand-written API surface (`Sequence` collections, Swift-typed
+   `NSError`/`NSString` initializers, `NSObject: Hashable`). The one thing not
+   done is rewriting *every* imported signature via `swift_bridge`: the
+   importer then fails to bridge the arguments in the foreign thunk (a Swift
+   `Dictionary`'s storage pointer reaches Objective-C), which is an
+   importer/thunk ABI gap rather than an overlay one (§2.18).
 8. **`+allocWithZone:` - done** (§2.6). `NSObject()` and every imported `T()`
    now work through a compatibility door that forwards to `+alloc`, so a
    subclass's singleton override still wins. Swift classes now use it for real
@@ -1631,7 +1681,12 @@ The read-only getters are `@property` declarations too, so Swift reads
 Getting there needed two fixes worth remembering: Swift-emitted categories are
 GNUstep structs in `__objc_cats` (not Apple's pointer list), and libobjc2's
 dtable rebuild after `class_setSuperclass` has to keep the untyped dispatch
-slot. The installed toolchain no longer borrows the bootstrap's runtime either:
+slot. The overlay also re-declares the Cocoa-shaped surface a program actually
+calls (`NSArray`/`NSDictionary`/`NSSet` are `Sequence`, Swift-typed
+`NSError`/`NSString` initializers, `NSObject: Hashable` for `AnyHashable`); the
+`swift_bridge` attribute that would rewrite every imported signature is not
+usable yet - the foreign thunk then hands a Swift value's storage to
+Objective-C (§2.18). The installed toolchain no longer borrows the bootstrap's runtime either:
 it ships the host Swift runtime and clang it needs and resolves them relative to
 itself, so the bootstrap is build-time only. The rest of this summary is the
 previous rounds' record of how the compiler got here.

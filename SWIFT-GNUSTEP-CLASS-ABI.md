@@ -206,8 +206,10 @@ class its instances are never allocated by `objc_allocWithZone` and no
 Objective-C code ever holds them. Those classes are handled without the hook -
 their metadata is Swift metadata (marked by `ABIVersion`), not a class object
 (handoff §2.8). The hook is needed for a generic class *with* an imported ObjC
-ancestor (`class Box<T>: NSObject`), which is S4b, and there the metaclass must
-live in the pattern's extra data because libobjc2 writes dispatch state into it.
+ancestor (`class Box<T>: NSObject`), which is S4b: the metaclass lives in the
+pattern's extra data, the class gets a per-instantiation Objective-C name, and
+`swift_instantiateObjCClass()` calls `objc_loadClass_np()` once the instance
+layout is complete (handoff §2.9).
 
 ## 4. The target ABI
 
@@ -353,7 +355,7 @@ one, and is why S1 needs no build-system work.
 | S2 | Instance-method and class-method dispatch from C and from ObjC onto a Swift class | **passed for the fixed/non-generic case**: `objc_msg_lookup` reaches `-greet` and `+classAnswer`; `objc-to-swift-probe` passes in full with the layout-2 compiler |
 | S3 | Instance layout: `instance_size`, ivar list with offset indirection, Swift field offsets still correct | **passed**: the `objc_ivar_list` keeps `instance_size` from being clobbered, `class_getInstanceVariable` finds the Swift field and reports its offset, and the S1 gate proves both directions (C write -> Swift read, Swift write -> C read) |
 | S4 | Generic classes: metadata patterns that the layout-2 runtime can complete | **passed for generic classes without an imported ObjC ancestor** (which is all the stdlib has): the pattern carries no Apple extra data, the runtime initializes the GNUstep header with `ABIVersion = 3`, and a full layout-2 stdlib rebuild is green — see the note below. `class Box<T>: NSObject` needs the §3.2 hook and is split out as **S4b** |
-| S4b | Generic classes with an imported Objective-C ancestor: GNUstep metaclass in the pattern, unique ObjC name per instantiation, `objc_loadClass_np()` registration | **next**: `Box(5)` still traps in `objc_allocWithZone` (also in the installed layout-0 toolchain) |
+| S4b | Generic classes with an imported Objective-C ancestor: GNUstep metaclass in the pattern, unique ObjC name per instantiation, `objc_loadClass_np()` registration, method/ivar lists | **passed** for runtime-instantiated classes: `Box(Int)`, `Box(String)`, `Box<(Int, Int)>`, `Sub<Int>: Box<Int>`, nested `Box<Box<Int>>` are registered class objects, `-init` reaches the Swift initializer, and a 16-thread stress passes — see the note below. `deinit` still misses the typed `dealloc` selector (S5); prespecialized/resilient ObjC-ancestry classes are S4c |
 | S5 | Refcounting/ARC interop, `+alloc`, `UsesSwiftRefcounting`, `+load`/`+initialize` | **partly**: `+alloc`/`objc_allocWithZone`, `+load` and pure-Swift refcounting work — with a layout-2 runtime a pure Swift class (generic or not) runs `deinit`. A class with ObjC ancestry still releases through libobjc2 (`NSObject -release` -> `objc_release` -> `gc->free_object`), so its `deinit` is skipped |
 | S6 | Remove the Apple-layout remnants and the compatibility shims | full `swiftc` + Agora program |
 
@@ -408,13 +410,49 @@ stdlib, built in the build tree by `build-layout2-stdlib.sh`). The S1 gate, the
 language/runtime gate and both probes are also green against that same layout-2
 stdlib.
 
+**S4b result (2026-10-17).** The dynamic-class path of §3.2 is now used by the
+runtime, for the case that needs it: a generic class with an *imported* ObjC
+ancestor. `class Box<T>: NSObject` cannot have `@objc` members, but Swift
+allocates it through `objc_allocWithZone` and sends `-init` through the ObjC
+runtime, so its metadata must be a class object. What the pattern gained:
+
+- the 17-word GNUstep metaclass in the extra data (only when
+  `Target->getObjectModel() == ReferenceCounting::ObjC`; a pure Swift generic
+  class still stays a metadata-only object, which keeps the stdlib's storage
+  classes cheap);
+- relative pointers to the class's `objc_method_list` and `objc_ivar_list`
+  (built by `ClassDataBuilder`, shared across instantiations). The method list is
+  not optional: `-init` is a Swift thunk, and without the list the allocator's
+  `objc_msgSend(obj, init)` lands on `NSObject -init` and the stored-property
+  initializers never run;
+- `instance_size` is mirrored from Swift's `InstanceSize` into the ObjC word at
+  completion, and `objc_loadClass_np()` registers the class and installs the
+  dispatch tables.
+
+The name has to be unique per instantiation (libobjc2 keys its class table by
+name), so the runtime reuses Apple's `copyGenericClassObjCName()` - demangle the
+metadata, remangle the type - and installs the buffer on the class and its
+metaclass. Two bugs surfaced on the way: `initClassFieldOffsetVector` must start
+from the superclass's *ObjC* `instance_size` when the superclass is imported (a
+class with ObjC ancestry uses ObjC refcounting and has no inline Swift refcount
+word), and the emitted `objc_ivar_list` had `size` and `flags` swapped.
+
+The remaining gap is `deinit`: libobjc2's release path sends the typed
+`dealloc_v16@0:8` selector, but Swift's emitted selector records are untyped, so
+the typed lookup misses the class's `-dealloc` thunk and falls back to
+`NSObject -dealloc` (the object is freed; the Swift destructor is not run). That
+is §7.1, and it belongs with S5.
+
+Gate: `swift-toolchain/scripts/verify-generic-objc-abi.sh`.
+
 ### 6.0 Where the IRGen work attaches
 
-*Status: the fixed/non-generic path (S1, see §6 and the handoff §2.7) and the
-generic-class path without ObjC ancestry (S4, handoff §2.8) are implemented. The
-bullets below remain the map; the outstanding entries are the resilient-class
-pattern (library evolution, not used by the stdlib) and the dynamic-class
-registration of S4b.*
+*Status: the fixed/non-generic path (S1, handoff §2.7), generic classes without
+ObjC ancestry (S4, handoff §2.8) and runtime-instantiated generic classes with an
+imported ObjC ancestor (S4b, handoff §2.9) are implemented. The bullets below
+remain the map; the outstanding entries are the resilient-class pattern (library
+evolution, not used by the stdlib), prespecialized generic classes with an ObjC
+ancestor (S4c), and typed selector records (S5, §7.1).*
 
 - `lib/IRGen/MetadataLayout.h:168` `ClassMetadataLayout` computes `MetadataSize`,
   `MetadataAddressPoint`, `VTableOffset`, `FieldOffsetVector` and
@@ -511,9 +549,18 @@ layout plus the `objc_init` registration, and flipping the default in
 
 ## 7. Open questions / risks
 
-1. **Type encodings.** Swift emits Apple method type encodings
-   (`v24@0:8i16` style). GNUstep's runtime only uses `types` for introspection,
-   but KVC/KVO and `NSInvocation`-style consumers read them; needs a check.
+1. **Type encodings — measured, and they are not just introspection.** Swift
+   computes Apple-style encodings for its methods, but two things are missing
+   today: a generic initializer's encoding is **null** (the result type cannot be
+   represented as a Clang type), and the emitted GNUstep *selector records* are
+   **untyped** (one record per name, `__objc_selectors`, types = null). libobjc2
+   dispatches typed selectors by their type, so its own release path - which
+   sends `dealloc_v16@0:8` - does not find a Swift class's `-dealloc` thunk and
+   falls back to `NSObject -dealloc`. That is why `deinit` is skipped for Swift
+   classes with ObjC ancestry (S5). The fix is to emit typed selector records
+   keyed by (name, encoding) and give initializers a real encoding; untyped
+   sends (`sel_registerName`) keep working as the fallback. KVC/KVO and
+   `NSInvocation` read the same strings.
 2. **Selector table (optimisation, not a blocker).** `sel_registerName()` is
    sufficient for dispatch (proven by `probe3`/`probe4`), so an emitted
    `__objc_selectors` table like clang's is optional. It is still worth doing

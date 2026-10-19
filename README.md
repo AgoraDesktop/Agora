@@ -6,7 +6,7 @@ applications — written in Objective-C, built from source.*
 **Status: working, pre-release.** The components are implemented and run together: Foundation,
 Core Graphics, Core Text and the Application Kit carry the Cocoa surface an application uses; the
 window server is a Wayland compositor with client-side chrome, layers and input routing; the Workspace
-shell draws the desktop, icons and menu bar; and `demo/agora-demo.sh` starts all of them nested on an
+shell draws the desktop, icons, menu bar and file windows; and `demo/agora-demo.sh` starts all of them nested on an
 X11 desktop. There is also a Swift toolchain that compiles Swift against this stack (the standard
 library, the Foundation overlay and the GNUstep class ABI). What is not there yet is an installable
 image: the `release` repository pins and builds the components, but no release is tagged. This

@@ -503,6 +503,15 @@ the ingest are Apple's.
 - **Proves:** the window is a shell over `WSItemModel`, not a view.
 - **Test:** `history.m` (back/forward semantics, including that a new navigation truncates the forward stack);
   a seam test that a window's status bar reports the item count of the model.
+- **Done (2026-10-19):** `workspace/src/WSFileWindowController` assembles the shell from `NSToolbar` (Back,
+  Forward, view switcher), `NSOutlineView` in an `NSSplitView` (PLACES and DEVICES from `WSPlaces`),
+  `NSPathControl` and a status bar — all reading ONE `WSItemModel`. `WSHistory` is the Back/Forward stack and its
+  truncation rule; `WSFileIconView` is the shell's simple Icon mode (W3 replaces it); a desktop folder double-click
+  posts `WSDesktopViewOpenFolderNotification` and the application opens a second window with its own model and
+  history. List, Columns and Cover Flow are disabled rather than empty. **MEASURED:** `workspace-history` (15
+  checks) and `workspace-file-window` (38 checks), and the live `--file-window` scene (the first one found that a
+  flipped ROOT content view is drawn with the wrong strip order in this tier's live path — the window keeps an
+  unflipped content view, recorded in `workspace/PROVENANCE.md`).
 
 ### W2p — The AppKit prerequisites for the file window
 - **Why it exists:** W2's shell is assembled from controls, and the inventory below is what the AppKit actually has.

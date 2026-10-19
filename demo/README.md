@@ -14,12 +14,12 @@ nothing is grabbed: the compositor runs nested on your X11 desktop with `--input
 
 | layer | who draws it |
 |---|---|
-| the amber wallpaper | `window-server-test-client`, at `kCGDesktopWindowLevel` — the **Dock's** layer, eventually |
+| the wallpaper (`wallpaper.jpg` by default) | `window-server-test-client`, at `kCGDesktopWindowLevel` — the **Dock's** layer, eventually |
 | the icons, the menu bar and the file windows | **Workspace**, whose icon window is transparent at `kCGDesktopIconWindowLevel`; **File → New Workspace Window** (or `--file-window`) opens the file window, and **View → as List** (`--list-view`) shows W4's list, and **View → as Columns** (`--column-view`) W5's columns |
 | the window full of controls | **`appkit_controls_draw`**, an ordinary window — buttons, checkbox, radio, switch, sliders, a pop-up, a combo box, a text field, a scrolled panel, and a **toolbar** above them all |
 | the table and outline window | **`appkit_controls_draw`** again — the **Data → Table & Outline** item (or the toolbar's **Table** item): a real `NSOutlineView` with disclosure and levels beside a real `NSTableView` with columns, a header and alternating rows |
 
-**The toolbar is the same three acts as the menus.** "Show Grid" toggles the checkbox the View menu validates
+**The wallpaper is `../wallpaper.jpg` by default**, decoded by the test client with libjpeg and scaled to cover the window; `AGORA_WALLPAPER=/path/to/image.jpg` overrides it, and the flat amber colour is the fallback when the file is absent. **The toolbar is the same three acts as the menus.** "Show Grid" toggles the checkbox the View menu validates
 against, "Playground" opens the text window, and "Action" prints its own name — so the strip and the menus are not two
 sets of commands. The separator, flexible space and greyed "Disabled" item are the rest of what a toolbar has to show.
 The **Table** item (or **Data → Table & Outline**) opens the two data views; `--data` does the same at startup when

@@ -4,7 +4,7 @@
 #   window-server          nested on the X11 desktop, and it GRABS NOTHING: no XGrabPointer, no XGrabKeyboard
 #   Workspace              the desktop, its icons and the application menu bar
 #   appkit_controls_draw   the control layer, in a window of its own, with its own menu bar
-#   test client            the wallpaper, at the desktop level: ONE frame, then it holds
+#   test client            the wallpaper (wallpaper.jpg by default), at the desktop level: ONE frame, then it holds
 #
 # TWO APPLICATIONS, ONE MENU BAR, WHICH IS THE POINT OF THE SCENE: a menu bar belongs to the ACTIVE application.
 # Workspace maps first and so it owns the bar; click the controls window and ITS menus replace it. That is the
@@ -51,11 +51,14 @@ export LD_LIBRARY_PATH="${DEMO_BUILD_LIBS}${DEMO_BUILD_LIBS:+:}${AGORA_PREFIX:-$
 RUNTIME="${XDG_RUNTIME_DIR:-/tmp}"
 SOCK="agora-demo"
 DESK="/tmp/agora-demo-desktop"
+# **THE WALLPAPER IS AN IMAGE NOW, TEMPORARILY.** `AGORA_WALLPAPER` overrides it; a missing file falls back to the
+# colour the server tests use, so the demo still runs in a tree without the picture.
+WALLPAPER="${AGORA_WALLPAPER:-$ROOT/wallpaper.jpg}"
 
 pkill -f "MacOS/Workspace" 2>/dev/null
 pkill -f "backend x11" 2>/dev/null
 pkill -f "appkit_controls_draw" 2>/dev/null
-pkill -f "colour 48240E" 2>/dev/null
+pkill -f "window-server-test-client" 2>/dev/null
 sleep 1
 rm -f "${RUNTIME}/${SOCK}" "${RUNTIME}/${SOCK}.lock"
 
@@ -106,13 +109,19 @@ sleep 1.5
 # 4. **THE WALLPAPER: ONE FRAME, THEN HOLD.** This client redraws on every frame callback, so asking it for frames
 #    for ever makes it a frame-rate generator — MEASURED at 233 composites a second and 86% of a core for pixels
 #    that never change. A wallpaper is a still picture: one commit, and the buffer stays.
-WAYLAND_DISPLAY="$SOCK" "$CLIENT_BIN" --width "$W" --height "$H" --colour 48240E --x 0 --y 0 \
-	--level $(( -2147483648 + 20 )) --frames 1 --hold >/dev/null 2>&1 &
+if [ -f "$WALLPAPER" ]; then
+	WAYLAND_DISPLAY="$SOCK" "$CLIENT_BIN" --width "$W" --height "$H" --image "$WALLPAPER" --x 0 --y 0 \
+		--level $(( -2147483648 + 20 )) --frames 1 --hold >/dev/null 2>&1 &
+else
+	WAYLAND_DISPLAY="$SOCK" "$CLIENT_BIN" --width "$W" --height "$H" --colour 48240E --x 0 --y 0 \
+		--level $(( -2147483648 + 20 )) --frames 1 --hold >/dev/null 2>&1 &
+fi
 WALLPID=$!
 
 sleep 1
 echo "server=$SPID  workspace=$WPID  controls=$CPID  wallpaper=$WALLPID"
 echo "  window server: ${W}${H:+x}${H} on DISPLAY $DISPLAY, socket ${RUNTIME}/${SOCK}"
+echo "  wallpaper: ${WALLPAPER}"
 echo "  menu bar: Workspace (active) — click the Controls window to give ITS menus the bar"
 
 # ---------------------------------------------------------------------------------------------------------------

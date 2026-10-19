@@ -506,7 +506,7 @@ the ingest are Apple's.
   truncation rule; `WSIconView` is the icon mode (W3); a desktop folder double-click
   posts `WSDesktopViewOpenFolderNotification` and the application opens a second window with its own model and
   history. Column is W5's now; List is W4's. **MEASURED:** `workspace-history` (15
-  checks) and `workspace-file-window` (38 checks), and the live `--file-window` scene (the first one found that a
+  checks) and `workspace-file-window` (45 checks), and the live `--file-window` scene (the first one found that a
   flipped ROOT content view is drawn with the wrong strip order in this tier's live path — the window keeps an
   unflipped content view, recorded in `workspace/PROVENANCE.md`).
 
@@ -524,7 +524,7 @@ the ingest are Apple's.
   | list view (W4) | `NSTableView`, `NSTableColumn`, `NSTableHeaderView`, `NSTableHeaderCell` | **have (cell-based)**; editing, type-select, variable heights, column reordering and autosave **have**; cross-process drag session **missing** |
   | column view (W5) | `NSBrowser` | **have** (table-backed; the `NSMatrix` form is absent) |
   | search (W10) | `NSSearchField`, `NSSearchFieldCell` | **missing** |
-  | progress (W6) | `NSProgressIndicator` | **missing** |
+  | progress (W6) | `NSProgressIndicator` | **have** |
   | status bar | `NSTextField`, `NSTextFieldCell` | **have** |
   | scrolling | `NSScrollView`, `NSClipView`, `NSScroller` | **have** |
   | buttons, sliders, pop-ups | `NSButton`/`Cell`, `NSSlider`/`Cell`, `NSPopUpButton`/`Cell` | **have** |
@@ -586,6 +586,15 @@ the ingest are Apple's.
 - **Proves:** the manager *does* things, and does them undoably.
 - **Test:** `file_ops.m` against a temp tree, including undo of each op, a conflict, and a cross-volume copy;
   `trash.m` for recycle and Put Back.
+- **Done (2026-10-19):** `workspace/src/WSFileOperations` and `WSTrash` implement New Folder, Duplicate, Rename,
+  Move/Copy (including across volumes), Move to Trash, Put Back, Empty and Compress, with inverses registered in
+  `NSUndoManager`; the inline renames in the icon and list views route through the manager. Conflicts are a
+  handler answered by `WSConflictSheet` (a modal Replace/Skip/Keep Both/Cancel panel; this tier has no
+  `NSPanel`/`NSAlert`), progress is a handler feeding `WSProgressWindow`, and Compress is a ZIP writer using
+  zlib's raw deflate (no shell-out). `WSTrash` uses `~/.Trash` or a per-volume `.Trash-<uid>` and Put Back records.
+  **MEASURED:** `workspace-file-ops` (**28 checks**) and `workspace-trash` (**19 checks**), plus
+  `appkit-progress-indicator` (**11 checks**) in libagora-app. Named absences: no Trash window/Dock contract (W7/
+  §5.3), no progress Cancel, no ZIP64, and a multi-item operation that fails halfway has no rollback.
 
 ### W7 — The drag session, system-wide
 - **Deliverable:** Agora's pasteboard types for file URLs and for a promised file; drag images; drops

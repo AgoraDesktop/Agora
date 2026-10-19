@@ -506,7 +506,7 @@ the ingest are Apple's.
   `NSPathControl` and a status bar — all reading ONE `WSItemModel`. `WSHistory` is the Back/Forward stack and its
   truncation rule; `WSIconView` is the icon mode (W3); a desktop folder double-click
   posts `WSDesktopViewOpenFolderNotification` and the application opens a second window with its own model and
-  history. List and Columns are disabled rather than empty. **MEASURED:** `workspace-history` (15
+  history. Column is disabled (W5); List is W4's. **MEASURED:** `workspace-history` (15
   checks) and `workspace-file-window` (38 checks), and the live `--file-window` scene (the first one found that a
   flipped ROOT content view is drawn with the wrong strip order in this tier's live path — the window keeps an
   unflipped content view, recorded in `workspace/PROVENANCE.md`).
@@ -558,6 +558,15 @@ the ingest are Apple's.
   column sorting, resize, inline rename, keyboard navigation.
 - **Test:** `list_view.m` for sort ordering (including directories-first and natural-number name ordering) and
   for the outline's expansion surviving a model change.
+- **Done (2026-10-19):** `workspace/src/WSListView` is an `NSOutlineView` over one `WSItemModel` per directory
+  (children are child models made on first expansion), with Name, Date Modified, Size and Kind columns; `WSItemSort`
+  keeps directories first and orders names naturally (`file2` before `file10`), dates, sizes and Kinds; expansion is
+  remembered by PATH across a reload; the Name column's field editor performs one `NSFileManager` move. **MEASURED:**
+  `workspace-list-view`, **30 checks** (four folders and five files, the column values, size/date/Kind orders, a
+  folder open across a reload, a rename through the field editor, Return/Right/Left/Command-Down), and the live
+  `--list-view` scene. **AND THE FIELD EDITOR'S DOOR IS A FINDING:** an outline's editor ends through the TABLE
+  data-source method with a row, not the outline's by-item method, so `WSListView` implements both; recorded in
+  `workspace/PROVENANCE.md`. Still absent: list drag/drop and row icons.
 
 ### W5 — Column view
 - **Deliverable:** `WSColumnView` over `NSBrowser`, with the preview column.

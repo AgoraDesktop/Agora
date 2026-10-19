@@ -6,9 +6,13 @@ house style of `window-server/DESIGN.md` and `DEVELOPMENT-TOOLS.md`: every claim
 exists, every recommendation is marked as one, and the things that are refused are named rather than left to
 be discovered. Nothing here is scheduled.*
 
-*`Workspace` is Agora's name for the **Finder role** — a file manager that also owns the desktop. It is not a
+**`Workspace` is the application's name** — Agora's file manager and desktop. It is not a
 product name in the sense the project README warns about ("Apple's names are descriptive"); it is a role name,
 like `Kestrel` is the window manager's and `Argentum` is the design language's.*
+
+**Naming rule.** The application and every class, file, target, executable and user-visible string is named for
+**Workspace**. A third-party product's name is never used, in whole or in part, for our software; an imported
+Apple identifier survives only where the exact spelling is required for source compatibility.
 
 ---
 
@@ -16,7 +20,7 @@ like `Kestrel` is the window manager's and `Argentum` is the design language's.*
 
 **The premise buys less than it looks like, and that is the first thing this plan has to say.** "AppKit meets
 10.6's standard" gives Workspace its *presentation* layer for free — the windows, views, cells, menus, controls,
-scroll/tracking/text systems, `NSWorkspace`, `NSFileManager` — but **the Finder of 10.6 was not primarily an
+scroll/tracking/text systems, `NSWorkspace`, `NSFileManager` — but **the 10.6 reference file manager was not primarily an
 AppKit program.** It was a client of the **Core Services** band — and of the **Application Services** pieces
 beside it: the CarbonCore File Manager (`FSRef`, `FSCatalogInfo`, aliases), **Launch Services** (types, default
 applications, `Open With`), **Icon Services** (file and type icons),
@@ -49,7 +53,7 @@ libraries that 10.6 assumed the system already had.** The plan below separates t
 conflating them is how a file-manager project becomes a two-year detour into an indexer.
 
 And one more thing the premise does *not* decide, which the prompt closes by fiat: **Workspace owns the
-desktop.** On the Mac the Finder is a single, never-quitting process that owns both the file windows and the
+desktop.** On the Mac the system file manager is a single, never-quitting process that owns both the file windows and the
 desktop window, and the desktop is not a separate program. Agora already splits the *Dock* out as its own client
 (`window-server/DESIGN.md`: "the Dock is one of them"); this plan does **not** split the desktop out, because
 desktop icons and file windows share one drag session, one icon-layout engine, one selection and one metadata
@@ -76,10 +80,10 @@ Grounding each row in the tree, so the boundary is measured rather than asserted
 | Quick Look preview panel and generators | Quick Look framework | **absent** |
 | Volumes, mount/eject, device notifications | DiskArbitration | **absent** |
 | Network shares (AFP/SMB/NFS) | kernel + NetFS/Bonjour | **absent** |
-| The desktop it draws itself | Finder | **Workspace's** — see §3 |
-| The Trash the Dock shows | Finder (`~/.Trash`, per-volume `.Trash`) | **workspace's**, with a Dock contract |
+| The desktop it draws itself | the system file manager | **Workspace's** — see §3 |
+| The Trash the Dock shows | the system file manager (`~/.Trash`, per-volume `.Trash`) | **workspace's**, with a Dock contract |
 
-**The two rows that matter for sequencing are Type identity and Icons.** Almost every view in the Finder — icon
+**The two rows that matter for sequencing are Type identity and Icons.** Almost every view in a file manager — icon
 view, list view's `Kind` column, `Get Info`, `Open With`, the sidebar's application list — is downstream of a
 type registry and an icon lookup. They are the smallest substrate libraries and they unblock the most; they go
 first (§6, stage F1/F2).
@@ -88,7 +92,7 @@ first (§6, stage F1/F2).
 
 ## 2. The system-services gap, named
 
-**"Core Services" is Apple's band, not one framework, and the Finder reaches across the bands beside it too.**
+**"Core Services" is Apple's band, not one framework, and the reference file manager reaches across the bands beside it too.**
 Under AppKit sits **Core Services** — delivered as the `CoreServices.framework` umbrella, which bundles
 CarbonCore, Launch Services, Metadata, FSEvents, SharedFileList, Search Kit and more — together with the
 **Application Services** pieces the UI kits share (Icon Services, Quick Look) and the standalone **domain
@@ -117,7 +121,7 @@ largest thing inside `CoreServices.framework`, but their job is already answered
 `libagora-base/NSFileManager.h` and by `NSURL` bookmarks respectively — so `WSAlias` (§5.2) is the
 bookmark-shaped answer where the Alias Manager would have been. **CFNetwork** is likewise answered by
 Foundation's `NSURL` doors. **Search Kit** (an app-level inverted index) and **DictionaryServices** (the
-"Look Up in Dictionary" service) are named and not built: neither is required for Finder parity, and the latter
+"Look Up in Dictionary" service) are named and not built: neither is required for parity with the reference, and the latter
 arrives with the Services menu in W13.
 
 **Several of these are runtime *services*, not merely libraries, and that is a decision to make:** the Spotlight
@@ -211,7 +215,7 @@ This is where Agora's architecture and the Mac's agree, and the seam must be sta
 
 - **The desktop is TWO LEVELS, and Workspace owns only the upper one.**
   * `kCGDesktopWindowLevel` — the **WALLPAPER**, a window of its own below every ordinary window, and **the
-    Dock's to draw** (a stub in the tests until the Dock exists). The Finder drew it at 10.6; Agora gives that
+    Dock's to draw** (a stub in the tests until the Dock exists). The reference file manager drew it at 10.6; Agora gives that
     layer to the Dock so the desktop is a *shell* surface and not a file manager's private background.
   * `kCGDesktopIconWindowLevel` — the **ICONS**, and **Workspace's**: one borderless, **TRANSPARENT** window
     covering `[NSScreen frame]`, drawing ONLY the items of the desktop directory. The compositor blends it over
@@ -242,9 +246,9 @@ This is where Agora's architecture and the Mac's agree, and the seam must be sta
 
 ---
 
-## 4. Product scope — Finder at 10.6
+## 4. Product scope — the 10.6 reference
 
-The 10.6 Finder is the target because the premise names it. Measured against it, feature by feature:
+The 10.6 reference is the target. Measured against it, feature by feature:
 
 **In scope (the standard)**
 - Four window views: **Icon**, **List** (hierarchical, sortable columns), **Column** (`NSBrowser`),
@@ -272,7 +276,7 @@ The 10.6 Finder is the target because the premise names it. Measured against it,
   name in `libagora-app/NSApplication.h`.
 - **Burn folders / optical media** — `libagora-disk` could carry it; deferred indefinitely.
 - **Network browsing (AFP/SMB/NFS)** — real, but its own component and its own risk; stage W12.
-- **Tabs** — Finder tabs are 10.7, after the pin. Correctly absent.
+- **Tabs** — tabs arrive in 10.7, after the pin. Correctly absent.
 - **Tags (10.9+)** — the pin has **colour labels**, not tags. Do not build tags.
 
 ---
@@ -298,9 +302,9 @@ Each is a real fork; the plan states a recommendation and the file that would ca
    secure-empty), and exposes it as a small service the Dock calls; the Dock never touches the filesystem. The
    transport (a Wayland protocol extension, an in-tree IPC, or `libagora-netfs`-style shared library) is
    **open** and must be decided with whoever writes the Dock. `WSTrash`.
-4. **Custom icons.** The Mac stores a folder's custom icon in an `Icon\r` file and flags it in FinderInfo.
+4. **Custom icons.** The Mac stores a folder's custom icon in an `Icon\r` file and flags it in the classic info record.
    **Recommendation:** Agora's own convention — a custom-icon reference in the sidecar, the image bytes in an
-   sidecar blob or an xattr — because it needs no magic filename and no FinderInfo. **Owner: Workspace +
+   sidecar blob or an xattr — because it needs no magic filename and no classic info record. **Owner: Workspace +
    `libagora-iconservices`.**
 5. **Search architecture.** Live filename filtering needs no index; system-wide content search needs
    `libagora-metadata` and an importer ABI. **Recommendation:** three slices — W11a filters names in the
@@ -331,7 +335,7 @@ workspace/
     WSApplication.{h,m}            NSApplication subclass; owns the desktop and the window list
     WSDesktopWindow.{h,m}          the borderless desktop window at the CG desktop level
     WSDesktopView.{h,m}            wallpaper + icon grid + rubber band (reuses WSIconLayout)
-    WSFinderWindowController.{h,m} one file window; its own history, view mode, sort
+    WSFileWindowController.{h,m} one file window; its own history, view mode, sort
     WSItemModel.{h,m}              THE shared model: one directory's items + change stream
     WSIconView.{h,m}               icon view (NSCollectionView-backed)
     WSListView.{h,m}               list view (NSOutlineView-backed)
@@ -363,7 +367,7 @@ the single decision that prevents that, and it is the same discipline `libagora-
 
 ## 7. The staged plan
 
-Stages are ordered by **dependency and by "what can be shown and measured"**, not by Finder menu order. Each
+Stages are ordered by **dependency and by "what can be shown and measured"**, not by the reference file manager's menu order. Each
 stage names the smallest honest deliverable, what it proves, and the test that holds it up. The F-stages are the
 substrate; the W-stages are Workspace.
 
@@ -487,14 +491,14 @@ the ingest are Apple's.
   owns its own loop where a bar's loop drains every window's queue instead (see `libagora-app/PROVENANCE.md` § 8).
 
 ### W2 — The file window shell
-- **READY (2026-10-18): THE APPKIT PREREQUISITES ARE COMPLETE.** A Finder window is a toolbar, a sidebar, a path bar
+- **READY (2026-10-18): THE APPKIT PREREQUISITES ARE COMPLETE.** A file window is a toolbar, a sidebar, a path bar
   and a view switcher, and the AppKit now has all four: `NSToolbar` with `NSToolbarItemGroup`, the cell-based table
   and `NSOutlineView` in an `NSSplitView`, `NSSegmentedControl` for the switcher and `NSPathControl` for the bar.
   What remains outside this stage is W5's `NSBrowser`, W10's `NSSearchField` and W6's `NSProgressIndicator`, which
   are those stages' own. The W2 shell can be built now; **W2p** records the inventory that unblocked it. W4's list
   view also has its table foundation: editing, type-select, variable heights, column reordering, autosave and a local
   row drag are in; only the cross-process drag session waits for W7.
-- **Deliverable:** `WSFinderWindowController` with toolbar, sidebar, path bar, status bar, the four-view
+- **Deliverable:** `WSFileWindowController` with toolbar, sidebar, path bar, status bar, the four-view
   switcher (only Icon works), Back/Forward history, and the Places list; a second window shows a second folder.
 - **Proves:** the window is a shell over `WSItemModel`, not a view.
 - **Test:** `history.m` (back/forward semantics, including that a new navigation truncates the forward stack);
@@ -505,7 +509,7 @@ the ingest are Apple's.
   Ordered by what each class unlocks, because two of them carry more than one stage.
 - **Measured inventory (`libagora-app`'s headers):**
 
-  | a Finder window needs | class | state |
+  | a file window needs | class | state |
   |---|---|---|
   | toolbar | `NSToolbar`, `NSToolbarItem`, `NSToolbarItemGroup` | **have** |
   | sidebar / source list | `NSTableView`, `NSOutlineView`, `NSSplitView` | **have (cell-based core)**; split view with drag, collapse and autosave |
@@ -521,7 +525,7 @@ the ingest are Apple's.
   | the window itself | `NSWindow`, `NSWindowController`, `NSView`, `NSViewController` | **have** (`NSPanel` missing) |
 
 - **Order, and why:** `NSTableView` first — it is the source list's engine (`NSOutlineView` is a subclass) AND the
-  list view of W4. **Every Finder-shell prerequisite is now here**: the table/outline, `NSSplitView`,
+  list view of W4. **Every file-shell prerequisite is now here**: the table/outline, `NSSplitView`,
   `NSSegmentedControl`, `NSToolbarItemGroup` and `NSPathControl`. W2 can return to its deliverable; W4's list view
   can start on the table core's missing editing/type-select/drag-drop half, and `NSProgressIndicator` and
   `NSSearchField` still wait for W6 and W10.
@@ -614,7 +618,7 @@ assumed"; `window-server/README.md`). Concretely:
 1. **The substrate is the schedule.** If F1–F3 are treated as "part of Workspace", the file manager will not
    reach a first honest screen for a very long time. The stage split exists to prevent that. **F1, F2 and F3
    are the critical path and should be built as standalone components with their own tests before W1.**
-2. **`WSItemModel` discipline.** Four views over four enumerations is the classic Finder-clone failure. The
+2. **`WSItemModel` discipline.** Four views over four enumerations is the classic file-manager-clone failure. The
    model is one object and every view is a consumer; this is a review rule, not a suggestion.
 3. **Search scope creep.** Spotlight is a multi-year subsystem; §5.5 chops it into three slices and only the
    first is required for parity of the search *field*. Guard against W10 becoming the project.
@@ -671,5 +675,5 @@ F4 CG desktop lvl ──┘                                                     
 **The first shippable thing is a desktop** (W0+W1): wallpaper, icons, selection, open, drag, positions — a
 useful, non-trivial, measurable surface that needs F1–F4 and nothing else. **The file-manager windows are the
 second thing** (W2+W3+W4), and they reuse the desktop's icon engine and model rather than reimplementing them.
-That ordering is the opposite of the Finder's menu layout, and it is the right one here because the prompt asks
+That ordering is the opposite of the reference file manager's menu layout, and it is the right one here because the prompt asks
 for the desktop explicitly and because the desktop is where the shared machinery is proven first.

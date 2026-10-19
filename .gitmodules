@@ -57,3 +57,18 @@
 	path = AgoraDesktop.github.io
 	url = https://github.com/AgoraDesktop/AgoraDesktop.github.io.git
 	branch = main
+
+[submodule "workspace"]
+	path = workspace
+	url = https://github.com/AgoraDesktop/workspace.git
+	branch = main
+
+[submodule "swift-toolchain"]
+	path = swift-toolchain
+	url = https://github.com/AgoraDesktop/swift-toolchain.git
+	branch = main
+
+[submodule "swift-interop-probe"]
+	path = swift-interop-probe
+	url = https://github.com/AgoraDesktop/swift-interop-probe.git
+	branch = main

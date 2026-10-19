@@ -16,7 +16,14 @@ nothing is grabbed: the compositor runs nested on your X11 desktop with `--input
 |---|---|
 | the amber wallpaper | `window-server-test-client`, at `kCGDesktopWindowLevel` — the **Dock's** layer, eventually |
 | the icons and the menu bar | **Workspace**, whose icon window is transparent at `kCGDesktopIconWindowLevel` |
-| the window full of controls | **`appkit_controls_draw`**, an ordinary window — buttons, checkbox, radio, switch, sliders, a pop-up, a combo box, a text field, a scrolled table |
+| the window full of controls | **`appkit_controls_draw`**, an ordinary window — buttons, checkbox, radio, switch, sliders, a pop-up, a combo box, a text field, a scrolled panel, and a **toolbar** above them all |
+| the table and outline window | **`appkit_controls_draw`** again — the **Data → Table & Outline** item (or the toolbar's **Table** item): a real `NSOutlineView` with disclosure and levels beside a real `NSTableView` with columns, a header and alternating rows |
+
+**The toolbar is the same three acts as the menus.** "Show Grid" toggles the checkbox the View menu validates
+against, "Playground" opens the text window, and "Action" prints its own name — so the strip and the menus are not two
+sets of commands. The separator, flexible space and greyed "Disabled" item are the rest of what a toolbar has to show.
+The **Table** item (or **Data → Table & Outline**) opens the two data views; `--data` does the same at startup when
+you run `appkit_controls_draw` directly.
 
 **The menu bar has two owners, and that is the demonstration.** A menu bar belongs to the ACTIVE application.
 Workspace maps first and therefore owns it: `Workspace · File · Edit · View · Go · Window · Help`. Click the

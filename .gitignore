@@ -4,8 +4,11 @@
 # Agent/runtime state
 /.reasonix/
 
-# Unversioned source trees. Not git repos yet, so they are excluded rather than
-# committed as plain files — that keeps them free to become their own component
-# repositories later without needing a history rewrite.
-/swift-toolchain/
-/swift-interop-probe/
+# Local logs
+*.log
+
+# The supplied XFWM theme (Greybird) — somebody else's GPL/CC-BY-SA art, read at
+# runtime only. It must never be committed, so it is ignored here as well as in
+# libagora-app, where the resolver's copy lives (libagora-app/themes/, also
+# ignored). Provenance: libagora-app/themes/PROVENANCE.
+/theme-greybird/

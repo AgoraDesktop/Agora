@@ -3,10 +3,15 @@
 *An installable desktop environment for Linux and the BSDs: the Cocoa stack, a Mac-like desktop, and its
 applications — written in Objective-C, built from source.*
 
-**Status: design.** The first component repositories exist: `libagora-core` and `libagora-dispatch`
-hold extracted upstream sources, but no Agora-written code yet. This document is the top-level record
-of what Agora is and how its repositories are organised; each component carries its own detail in its
-own repository.
+**Status: working, pre-release.** The components are implemented and run together: Foundation,
+Core Graphics, Core Text and the Application Kit carry the Cocoa surface an application uses; the
+window server is a Wayland compositor with client-side chrome, layers and input routing; the Workspace
+shell draws the desktop, icons and menu bar; and `demo/agora-demo.sh` starts all of them nested on an
+X11 desktop. There is also a Swift toolchain that compiles Swift against this stack (the standard
+library, the Foundation overlay and the GNUstep class ABI). What is not there yet is an installable
+image: the `release` repository pins and builds the components, but no release is tagged. This
+document is the top-level record of what Agora is and how its repositories are organised; each
+component carries its own detail in its own repository.
 
 ## What Agora is
 
@@ -49,8 +54,8 @@ organisation, and `.gitmodules` records their URLs.
 
 ## The components
 
-The first components are named and their local repositories exist. This list will grow; further
-components (a file manager, system preferences, more applications) are not yet specified.
+The component repositories named below exist and build. This list will grow; further components
+(system preferences, more applications) are not yet specified.
 
 ### The Cocoa stack
 
@@ -79,12 +84,33 @@ components (a file manager, system preferences, more applications) are not yet s
 | `libagora-iconservices` | Icon Services — the icon an item or a type is drawn with: the lookup and the representations |
 | `libagora-launchservices` | Launch Services — the type model (Uniform Type Identifiers), and what opens what |
 | `widget-zoo` | a demonstration application: the view and control classes and the menu system |
+| `workspace` | Workspace — the desktop surface (wallpaper, icons, menu bar) and the file-manager windows; an application, consuming the AppKit |
+
+### Tooling
+
+| repository | what it is |
+|---|---|
+| `swift-toolchain` | the Swift-on-Agora toolchain: build scripts, the Swift-fork patch set, and the ObjectiveC and Foundation overlays, with the gates that verify the ABI |
+| `swift-interop-probe` | the two runnable probes (Swift importing Agora's Foundation; Objective-C calling a Swift subclass) and the C-side class-ABI probes |
 
 ### Assembly
 
 | repository | what it is |
 |---|---|
 | `release` | the `release` repository (a submodule of this workspace): the same components, `main` following them and tags pinning them, plus the build that produces a desktop and an installable image |
+
+## Where to start
+
+- **Run the demo.** `demo/agora-demo.sh` starts the window server, Workspace and the controls
+  application nested on an X11 desktop (`demo/README.md`).
+- **Build a component.** Each repository's `README.md` carries its build (CMake, into `build/`,
+  installing into a shared SDK prefix). The dependency order is the one `release/components.conf`
+  records, which the release driver checks.
+- **Read the design record.** `WORKSPACE-PLAN.md` (the shell's stages), `SWIFT-PORT-HANDOFF.md`
+  (where the Swift port stands), `DEVELOPMENT-TOOLS.md` (the interface-format/build-tool/IDE
+  exploration), `RUST-BINDINGS.md`.
+- **Build the Swift toolchain.** `swift-toolchain/README.md` — it needs the bootstrap Swift release
+  and this stack's `build-prefix`, and installs under `~/.agora-swift`.
 
 ## Conventions
 
@@ -124,7 +150,7 @@ components (a file manager, system preferences, more applications) are not yet s
   never vendored** (the *Every library is shared* rule above already builds our own libraries this way), so
   that the library's terms stay on the library and never reach Agora's code; its notice, source and
   replaceability conditions are the library's to meet. **GPL and AGPL are excluded** — they have no linking
-  exception. *(Agora's own licence is proposed as MIT.)*
+  exception. *(Agora's own licence is MIT — see `LICENSE`.)*
 - **Apple's names are descriptive.** Names like "Cocoa", "Core Graphics" and "AppKit" describe the
   surface being duplicated. They are not Agora's product names, and no Apple marks or assets ship.
 
@@ -134,7 +160,7 @@ These are taken as given for now, but are not yet ratified:
 
 - **Display target: Wayland.** Agora's window server is a Wayland compositor; X clients arrive via
   Xwayland. There is no X11-native target.
-- **Licence: MIT, permissive-first** (stated above) — with a dynamic-link fallback for linking-safe
+- **Licence: MIT, permissive-first** (stated above; `LICENSE`) — with a dynamic-link fallback for linking-safe
   copyleft where no permissive option exists.
 - **Objective-C runtime: libobjc2** (portable, ARC, blocks) rather than Apple's runtime.
 

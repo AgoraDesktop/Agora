@@ -1811,8 +1811,10 @@ done
   uncommitted by design (59 files now, including the class-object predicate,
   the `NSUInteger` parameter encodings and the initializer encoding). The Agora
   repository has each round's doc update committed (`53657c7` for zero-copy
-  bridging, `2a7c7a1` for this round); `swift-toolchain/` and
-  `swift-interop-probe/` are git-ignored local trees.
+  bridging, `2a7c7a1` for the surface round). `swift-toolchain/` and
+  `swift-interop-probe/` are component repositories of the same federation now
+  (submodules of the workspace, with their own `main` and `LICENSE`); they are
+  no longer git-ignored local trees.
 - **To change the layout**: `AGORA_SWIFT_CLASS_LAYOUT=0` (or `2`, the default)
   `swift-toolchain/scripts/build-swift-toolchain.sh`. The build script always
   passes `-DSWIFT_OBJC_CLASS_LAYOUT:` explicitly, so the cache cannot go stale.

@@ -340,13 +340,14 @@ A census of the AppKit classes an editor shell leans on, checked against the tre
   `NSMenuItem`, `NSPasteboard`, `NSClipView`, `NSScrollView`, `NSScroller`, `NSTrackingArea`,
   `NSText`/`NSTextView`/`NSTextStorage`/`NSLayoutManager`/`NSTextContainer`, `NSImage`/`NSImageRep`,
   `NSFont`, `NSColor`, `NSBezierPath`, `NSGraphicsContext`, `NSViewController`, `NSWindowController`,
-  `NSButton`, `NSSlider`, `NSTextField`, `NSPopUpButton`, `NSComboBox` — **and `NSUndoManager`**, which is
-  the one most likely to be assumed missing and is not: Foundation ships it and `NSResponder.h:157` walks
-  the chain to it.
-- **Absent (the furniture):** `NSTableView`, `NSOutlineView`, `NSSplitView`, `NSTabView`, `NSPanel`,
-  `NSAlert`, `NSToolbar`, `NSDrawer`, `NSBox`, `NSProgressIndicator`, `NSPopover`, `NSColorPanel`,
-  `NSFontPanel`, `NSRulerView`, `NSCollectionView`, `NSTextFinder`, `NSTextAttachment`,
-  `NSDraggingSession`, `NSTreeController`, `NSArrayController`, `NSDictionaryController`, `NSDocument`.
+  `NSButton`, `NSSlider`, `NSTextField`, `NSPopUpButton`, `NSComboBox`, `NSTableView`, `NSOutlineView`,
+  `NSSplitView`, `NSSegmentedControl`, `NSToolbar`, `NSToolbarItemGroup`, `NSPathControl`,
+  `NSTextAttachment` — **and `NSUndoManager`**, which is the one most likely to be assumed missing and is not: Foundation ships it and
+  `NSResponder.h:157` walks the chain to it.
+- **Absent (the furniture):** `NSTabView`, `NSPanel`, `NSAlert`, `NSDrawer`, `NSBox`, `NSProgressIndicator`,
+  `NSPopover`, `NSColorPanel`, `NSFontPanel`, `NSRulerView`, `NSCollectionView`, `NSTextFinder`,
+  `NSBrowser`, `NSDraggingSession`, `NSTreeController`, `NSArrayController`, `NSDictionaryController`,
+  `NSDocument`.
 
 That list is the honest cost: an IDE needs an **outline** for the navigator and the view hierarchy, a
 **split view** for panes, **panels/alerts** for dialogs, a **drag session** for reordering and for

@@ -36,7 +36,18 @@ H="${GEOM#*x}"
 
 export DISPLAY="${DISPLAY:-:1}"
 # The AppKit's own dependencies live in the install prefix, and DT_RUNPATH is not inherited by a dependency.
-export LD_LIBRARY_PATH="${AGORA_PREFIX:-$ROOT/build-prefix}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+#
+# **AND THE BUILD TREES COME FIRST, BECAUSE THE PREFIX ALSO CARRIES AN INSTALLED COPY OF EVERY ONE OF THEM.**
+# Without this the scene loads whatever was last installed and misses everything the build has moved on from —
+# MEASURED, two ways in one run: the controls window died with "undefined symbol ._OBJC_REF_CLASS_NSSplitView"
+# because the installed AppKit predated the class it was built to show, and Workspace's destroy request was read by
+# the server as `set_pointer_capture` ("message too short") because the installed library still spoke the older
+# protocol. A build tree is the thing this script is running FROM; the prefix is what it falls back to.
+DEMO_BUILD_LIBS=""
+for d in "$ROOT"/libagora-*/build; do
+	[ -d "$d" ] && DEMO_BUILD_LIBS="${DEMO_BUILD_LIBS}${DEMO_BUILD_LIBS:+:}$d"
+done
+export LD_LIBRARY_PATH="${DEMO_BUILD_LIBS}${DEMO_BUILD_LIBS:+:}${AGORA_PREFIX:-$ROOT/build-prefix}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 RUNTIME="${XDG_RUNTIME_DIR:-/tmp}"
 SOCK="agora-demo"
 DESK="/tmp/agora-demo-desktop"

@@ -487,14 +487,13 @@ the ingest are Apple's.
   owns its own loop where a bar's loop drains every window's queue instead (see `libagora-app/PROVENANCE.md` § 8).
 
 ### W2 — The file window shell
-### W2 — The file window shell
-- **PAUSED (2026-10-16), AND THE REASON IS MEASURED RATHER THAN FELT: the AppKit has none of the controls this
-  stage is made of.** A Finder window is a toolbar, a sidebar, a path bar and a view switcher, and this tier has
-  **no `NSToolbar`, `NSToolbarItem`, `NSSplitView`, `NSOutlineView`, `NSTableView`, `NSPathControl` or
-  `NSSegmentedControl`** — nor `NSBrowser` (W5), `NSSearchField` (W10) or `NSProgressIndicator` (W6). Building the
-  window without them would be painting a toolbar rather than having one, which is the opposite of what this stage
-  exists to prove. See **W2p** below: the prerequisites are an AppKit stage, and they unlock three Workspace
-  stages at once.
+- **READY (2026-10-18): THE APPKIT PREREQUISITES ARE COMPLETE.** A Finder window is a toolbar, a sidebar, a path bar
+  and a view switcher, and the AppKit now has all four: `NSToolbar` with `NSToolbarItemGroup`, the cell-based table
+  and `NSOutlineView` in an `NSSplitView`, `NSSegmentedControl` for the switcher and `NSPathControl` for the bar.
+  What remains outside this stage is W5's `NSBrowser`, W10's `NSSearchField` and W6's `NSProgressIndicator`, which
+  are those stages' own. The W2 shell can be built now; **W2p** records the inventory that unblocked it. W4's list
+  view also has its table foundation: editing, type-select, variable heights, column reordering, autosave and a local
+  row drag are in; only the cross-process drag session waits for W7.
 - **Deliverable:** `WSFinderWindowController` with toolbar, sidebar, path bar, status bar, the four-view
   switcher (only Icon works), Back/Forward history, and the Places list; a second window shows a second folder.
 - **Proves:** the window is a shell over `WSItemModel`, not a view.
@@ -508,11 +507,11 @@ the ingest are Apple's.
 
   | a Finder window needs | class | state |
   |---|---|---|
-  | toolbar | `NSToolbar`, `NSToolbarItem`, `NSToolbarItemGroup` | **missing** |
-  | sidebar / source list | `NSOutlineView` on `NSTableView`, in an `NSSplitView` | **missing** |
-  | path bar | `NSPathControl` | **missing** |
-  | view switcher | `NSSegmentedControl`, `NSSegmentedCell` | **missing** |
-  | list view (W4) | `NSTableView`, `NSTableColumn`, `NSTableCellView` | **missing** |
+  | toolbar | `NSToolbar`, `NSToolbarItem`, `NSToolbarItemGroup` | **have** |
+  | sidebar / source list | `NSTableView`, `NSOutlineView`, `NSSplitView` | **have (cell-based core)**; split view with drag, collapse and autosave |
+  | path bar | `NSPathControl`, `NSPathCell`, `NSPathComponentCell` | **have** |
+  | view switcher | `NSSegmentedControl`, `NSSegmentedCell` | **have** |
+  | list view (W4) | `NSTableView`, `NSTableColumn`, `NSTableHeaderView`, `NSTableHeaderCell` | **have (cell-based)**; editing, type-select, variable heights, column reordering and autosave **have**; cross-process drag session **missing** |
   | column view (W5) | `NSBrowser` | **missing** |
   | search (W10) | `NSSearchField`, `NSSearchFieldCell` | **missing** |
   | progress (W6) | `NSProgressIndicator` | **missing** |
@@ -522,10 +521,10 @@ the ingest are Apple's.
   | the window itself | `NSWindow`, `NSWindowController`, `NSView`, `NSViewController` | **have** (`NSPanel` missing) |
 
 - **Order, and why:** `NSTableView` first — it is the source list's engine (`NSOutlineView` is a subclass) AND the
-  list view of W4, so one class carries two stages. Then `NSSplitView` (it is what makes the sidebar a sidebar),
-  then `NSSegmentedControl` (the smallest, and the view switcher needs it), then `NSToolbar` (the most machinery:
-  items, identifiers, a delegate), then `NSPathControl`. `NSProgressIndicator` and `NSSearchField` are W6's and
-  W10's and can wait for those stages.
+  list view of W4. **Every Finder-shell prerequisite is now here**: the table/outline, `NSSplitView`,
+  `NSSegmentedControl`, `NSToolbarItemGroup` and `NSPathControl`. W2 can return to its deliverable; W4's list view
+  can start on the table core's missing editing/type-select/drag-drop half, and `NSProgressIndicator` and
+  `NSSearchField` still wait for W6 and W10.
 - **Proves:** the window shell is a real shell — its parts are the platform's, not painted pictures of them.
 
 ### W3 — Icon view

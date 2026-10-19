@@ -15,7 +15,7 @@ nothing is grabbed: the compositor runs nested on your X11 desktop with `--input
 | layer | who draws it |
 |---|---|
 | the amber wallpaper | `window-server-test-client`, at `kCGDesktopWindowLevel` — the **Dock's** layer, eventually |
-| the icons, the menu bar and the file windows | **Workspace**, whose icon window is transparent at `kCGDesktopIconWindowLevel`; **File → New Workspace Window** (or `--file-window`) opens the file window, and **View → as List** (`--list-view`) shows W4's list |
+| the icons, the menu bar and the file windows | **Workspace**, whose icon window is transparent at `kCGDesktopIconWindowLevel`; **File → New Workspace Window** (or `--file-window`) opens the file window, and **View → as List** (`--list-view`) shows W4's list, and **View → as Columns** (`--column-view`) W5's columns |
 | the window full of controls | **`appkit_controls_draw`**, an ordinary window — buttons, checkbox, radio, switch, sliders, a pop-up, a combo box, a text field, a scrolled panel, and a **toolbar** above them all |
 | the table and outline window | **`appkit_controls_draw`** again — the **Data → Table & Outline** item (or the toolbar's **Table** item): a real `NSOutlineView` with disclosure and levels beside a real `NSTableView` with columns, a header and alternating rows |
 

@@ -492,8 +492,7 @@ the ingest are Apple's.
 - **READY (2026-10-18): THE APPKIT PREREQUISITES ARE COMPLETE.** A file window is a toolbar, a sidebar, a path bar
   and a view switcher, and the AppKit now has all four: `NSToolbar` with `NSToolbarItemGroup`, the cell-based table
   and `NSOutlineView` in an `NSSplitView`, `NSSegmentedControl` for the switcher and `NSPathControl` for the bar.
-  What remains outside this stage is W5's `NSBrowser`, W10's `NSSearchField` and W6's `NSProgressIndicator`, which
-  are those stages' own. The W2 shell can be built now; **W2p** records the inventory that unblocked it. W4's list
+  `NSBrowser` is here now (W5, table-backed); `NSSearchField` and `NSProgressIndicator` remain W10's and W6's. The W2 shell can be built now; **W2p** records the inventory that unblocked it. W4's list
   view also has its table foundation: editing, type-select, variable heights, column reordering, autosave and a local
   row drag are in; only the cross-process drag session waits for W7.
 - **Deliverable:** `WSFileWindowController` with toolbar, sidebar, path bar, status bar, the three-view
@@ -506,7 +505,7 @@ the ingest are Apple's.
   `NSPathControl` and a status bar — all reading ONE `WSItemModel`. `WSHistory` is the Back/Forward stack and its
   truncation rule; `WSIconView` is the icon mode (W3); a desktop folder double-click
   posts `WSDesktopViewOpenFolderNotification` and the application opens a second window with its own model and
-  history. Column is disabled (W5); List is W4's. **MEASURED:** `workspace-history` (15
+  history. Column is W5's now; List is W4's. **MEASURED:** `workspace-history` (15
   checks) and `workspace-file-window` (38 checks), and the live `--file-window` scene (the first one found that a
   flipped ROOT content view is drawn with the wrong strip order in this tier's live path — the window keeps an
   unflipped content view, recorded in `workspace/PROVENANCE.md`).
@@ -523,7 +522,7 @@ the ingest are Apple's.
   | path bar | `NSPathControl`, `NSPathCell`, `NSPathComponentCell` | **have** |
   | view switcher | `NSSegmentedControl`, `NSSegmentedCell` | **have** |
   | list view (W4) | `NSTableView`, `NSTableColumn`, `NSTableHeaderView`, `NSTableHeaderCell` | **have (cell-based)**; editing, type-select, variable heights, column reordering and autosave **have**; cross-process drag session **missing** |
-  | column view (W5) | `NSBrowser` | **missing** |
+  | column view (W5) | `NSBrowser` | **have** (table-backed; the `NSMatrix` form is absent) |
   | search (W10) | `NSSearchField`, `NSSearchFieldCell` | **missing** |
   | progress (W6) | `NSProgressIndicator` | **missing** |
   | status bar | `NSTextField`, `NSTextFieldCell` | **have** |
@@ -571,6 +570,15 @@ the ingest are Apple's.
 ### W5 — Column view
 - **Deliverable:** `WSColumnView` over `NSBrowser`, with the preview column.
 - **Test:** `column_view.m` for the selection→next-column relationship and for the last column's preview.
+- **Done (2026-10-19):** `libagora-app`'s `NSBrowser`/`NSBrowserCell` are here as a table-backed browser (one
+  `NSScrollView`, one `NSTableView` per column, the 10.6 delegate surface; the `NSMatrix` form is named absent), and
+  `workspace/src/WSColumnView` puts it over the per-directory `WSItemModel`s with a fixed preview panel at the right
+  (icon, name, Kind, size, date). A folder selection loads the next column; a leaf adds none and previews. **MEASURED:**
+  `appkit-browser` (20 checks) and `workspace-column-view` (**21 checks**), plus the live `--column-view` scene.
+  **AND THE BROWSER FOUND A TABLE BUG:** `NSTableView` released the proposed selection set before copying it when a
+  delegate returned that same set, so the selection became empty; fixed and recorded in
+  `libagora-app/PROVENANCE.md` § 18. Still absent: a Quick Look preview inside the column (W9), column drag/drop and
+  rename.
 
 ### W6 — File operations, undo and progress
 - **Deliverable:** `WSFileOperations` + `WSTrash`: New Folder, Duplicate, Rename, Move/Copy To, Move to Trash,

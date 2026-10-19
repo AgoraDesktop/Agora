@@ -501,6 +501,14 @@ metaclass at `getAddrOfCanonicalSpecializedGenericMetaclassObject()`'s symbol an
 a compile-time unique name; the failure mode until then is the pre-S4b
 `objc_allocWithZone` trap.
 
+Re-measured (handoff §2.22): a user module built with
+`-Xfrontend -prespecialize-generic-metadata` that declares
+`public class Box<T>: NSObject` emits no `_OBJC_METACLASS_` and no
+prespecialized class metadata; `Box(1)` compiles to
+`__swift_instantiateConcreteTypeFromMangledName` + `objc_allocWithZone`, i.e.
+the S4b runtime path, and the resulting `Box<Int>` is a registered class object
+(`_TtGC1P3BoxSi_`) that answers `isKind(of:)` and lives in an `NSMutableArray`.
+
 A separate gap at the time: the `Update`/`FixedOrUpdate` strategy (resiliently
 *sized* stored fields) calls `swift_updateClassMetadata2`, which was compiled
 only at layout 1, so such a class did not link. It is implemented at layout 2
@@ -663,8 +671,10 @@ layout plus the `objc_init` registration, and flipping the default in
    typed dispatch, which is what Clang-compiled senders and libobjc2's own
    release path use. IRGen emits one typed record per (name, encoding) and
    mangles its symbol like Clang's GNUstep emitter (§7.1). The remaining
-   difference from Clang is only cosmetic: a method whose encoding cannot be
-   registered keeps an untyped record.
+   difference from Clang is only cosmetic. (The one case that used to be
+   missing - a *generic* initializer, whose `Self` result has no Clang type, so
+   the whole encoding was null - is fixed: a class-instance result is encoded as
+   `@`, which is what Clang itself emits. Handoff §2.22.)
 3. **Superclass as a name.** The v2 ABI allows `super_class` to be a *class name*
    until resolved; a Swift-emitted subclass of a Swift class could use the direct
    pointer, but cross-image (Swift class subclassing an imported ObjC class) must

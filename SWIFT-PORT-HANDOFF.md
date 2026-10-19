@@ -6,6 +6,15 @@ protocols, existentials, error handling and Unicode strings; and Swift can
 import Agora's `Foundation`, allocate its `NSObject` and message it. Verified by
 [`swift-toolchain/scripts/verify-swift-port.sh`](swift-toolchain/scripts/verify-swift-port.sh).
 
+**The Swift surface is finished.** The Cocoa value types carry the API a
+program actually calls (`Data` is a collection you can slice and mutate,
+`IndexSet`/`CharacterSet` are `SetAlgebra`, `Decimal` has arithmetic and
+literals, `Calendar` has the date math and `DateFormatter`), Agora's headers use
+the four annotations Darwin's do (`NS_TYPED_ENUM`, `NS_SWIFT_NAME`,
+`NS_REFINED_FOR_SWIFT`, `NS_SWIFT_SENDABLE`), the collection cores carry
+`NSUInteger` encodings on every count parameter, and a generic initializer has a
+typed selector record. §2.22.
+
 **Bridging is zero-copy now, as on Darwin.** A Swift `String`, `Array`,
 `Dictionary` or `Set` crosses into Objective-C as a *view* over the same storage
 (`__StringStorage`, `__SwiftDeferredNSArray`, `_SwiftDeferredNSDictionary`,
@@ -199,6 +208,7 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
 | **resilient classes** (layout 2) | a library-evolution class with an ObjC ancestor is relocated at runtime, registered, and gets correct field offsets (including through a resilient superclass chain); a pure Swift resilient class stays a non-class-object; `class_getInstanceVariable`, sizes and `isKind(of:)` verified; its `deinit` runs (S5) |
 | **runtime-pattern classes without ObjC ancestry** | a non-generic class whose superclass is a generic Swift class (`class Sub: Base<Int>`) or a pure Swift generic class itself: metadata is instantiated at runtime, stays a plain Swift metadata object, and never claims a class-object `isa`; fields, inheritance and `deinit` work (§2.21) |
 | **zero-copy bridges** | `String`/`Array`/`Dictionary`/`Set` cross as `__StringStorage` / `__SwiftDeferredNSArray` / `_SwiftDeferredNSDictionary` / `_SwiftDeferredNSSet` views (the storage classes are registered GNUstep class objects), ObjC primitives (`-count`, `-objectAtIndex:`, `-substringFromIndex:`, `-allObjects`, `-objectForKey:`) reach the Swift overrides, and the inverse bridge adopts the storage back (§2.21) |
+| **the Cocoa value types** | `Data` is a `RandomAccessCollection`/`MutableCollection`, `IndexSet`/`CharacterSet` are `SetAlgebra`, `Decimal` has arithmetic + literals, `Calendar` has the date arithmetic and `DateFormatter`; `NSNotificationName` is a typed enum, `__getCharacters` is the refined door, and `NSNull`/`NSUUID` are `Sendable` (§2.22) |
 | **library evolution, resiliently sized members** (layout 2) | a class with a stored property of a non-frozen struct from another module: `Update` for a pure Swift class, `Singleton` for one libobjc2 allocates from; a client compiled against v1 runs against a v2 library whose struct grew, `-Onone` and `-O` |
 | **typed selectors** (S5) | one selector record per (name, encoding) in `__objc_selectors`, symbol-mangled like Clang's GNUstep emitter; typed send reaches Swift methods, including overrides of inherited selectors (`-dealloc`, `-init`); untyped sends keep working through the untyped slot; retain/release from C balances and `deinit` runs exactly once |
 | **default flags** | `swiftc prog.swift` enables Objective-C interop and selects the GNUstep runtime ABI family without any `-Xfrontend` flags |
@@ -1364,12 +1374,15 @@ autorelease recursion and the `-isNSString__` probe), and the overlay now
 bridges by view in both directions. See §2.21 for the measurements.
 
 
-Also still partial: the long tails of the value types (`Data`'s full collection
-API, `IndexSet`'s and `CharacterSet`'s set algebra, `Decimal` arithmetic,
-`Calendar`'s formatting), and the header-annotation surface Darwin gets from
-`NS_SWIFT_NAME`/`NS_REFINED_FOR_SWIFT`/`NS_TYPED_ENUM`/`NS_SWIFT_SENDABLE`
-(none of which Agora's headers use yet). The `ObjectiveC` module and the
-bridges are what those annotations are worth having for.
+The value types' long tails and the header annotations are done too (§2.22):
+`Data` is a `RandomAccessCollection`/`MutableCollection` with the mutation
+surface, `IndexSet` and `CharacterSet` are `SetAlgebra`, `Decimal` has its
+arithmetic and literal conformances, `Calendar` has the date math and
+`DateFormatter`, and Agora's headers use `NS_TYPED_ENUM`, `NS_SWIFT_NAME`,
+`NS_REFINED_FOR_SWIFT` and `NS_SWIFT_SENDABLE`. The one item that is not a
+missing feature is the *unreachable* prespecialized-generic-with-ObjC-ancestor
+case (§2.10's boundary note, re-measured in §2.22); everything a program can
+instantiate today works.
 
 ---
 
@@ -1481,12 +1494,100 @@ so this is also the first time the class-cluster primitives are exercised from
 the other direction. They are correct because they were written over the
 primitives rather than the ivars; the zero-copy bridge is what proves it.
 
+### 2.22 Finishing the surface: typed parameters, value types, annotations
+
+This round took the four items that were left over from §5, and the work split
+into one compiler change, one stdlib change, one overlay change and two Agora
+bug fixes.
+
+**The `NSUInteger` *parameter* selectors.** §2.21 fixed `count`; the same
+(name, encoding) mismatch existed on every collection method that takes a
+count in a scalar parameter: `-getObjects:andKeys:count:`,
+`-initWithObjects:count:` and
+`-countByEnumeratingWithState:objects:count:` (whose return value is an
+`NSUInteger` too). The shadow protocols and the concrete storage classes now
+use `UInt` for those parameters and the enumeration result, so a
+Clang-compiled fast-enumeration loop or a `-getObjects:andKeys:count:` walk
+reaches the Swift implementation instead of the inherited Foundation one. The
+call sites inside the `__Cocoa*` wrappers convert at their edge.
+(`-getObjects:range:` has no scalar count - its arguments are a pointer and
+the `NSRange` struct - so its encoding did not change.)
+
+**Typed initializer records (the S5 residual).** `getObjCEncodingForTypes()`
+returned a null encoding when a method's *result* type had no Clang type. That
+is exactly a generic class's initializer (`Self`/`Box<T>`), so the thunk kept
+an untyped selector record and a typed `init` send missed it. An Objective-C
+method can only return an object as `id`, so a class-instance result that has
+no Clang type is now encoded as `@`. Measured on `class Box<T>: NSObject`: the
+method list carries `init @16@0:8` instead of `init` with a null encoding.
+
+**The value types' long tails.** The overlay's hand-written Cocoa surface now
+carries what Darwin's has beyond the first draft:
+
+| Type | Added |
+|---|---|
+| `Data` | `RandomAccessCollection` + `MutableCollection` (indexes, `first`/`last`, slicing), `init(UnsafeRawBufferPointer)`, `init(bytes:count:)`, `subdata(in:)`, `range(of:options:in:)`, `replaceSubrange`, `insert`, `remove`, `removeSubrange`, `removeAll` |
+| `IndexSet` | `SetAlgebra` (`union`, `intersection`, `symmetricDifference`, `subtracting`, `form*`, `insert`, `remove`, `update`), `init<S: Sequence>`, `count(in:)`, `contains(integersIn:)`, `remove(integersIn:)` |
+| `CharacterSet` | `SetAlgebra` over `Unicode.Scalar` (the same set operations), the remaining standard sets (`alphanumerics`, `punctuationCharacters`, `controlCharacters`, `lowercaseLetters`, `uppercaseLetters`, `symbols`, `illegalCharacters`, `capitalizedLetters`, `nonBaseCharacters`, `decomposables`, the six `url*Allowed` sets) |
+| `Decimal` | `+`, `-`, `*`, `/`, the compound assignments, unary `-`, `zero`/`one`/`nan`, `isZero`, `sign`, `magnitude`, `ExpressibleByIntegerLiteral`/`FloatLiteral` |
+| `Calendar` | `startOfDay(for:)`, `date(byAdding:value:to:)`, `date(byAdding:to:)`, `dateComponents(_:from:to:)`, `dateComponents(in:from:)`, `component(_:from:)`, `range(of:in:for:)`, `range(of:start:interval:for:)`, `dateInterval(of:for:)`, `compare(_:to:toGranularity:)`, `isDate(_:equalTo:toGranularity:)`, `isDate(_:inSameDayAs:)`, `isDateInToday/Yesterday/Tomorrow/Weekend` |
+| `Date`/formatting | `TimeInterval`, `typealias DateFormatter = NSDateFormatter`, `Date.formatted(date:time:)`, `Date.ISO8601Format()` |
+
+**The header annotations.** `NS_TYPED_ENUM`/`NS_TYPED_EXTENSIBLE_ENUM` were
+defined as *bare names*; they now expand to Clang's `swift_wrapper(struct)`
+(the attribute Darwin's SDK uses), and `NS_SWIFT_NAME`,
+`NS_REFINED_FOR_SWIFT` and `NS_SWIFT_SENDABLE` are defined for the first time
+(`swift_name`, `swift_private`, `swift_attr("@Sendable")`). Used where the
+effect is observable and the change is safe:
+
+- `NSNotificationName` is `NS_TYPED_EXTENSIBLE_ENUM`: Swift sees the struct
+  wrapper with `rawValue` and the importer's automatic `_ObjectiveCBridgeable`
+  (the overlay's hand-written `Notification.Name` struct is now a typealias);
+- `-[NSIndexSet countOfIndexesInRange:]` carries `NS_SWIFT_NAME(count(in:))`;
+- `-[NSString getCharacters:range:]` carries `NS_REFINED_FOR_SWIFT`, so it is
+  `__getCharacters(_:range:)` in Swift (the overlay's string bridge calls the
+  refined name);
+- `NSNull` and `NSUUID` are `NS_SWIFT_SENDABLE`.
+
+**Two Agora bugs the gate found.**
+
+1. `-[NSCalendar setTimeZone:]` stored the zone without retaining it. The
+   overlay's `calendar.timeZone = TimeZone(identifier: "UTC")` passes a
+   temporary, so the next `-startOfDayForDate:` read freed memory. The setter
+   retains now (the class has no `-dealloc`, so the calendar keeps the zones it
+   was given).
+2. The overlay's `IndexSet` iterator started at `-1`, but
+   `-indexGreaterThanIndex:` takes an `NSUInteger`: the sentinel arrives as its
+   unsigned bit pattern, no index is greater, and iteration yielded nothing.
+   It starts at `first` now. (The `Set(indexSet)` path in the new gate is what
+   caught it; nothing had iterated an `IndexSet` before.)
+
+**The prespecialized-generic boundary, re-measured.** §2.10 said a
+prespecialized generic class with an ObjC ancestor keeps a null `isa` and
+would trap in `objc_allocWithZone`. The case is still unreachable: a user
+module built with `-Xfrontend -prespecialize-generic-metadata`, declaring
+`public class Box<T>: NSObject` and instantiating `Box<Int>`, emits **no**
+`_OBJC_METACLASS_` symbol and no prespecialized class metadata - `makeInt()`
+compiles to `__swift_instantiateConcreteTypeFromMangledName` plus
+`objc_allocWithZone`, i.e. the S4b runtime path - and the resulting
+`Box<Int>` is a registered class object named `_TtGC1P3BoxSi_` that answers
+`isKind(of:)` and lives in an `NSMutableArray`. Closing the compiler case
+(when a stdlib-like module first needs it) means having
+`SpecializedGenericClassMetadataBuilder` emit a GNUstep metaclass and a
+per-specialization name and putting the metadata in `__objc_classes`; the
+handoff records it rather than implementing an unreachable path.
+
+Verified by the language gate's new "value types and header annotations"
+section (the table above, the four annotations, and `Sendable`), the existing
+bridging/zero-copy sections, and the whole gate suite plus both probes against
+the installed toolchain.
+
 ---
 
 ## 3. Change inventory
 
-`swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 57 files,
-~2150 insertions. The layout/registration table is from two rounds ago, the S1
+`swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 59 files,
+~2240 insertions. The layout/registration table is from two rounds ago, the S1
 emission from three, S4/S4b from before that, S5 and the flip from earlier, the
 library-evolution `Update` strategy and GNUstep-shaped categories from two
 rounds ago, the importer's bridge check (§2.19) from the last one, and this
@@ -1496,15 +1597,21 @@ is `0006-libagora-objc-loadClass-np.patch`,
 `0008-libagora-objc-dtable-rebase-untyped.patch` and (this round)
 `0011-libagora-objc-autorelease-pool-init.patch`; the Agora-side shims are
 `0007-libagora-base-tagged-string-probe.patch` (now also the `-isNSString__`
-door) and `0010-libagora-base-swift-bridge-attributes.patch`.
+door), `0010-libagora-base-swift-bridge-attributes.patch`,
+`0012-libagora-base-swift-annotations.patch` and
+`0013-libagora-base-nscalendar-retain-timezone.patch`. `0009` now also carries
+the `NS_SWIFT_NAME`/`NS_REFINED_FOR_SWIFT` lines that land in `NSIndexSet.h`
+and `NSString.h`.
 
 | File (bridging) | Change |
 |---|---|
 | `lib/IRGen/GenClass.{h,cpp}` | `emitGNUstepCategory()`: a `struct objc_category` with GNUstep method lists; `emitGNUstepCategoryData()` puts it in `__objc_cats` and marks it used |
 | `lib/IRGen/GenDecl.cpp` | at layout 2 an extension's category takes that path instead of Apple's `category_t *` list |
-| `lib/IRGen/GenMeta.cpp` | this round: `isGNUstepClassObject()` (ObjC object model **or** `@objc` ancestry) for the pattern metaclass, and a runtime-pattern class without ObjC ancestry keeps a null `isa` (§2.21) |
+| `lib/IRGen/GenMeta.cpp` | `isGNUstepClassObject()` (ObjC object model **or** `@objc` ancestry) for the pattern metaclass, and a runtime-pattern class without ObjC ancestry keeps a null `isa` (§2.21) |
+| `lib/IRGen/GenObjC.cpp` | a class-instance result with no Clang type (a generic initializer's `Self`) is encoded as `@`, so the thunk gets a typed selector record (§2.22) |
 | `stdlib/public/core/ShadowProtocols.swift` | `_NSSetCore.count`/`_NSDictionaryCore.count` are `UInt` (`NSUInteger`'s `Q`), so Clang's typed `count` reaches the Swift override (§2.21) |
 | `stdlib/public/core/{Set,Dictionary}{Bridging,Storage}.swift` | the four storage classes answer `count` as `UInt`; the `__Cocoa*` wrappers convert to `Int` at their edge (§2.21) |
+| `stdlib/public/core/ShadowProtocols.swift`, the four collection storage files, `ContiguousArrayBuffer.swift`, `SwiftNativeNSArray.swift`, `Hashing.swift` | `count`, `getObjects:andKeys:count:`, `initWithObjects:count:` and `countByEnumeratingWithState:objects:count:` take/return `UInt` (`NSUInteger`'s `Q`), so Clang's typed sends reach the Swift implementations (§2.22) |
 | `libagora-base/NSString.m` | `+newTaggedNSStringWithASCIIBytes_:length_:` answers nil (the Darwin SPI the stdlib probes; nil = use the storage fallback); `-isNSString__` answers YES (the stdlib's "is the other object a string?" probe, §2.21) |
 | `libagora-objc/arc.mm` | `autorelease()` calls the idempotent `initAutorelease()` first, so the first Swift object autoreleased in a process does not recurse through `NSObject -autorelease` (§2.21; patch 0011) |
 | `libagora-objc/dtable.c` | `rebaseDtableRecursive()` reinstalls each of the class's own methods under its *untyped* selector index too (TDD mode), so `class_setSuperclass` does not lose an override to the new parent |
@@ -1624,8 +1731,8 @@ addition, and a plain `git diff` omits it.
 swift-toolchain/scripts/build-swift-toolchain.sh
 
 # the language/runtime gate (installed toolchain, now layout 2; also checks
-# the Foundation overlay's value bridges, swift_bridge, and the zero-copy
-# collection/string views)
+# the Foundation overlay's value bridges, swift_bridge, the zero-copy
+# collection/string views, and the value types + header annotations)
 swift-toolchain/scripts/verify-swift-port.sh
 
 # the S1 gate (layout-2 test compiler; builds the frontend if needed)
@@ -1701,9 +1808,10 @@ done
   wrappers `bin/swiftc-layout2` (frontend only) and `bin/swiftc-layout2-stdlib`
   (frontend + build-tree stdlib).
 - **Fork working tree** (`~/.agora-swift/src/swift`): all of patch 0003,
-  uncommitted by design (now including the `Config.h` default and the two
-  no-interop fixes). The Agora repository has the doc update committed
-  (`76a5ad5` for S5; the flip is the next commit); `swift-toolchain/` and
+  uncommitted by design (59 files now, including the class-object predicate,
+  the `NSUInteger` parameter encodings and the initializer encoding). The Agora
+  repository has each round's doc update committed (`53657c7` for zero-copy
+  bridging, `2a7c7a1` for this round); `swift-toolchain/` and
   `swift-interop-probe/` are git-ignored local trees.
 - **To change the layout**: `AGORA_SWIFT_CLASS_LAYOUT=0` (or `2`, the default)
   `swift-toolchain/scripts/build-swift-toolchain.sh`. The build script always
@@ -1715,15 +1823,13 @@ done
   `swift_bridge` headers. It belongs to the *installed* toolchain; the
   build-tree compiler does not have it, which is why the language gate skips
   the bridging checks when `VERIFY_SWIFTC` points there.
-- **This round's install**: `swift-frontend` was rebuilt and replaced
-  (`ninja swift-frontend`), `libswiftCore.so` was rebuilt for the
-  `__SwiftValue -copy` fix (`ninja lib/swift/linux/libswiftCore.so` with
-  `CPATH`/`LIBRARY_PATH` pointing at `build-prefix`), and the two overlay
-  modules were installed next to the target stdlib:
-  `usr/lib/swift/linux/ObjectiveC.swiftmodule` + `libObjectiveC.so` (new) and
-  the Foundation overlay. The authoritative rebuild is
-  `swift-toolchain/scripts/build-swift-toolchain.sh` (it now builds the
-  ObjectiveC module before the Foundation overlay).
+- **This round's install**: `swift-frontend` and `libswiftCore.so` were rebuilt
+  with the class-object, typed-parameter and initializer-encoding changes, and
+  the ObjectiveC and Foundation overlays were reinstalled next to the target
+  stdlib (the Foundation overlay now carries the value types and the annotation
+  surface). The authoritative rebuild is
+  `swift-toolchain/scripts/build-swift-toolchain.sh`; it builds the ObjectiveC
+  module before the Foundation overlay and reinstalls both.
 - **Clang module cache**: a compiler that predates a change to the imported
   signature must not share a cache with one that has it; use
   `-module-cache-path` (or clear `~/.cache/clang/ModuleCache`) when comparing
@@ -1746,8 +1852,8 @@ done
   ~5 minutes). The language gate's new export check runs against whichever
   `libswiftCore` the test program links.
 - **Current results**: installed toolchain - `verify-swift-port.sh` all green
-  (including S6's interop-export check and this round's `swift_bridge`
-  section), `run-native-probe.sh` 17/17 (only the known `#selector` gap), the
+  (bridging, `swift_bridge`, zero-copy and value-types/annotations sections),
+  `run-native-probe.sh` every check (including `#selector`), the
   library-evolution gate green (`Update` + `Singleton`, evolved v2 layout at
   `-Onone` and `-O`), and with
   `SWIFTC_LAYOUT2=$T/bin/swiftc STDLIB_DIR=$T/lib/swift`: `S1 gate: ok`,
@@ -1888,12 +1994,21 @@ Debugging techniques that produced the findings above:
    native probe harness and passes every check against the installed
    toolchain. The published-container `run-probe.sh` and
    `compat/ObjCInteropShim.c` were deleted in S6 (§2.13).
-11. **What is genuinely left** is polish, not structure: the value types' long
-   tails (§2.20), the `NS_SWIFT_NAME`/`NS_TYPED_ENUM` header annotations, the
-   remaining `NSUInteger`-encoded *parameter* selectors (`getObjects:range:`,
-   `getObjects:andKeys:count:`, `countByEnumeratingWithState:objects:count:`)
-   if an Objective-C caller ever sends them typed, and the prespecialized
-   generic-with-ObjC-ancestor case (§2.10). None of them blocks the bridge.
+11. **The surface is finished** (§2.22): the value types' long tails, the four
+   header annotations, the `NSUInteger`-encoded *parameter* selectors
+   (`getObjects:range:`, `getObjects:andKeys:count:`,
+   `countByEnumeratingWithState:objects:count:`, `initWithObjects:count:`) and
+   the typed initializer encoding are all implemented and gated. What is left
+   is one *unreachable* compiler case: prespecialized generic class metadata
+   for a class with an Objective-C ancestor (§2.10, re-measured in §2.22). No
+   module the toolchain builds emits one, so no program can reach it; closing
+   it is a compiler task for the day a stdlib-like module declares such a
+   class, and the handoff records what it would take.
+12. **Two Agora-side bugs surfaced by the value-type gate and are fixed**
+   (§2.22): `NSCalendar -setTimeZone:` stored the zone without retaining it
+   (the next `-startOfDayForDate:` read freed memory), and `IndexSet`'s Swift
+   iterator started at `-1` against an `NSUInteger` API, so iteration yielded
+   nothing.
 
 ---
 
@@ -1922,9 +2037,15 @@ swift-toolchain/
 │   │                                               NSDictionary ->
 │   │                                               [AnyHashable: Any], NSSet ->
 │   │                                               Set<AnyHashable>; §2.19/2.20)
-│   └── 0011-libagora-objc-autorelease-pool-init.patch 1 file (arc.mm: choose the
-│                                                   ARC pool before the first
-│                                                   autorelease; §2.21)
+│   ├── 0011-libagora-objc-autorelease-pool-init.patch 1 file (arc.mm: choose the
+│   │                                               ARC pool before the first
+│   │                                               autorelease; §2.21)
+│   ├── 0012-libagora-base-swift-annotations.patch 6 headers (the four
+│   │                                               annotations, NSNotificationName
+│   │                                               as a typed enum; §2.22)
+│   └── 0013-libagora-base-nscalendar-retain-timezone.patch 1 file (NSCalendar
+│                                                   keeps the zone it is given;
+│                                                   §2.22)
 ├── objectivec-overlay/
 │   └── ObjectiveC.swift                       the `ObjectiveC` module the
 │                                              importer looks BOOL/SEL/NSZone
@@ -2067,7 +2188,17 @@ storage classes (they are reparented to Foundation's collections but answer
 `Native` to the object-model question), giving the collection cores' `count` the
 `NSUInteger` encoding Clang sends (typed dispatch keys on (name, encoding)), a
 libobjc2 autorelease-pool initialisation, and an `-isNSString__` door in
-NSString. The installed toolchain no longer borrows the bootstrap's runtime either:
+NSString. The surface is finished as well (§2.22): every count *parameter* in
+the collection cores carries the `NSUInteger` encoding, a generic initializer
+gets a typed selector record, the Cocoa value types carry the API a program
+actually calls (`Data` as a collection, `IndexSet`/`CharacterSet` as
+`SetAlgebra`, `Decimal` arithmetic, `Calendar` date math and `DateFormatter`),
+and Agora's headers use `NS_TYPED_ENUM`/`NS_SWIFT_NAME`/`NS_REFINED_FOR_SWIFT`/
+`NS_SWIFT_SENDABLE`. Two Agora bugs fell out of the new gate: an unretained
+`NSCalendar` time zone (use-after-free) and an `IndexSet` iterator that started
+at `-1` against an `NSUInteger` API (empty iteration); both are fixed. The only
+item left is the *unreachable* prespecialized-generic-with-ObjC-ancestor
+compiler case, recorded with what it would take. The installed toolchain no longer borrows the bootstrap's runtime either:
 it ships the host Swift runtime and clang it needs and resolves them relative to
 itself, so the bootstrap is build-time only. The rest of this summary is the
 previous rounds' record of how the compiler got here.

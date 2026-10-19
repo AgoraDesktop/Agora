@@ -6,6 +6,20 @@ protocols, existentials, error handling and Unicode strings; and Swift can
 import Agora's `Foundation`, allocate its `NSObject` and message it. Verified by
 [`swift-toolchain/scripts/verify-swift-port.sh`](swift-toolchain/scripts/verify-swift-port.sh).
 
+**Bridging is zero-copy now, as on Darwin.** A Swift `String`, `Array`,
+`Dictionary` or `Set` crosses into Objective-C as a *view* over the same storage
+(`__StringStorage`, `__SwiftDeferredNSArray`, `_SwiftDeferredNSDictionary`,
+`_SwiftDeferredNSSet`, or the contiguous storage itself), and the inverse bridge
+adopts that storage instead of copying. Getting there required closing three
+defects, each of which crashed: a non-generic Swift class with a generic
+superclass was emitted as a class object although its superclass never could be
+one; the stdlib's `@_swift_native_objc_runtime_base` collection storages were
+*not* emitted as class objects although they are reparented to Foundation's
+collections; and `count`'s `NSUInteger` (`Q`) encoding did not match the Swift
+`Int` (`q`), so Clang's typed send reached the inherited `NSDictionary`/`NSSet`
+method. A libobjc2 autorelease recursion and the `-isNSString__` probe were the
+last two. §2.21.
+
 **Foundation bridging works: the toolchain now ships a Swift Foundation
 overlay.** `String`/`Substring` ↔ `NSString`, `Array` ↔ `NSArray`, `Dictionary` ↔
 `NSDictionary`, `Set` ↔ `NSSet`, `Int`/`Double`/`Bool` ↔ `NSNumber`, and
@@ -183,6 +197,8 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
 | **generic classes, layout 2** | runtime-instantiated metadata (`Box<T>`, `Pair<A,B>`, class-typed fields, generic subclasses), prespecialized metadata, `Array`/`Set`/`Dictionary`, casts between specializations, `AnyObject` boxing, `Mirror`, `deinit` of a generic instance |
 | **generic classes with an ObjC ancestor** | `class Box<T>: NSObject` is a registered GNUstep class object: unique mangled names, `-init` reaches the Swift initializer, `objc_getClass` round-trip, metaclass chain, `NSMutableArray` ownership, and `deinit` runs (S5) |
 | **resilient classes** (layout 2) | a library-evolution class with an ObjC ancestor is relocated at runtime, registered, and gets correct field offsets (including through a resilient superclass chain); a pure Swift resilient class stays a non-class-object; `class_getInstanceVariable`, sizes and `isKind(of:)` verified; its `deinit` runs (S5) |
+| **runtime-pattern classes without ObjC ancestry** | a non-generic class whose superclass is a generic Swift class (`class Sub: Base<Int>`) or a pure Swift generic class itself: metadata is instantiated at runtime, stays a plain Swift metadata object, and never claims a class-object `isa`; fields, inheritance and `deinit` work (§2.21) |
+| **zero-copy bridges** | `String`/`Array`/`Dictionary`/`Set` cross as `__StringStorage` / `__SwiftDeferredNSArray` / `_SwiftDeferredNSDictionary` / `_SwiftDeferredNSSet` views (the storage classes are registered GNUstep class objects), ObjC primitives (`-count`, `-objectAtIndex:`, `-substringFromIndex:`, `-allObjects`, `-objectForKey:`) reach the Swift overrides, and the inverse bridge adopts the storage back (§2.21) |
 | **library evolution, resiliently sized members** (layout 2) | a class with a stored property of a non-frozen struct from another module: `Update` for a pure Swift class, `Singleton` for one libobjc2 allocates from; a client compiled against v1 runs against a v2 library whose struct grew, `-Onone` and `-O` |
 | **typed selectors** (S5) | one selector record per (name, encoding) in `__objc_selectors`, symbol-mangled like Clang's GNUstep emitter; typed send reaches Swift methods, including overrides of inherited selectors (`-dealloc`, `-init`); untyped sends keep working through the untyped slot; retain/release from C balances and `deinit` runs exactly once |
 | **default flags** | `swiftc prog.swift` enables Objective-C interop and selects the GNUstep runtime ABI family without any `-Xfrontend` flags |
@@ -193,18 +209,22 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
 **What the installed (layout 2) toolchain still does not do.** The class ABI is
 closed (S1-S6); these are independent of it:
 
-- Foundation **bridging** works through the overlay (§2.16), with the boundary
-  Swift itself draws: `as`/`as?` conversions between the bridged types, and
-  bridging at `id` parameters, are supported; an imported `NSString *` /
-  `NSArray *` parameter still *imports* as the Objective-C class (so call it
-  with `as NSString`, the same spelling the upstream corelibs toolchain needs
-  for a variable), because the overlay does not re-declare Agora's Foundation
-  API surface in Swift. That re-declaration (the Cocoa value-type surface) is
-  the remaining piece.
+- Foundation **bridging** is at feature parity with Darwin's (§2.16, §2.19,
+  §2.20): the `ObjectiveC` module exists (`BOOL` -> `Bool`, `#selector`,
+  `NSZone`), `AnyHashable` bridges to `NSObject`, every fixed-width number and
+  `Float` bridges to `NSNumber`, `NSString *`/`NSArray *`/`NSDictionary *`/
+  `NSSet *` import as `String`/`[Any]`/`[AnyHashable: Any]`/`Set<AnyHashable>`,
+  and the Foundation value types (`Data`, `Date`, `URL`, `UUID`, `IndexPath`,
+  `TimeZone`, `Locale`, `Calendar`, `DateComponents`, `DateInterval`,
+  `Notification`, `PersonNameComponents`, `CharacterSet`, `IndexSet`, `Decimal`,
+  `AffineTransform`, `NSAttributedString.Key`) bridge to their classes, and the
+  bridge is **zero-copy in both directions** (§2.21), like Darwin's.
 - **`__SwiftValue` and the `SwiftNativeNS*` wrapper classes** were expected to
-  fail at layout 0 (no Swift heap header); at layout 2 they carry one. Only the
-  class-identity side is exercised (`__SwiftValue` above); their Foundation
-  bridging paths are still untested because there is no overlay to drive them.
+  fail at layout 0 (no Swift heap header); at layout 2 they carry one. The
+  class-identity side is exercised (`__SwiftValue` above), and the box's
+  `-copy` path (Agora's `NSObject` makes `-copy` the override point) was fixed
+  in §2.20. What is left untested is their deeper CoreFoundation fast paths,
+  which Agora's classes do not implement and the overlay does not rely on.
 - **Property-shaped accessors - done** (§2.17). Agora's read-only getters
   (`length`, `UTF8String`, `count`, `firstObject`, `allKeys`, `domain`, `code`,
   `userInfo`, ...) are `@property` declarations now, so Swift reads
@@ -1036,8 +1056,8 @@ declares (`swift-toolchain/foundation-overlay/FoundationOverlay.swift`):
 
 | Bridge | Direction |
 |---|---|
-| `String`, `Substring` ↔ `NSString` | UTF-16 through `-initWithCharacters:length:` / `-getCharacters:range:` |
-| `Array` ↔ `NSArray`, `Dictionary` ↔ `NSDictionary`, `Set` ↔ `NSSet` | copies into/out of Agora's mutable collections; elements bridge with `_bridgeAnythingToObjectiveC` |
+| `String`, `Substring` ↔ `NSString` | UTF-16 through `-initWithCharacters:length:` / `-getCharacters:range:` (this round; §2.21 replaces the copy with the stdlib's view) |
+| `Array` ↔ `NSArray`, `Dictionary` ↔ `NSDictionary`, `Set` ↔ `NSSet` | copies into/out of Agora's mutable collections; elements bridge with `_bridgeAnythingToObjectiveC` (this round; §2.21 replaces the copy with the stdlib's views) |
 | `Int`, `Double`, `Bool` ↔ `NSNumber` | the `+numberWith…` factories and the `…Value` accessors |
 | `Error` ↔ `NSError` | `_convertErrorToNSError`/`_convertNSErrorToError` (the names SILGen looks up) plus `NSError: Error` |
 | `CustomNSError`, `LocalizedError` | the protocols, their defaults, and `_getErrorDefaultUserInfo` (the symbol the runtime `dlsym`s to fill an NSError's userInfo) |
@@ -1046,7 +1066,11 @@ Bridging is deliberately by **copying**, not through the stdlib's
 `SwiftNativeNS*` machinery: those classes are reparented to Darwin's
 CoreFoundation classes and the fast paths send CoreFoundation SPI to them
 (`+newTaggedNSStringWithASCIIBytes_:length_:`, which Agora's `NSString` does not
-implement and which raised on the base class).
+implement and which raised on the base class). **Superseded by §2.21**: the
+overlay uses those views now, and the two SPI gaps named here (the tagged-string
+probe and the base classes honouring subclass primitives) were closed on the
+way - the probe by answering nil, the primitives by the typed-selector
+encodings.
 
 **Two bugs this exposed.**
 
@@ -1177,36 +1201,320 @@ finds no bridging to do, and passes the Swift value's representation - e.g. a
 The process dies in `-[NSError initWithDomain:code:userInfo:]`'s `-copy` of
 `__EmptyDictionarySingleton`. Fixing that means teaching the native-to-foreign
 thunk that a `swift_bridge`d parameter still needs a `_bridgeToObjectiveC`
-conversion (or the importer keeping the unbridged type in the SIL signature) -
-an upstream-sized change, deliberately not attempted here. The attributes were
-added, exercised, and removed; the overlay's hand-written surface is the
-supported path.
+conversion (or the importer keeping the unbridged type in the SIL signature).
+That gap is closed in §2.19; what was still missing at the time of this round
+was the `AnyHashable` bridge, not the importer.
 
 Verified by the language gate's bridging section: `NSError(domain:code:userInfo:)`
 with Swift values, iteration over all three collection classes, `NSString(string:)`,
 and `NSObject` in `AnyHashable` - plus the whole gate suite (both probes, S1,
 S4, S4b/S4c, S5, library evolution) against the installed toolchain.
 
+### 2.19 `swift_bridge`: the importer/thunk gap
+
+The Clang attribute was the last piece of the Cocoa surface: with
+`__attribute__((swift_bridge("Swift.String")))` on `NSString` the importer
+rewrites every `NSString *` to Swift `String`, and `NSArray` gets the same for
+`[Any]` (patch `0010-libagora-base-swift-bridge-attributes.patch`). What the
+previous round could not do was make that safe, because the rewrite happens at
+the *AST* level while the Objective-C ABI is reconstructed from it later:
+
+```
+Clang:  - (void)initWithDomain:(NSString *)d code:(NSInteger)c
+                         userInfo:(NSDictionary *)u;
+AST:    init(domain: String, code: Int, userInfo: [AnyHashable : Any]?)
+SIL:    @convention(objc_method) (NSString, Int, NSDictionary, ...)   <-- rebuilt
+```
+
+`TypeConverter::getLoweredFormalTypes()` builds that third line by asking each
+bridged Swift type for its `_ObjectiveCBridgeable._ObjectiveCType`, and SILGen
+then inserts `_bridgeToObjectiveC()` / `_unconditionallyBridgeFromObjectiveC()`
+at the boundary - which is why a *direct* call with a `String` already worked
+and produced the right message send. When the conformance is not there the
+lookup returns the input unchanged (`getLoweredCBridgedType()`'s
+`ForeignRepresentableKind::None` arm), and the compiler then holds a Swift value
+type in an Objective-C argument slot. That is the failure the previous round
+saw: IRGen's `SignatureExpansion::expandExternalSignatureTypes()` asks Clang
+for a type for `Optional<Dictionary<AnyHashable, Any>>`, gets a null `QualType`
+and asserts (`Cannot retrieve a NULL type pointer`). The previous round recorded
+the other half of the same defect - a build in which IRGen did produce a call,
+and a Swift `Dictionary`'s storage pointer went out where the `NSDictionary *`
+belonged.
+
+The conformance the lookup wanted was `AnyHashable: _ObjectiveCBridgeable`,
+which on Darwin lives in the **`ObjectiveC` overlay** - the same overlay this
+toolchain does not build (no `#selector`, §2.16). So `[AnyHashable: Any]` was
+never representable in Objective-C here (a plain `@objc func` taking one is
+rejected with "Swift structs cannot be represented in Objective-C"), while
+`String` and `[Any]` were.
+
+**The fix is in the importer, at the point where the choice is made.** A
+`swift_bridge` attribute is a claim about a Swift type, not a promise that the
+conformance exists, so `adjustTypeForConcreteImport()` now adopts the bridged
+type only when the round trip is possible:
+
+```cpp
+// lib/ClangImporter/ImportType.cpp
+static bool canBridgeBackToObjectiveC(ClangImporter::Implementation &impl,
+                                      Type bridgedType) {
+  if (!bridgedType->isPotentiallyBridgedValueType())
+    return true;                       // classes and `id`/`Any`: identity
+  auto *foundation = impl.tryLoadFoundationModule();
+  if (!foundation) return false;       // no overlay: keep the ObjC types
+  return bridgedType->isRepresentableIn(ForeignLanguage::ObjectiveC, foundation);
+}
+```
+
+Applied to both places the hint can rewrite a signature (the `NSString *`
+global special case and the general `ImportHint::ObjCBridged` case). The
+consequence is a *graceful* fallback rather than a crash: with the attribute on
+`NSDictionary`, `NSException.userInfo` keeps importing as `NSDictionary` and
+passing a Swift `[AnyHashable: Any]` is an honest type error; with the
+attribute off, nothing changes at all. The check costs a cached conformance
+lookup per bridged type, and a negative result does not stick: `ForeignRepresentableCache`
+entries are generation-tagged, and the module that supplies the conformance is
+loaded through `tryLoadFoundationModule()` before the question is asked.
+
+It is a source change for Swift, the same kind §2.17 recorded for the property
+spellings: a parameter that was `NSString` is now `String`, so an `NSString`
+*variable* at that boundary needs `as String` (a `String` needs nothing, and a
+literal needs nothing); and a parameter that was `NSArray` is now `[Any]`, so an
+`NSArray` variable needs `as! [Any]`. Objective-C is untouched - the selectors,
+the encodings and the ABI are the ones the headers declared. The probes, the
+overlay and every gate script were updated where they crossed those boundaries.
+
+Verified by the language gate's new `swift_bridge` section - `NSString *` ->
+`String` at a parameter, a result, a property getter and an initializer;
+`NSArray *` -> `[Any]`; `String` -> `NSString *` on the way back; and the
+fallback (`NSException(name:reason:userInfo:)` with an `NSDictionary`) - plus
+both probes, the language/runtime gate and the S1, S4, S4b/S4c, S5 and
+library-evolution gates against the installed toolchain. The before/after is
+reproducible: the same `neg2`-shaped program aborts the *previous* frontend
+with `While using clang to expand signature for type '@convention(objc_method)
+(NSException) -> @autoreleased Optional<Dictionary<AnyHashable, Any>>'`, and
+compiles (or reports the type error) with this one.
+
+---
+
+### 2.20 Bridging parity with Apple
+
+The previous round closed the `swift_bridge` *mechanism* (§2.19) but left four
+kinds of gap against Darwin. This round closes them:
+
+**1. The `ObjectiveC` module.** The Clang importer looks three types up *by name*
+in a module called `ObjectiveC`, and without it (a) every `BOOL` imported as
+`UInt8` - Agora's `objc/runtime.h` makes it `unsigned char`, and the importer's
+`ObjCBool` mapping only fires when Clang's `BOOLDecl` is recorded (it is only
+recorded from an `__objc_yes`/`__objc_no` literal) or the typedef is C's
+`bool`; (b) `SEL`/`#selector` were unavailable; (c) `NSZone` had no Swift
+spelling. `swift-toolchain/objectivec-overlay/ObjectiveC.swift` now provides
+`ObjCBool`, `Selector` (with `sel_getUid`/`sel_isEqual`/`sel_getName` declared
+through `@_silgen_name`, since Agora's libobjc2 headers are not a Clang module),
+`NSZone`, and the two `_convertBool…` helpers SILGen calls. The Foundation
+overlay re-exports it, and the fork's `getSwiftStdlibType` now accepts a
+one-byte `BOOL` typedef (the typedef's *name* is the contract); the
+`getLoweredCBridgedType` Bool branch falls back to `ObjCBool` when the `Darwin`
+module (and its `DarwinBoolean`) is absent. Result: `isEqual(_:)`, `isKind(of:)`,
+`boolValue`, every `BOOL` parameter is `Bool` - and the probe's last `[gap]`,
+`#selector`, is now `[ok]`.
+
+**2. `AnyHashable` and `__SwiftValue`.** `AnyHashable: _ObjectiveCBridgeable`
+(which the `ObjectiveC` overlay carries on Darwin) is now in the Foundation
+overlay, bridging a class base verbatim and everything else through the
+stdlib's boxer. That is what makes `[AnyHashable: Any]` and
+`Set<AnyHashable>` representable in Objective-C, and therefore what lets
+`swift_bridge` take effect on `NSDictionary`/`NSSet` (patch 0010 now annotates
+all four classes). Bridged dictionary keys are normalized to `String`, so
+`d["k"]` finds the entry an `NSDictionary` carried. The runtime's `__SwiftValue`
+box implemented `-copyWithZone:` only, and Agora's `NSObject` makes `-copy` the
+override point (zones are 32-bit API it does not have), so a boxed Swift value
+used as a dictionary key aborted; `SwiftValue.mm` now implements `-copy` too.
+
+**3. Numbers.** Every fixed-width integer, `Float`, `Double` and `Bool` bridges
+to `NSNumber` (before: `Int`, `Double`, `Bool` only), through the matching
+`numberWith…`/`…Value` pair, so `Int8(3) as NSNumber`, `UInt64.max as NSNumber`
+and `NSNumber as? Float` all work.
+
+**4. The value types.** `FoundationValueTypes.swift` declares the Swift types
+Darwin's Foundation overlay declares, each bridged to Agora's class: `Data`,
+`Date`, `URL`, `UUID`, `IndexPath`, `TimeZone`, `Locale`, `Calendar`,
+`DateComponents`, `DateInterval`, `Notification` (+ `Notification.Name`),
+`PersonNameComponents`, `CharacterSet`, `IndexSet`, `Decimal`,
+`AffineTransform` and `NSAttributedString.Key`. Each carries the API surface a
+program actually calls and conforms to `_ObjectiveCBridgeable`, so
+`Data() as NSData`, `date as NSDate` and the reverse all work. `Decimal` is a
+wrapper over Agora's `NSDecimal` struct with `NSDecimalNumber` doing the
+comparisons; it does not yet implement arithmetic operators.
+
+**5. Error extras.** `RecoverableError`, `_ErrorCodeProtocol`,
+`_ObjectiveCBridgeableError` and the `_BridgedStoredNSError` machinery the
+imported `NS_ERROR_ENUM` shape uses, alongside the `CustomNSError`/
+`LocalizedError`/`NSError` bridges that were already there.
+
+**The zero-copy bridges were the last gap, and they are closed (§2.21).**
+Darwin's `Array`/`String` bridges hand back *views* (`__SwiftDeferredNSArray`,
+`__StringStorage`) over the same storage, and adopt them back
+(`_bridgeFromObjectiveCAdoptingNativeStorageOf`). The machinery was already
+compiled into our `libswiftCore.so`, but asking for a view crashed for three
+independent reasons - a runtime-pattern class without ObjC ancestry claiming a
+class-object `isa`, the `@_swift_native_objc_runtime_base` storage classes not
+getting one, and `count`'s `NSUInteger`/`Int` encodings selecting different
+selectors - so the overlay copied. This round fixed all three (plus a libobjc2
+autorelease recursion and the `-isNSString__` probe), and the overlay now
+bridges by view in both directions. See §2.21 for the measurements.
+
+
+Also still partial: the long tails of the value types (`Data`'s full collection
+API, `IndexSet`'s and `CharacterSet`'s set algebra, `Decimal` arithmetic,
+`Calendar`'s formatting), and the header-annotation surface Darwin gets from
+`NS_SWIFT_NAME`/`NS_REFINED_FOR_SWIFT`/`NS_TYPED_ENUM`/`NS_SWIFT_SENDABLE`
+(none of which Agora's headers use yet). The `ObjectiveC` module and the
+bridges are what those annotations are worth having for.
+
+---
+
+### 2.21 Zero-copy bridging: the deferred wrappers become class objects
+
+Darwin's bridges hand back *views* over the same storage (`__SwiftDeferredNSArray`,
+`__StringStorage`, ...) and adopt them on the way back. Ours copied (§2.20),
+because asking for the view crashed. This round removed every one of those
+crashes, and the overlay now uses the views. Five independent defects stood in
+the way, and each was a real bug rather than a bridging one.
+
+**1. A fixed class with a generic Swift superclass was treated as a class
+object, and crashed.** The smallest reproduction is five lines:
+
+```swift
+class Base<T> { var x: T; init(_ x: T) { self.x = x } }
+class Sub: Base<Int> { init() { super.init(1) } }
+let s = Sub()      // SIGSEGV in objc_resolve_class()
+```
+
+`Sub` is not generic, but its metadata is built at run time from a *pattern*
+(the strategy is `Singleton`, because the superclass's layout is not known until
+the generic argument is bound). `addMetadataFlags()` decided "is this a pattern?"
+with `Target->isGenericContext()`, which is false for `Sub`, so the pattern
+carried a **metaclass** and its `isa`. At completion the runtime saw a non-null
+`isa` and did what S4b/S4c taught it to do: `objc_loadClass_np(Sub)`. libobjc2
+then resolved the superclass chain - and `Base<Int>` is a pure Swift generic
+class, which is deliberately *not* a class object (S4), so it has no `isa`, no
+name, and no place in the class table. `objc_resolve_class()` walked into a
+metadata object that was never a class and faulted.
+
+The fix is one predicate, in `addMetadataFlags()`: a class whose metadata is
+instantiated from a pattern is a class object only when it has **Objective-C
+ancestry**; otherwise its pattern carries `MetadataKind::Class` (a null `isa`),
+which is the state the runtime already handles for generic classes. "Is a
+pattern" is `isGenericContext() || checkAncestry(AncestryFlags::Generic)` - the
+second half is the case `Sub` exposed. A class with generic ancestry *and* an
+Objective-C ancestor (e.g. `class Sub: Box<Int>` where `Box<T>: NSObject`) is
+unchanged: the pattern's extra data carries its metaclass (S4b)/the resilient
+pattern carries it (S4c), and the value emitted here is a placeholder.
+
+**2. The standard library's collection storage classes were not class objects.**
+`_DictionaryStorage`, `_SetStorage`, `_ContiguousArrayStorage` and friends are
+reparented to `NSDictionary`/`NSSet`/`NSArray` at run time through
+`@_swift_native_objc_runtime_base`, but they keep Swift's allocator and
+reference counting - that is what the attribute is for - so
+`ClassDecl::getObjectModel()` answers `Native` for them. The generic-pattern
+builder asked exactly that question (`Target->getObjectModel() ==
+ReferenceCounting::ObjC`) to decide whether to put a metaclass in the pattern,
+so these classes never got one and were never registered: retaining a bridged
+`Dictionary` faulted, and its class name was NULL.
+
+The predicate is now `isGNUstepClassObject()`: the ObjC object model **or**
+`checkAncestry(AncestryFlags::ObjC)` (which is set by `@objc`, and Sema only
+permits `@objc` on a class with an Objective-C ancestor - including the
+`@_swift_native_objc_runtime_base` storage classes, whose ancestor is named by
+the attribute). The three class-object decisions in `GenMeta.cpp` use it.
+With it, the storages are registered with a unique mangled name per
+instantiation, and their `-objectForKey:`, `-count`, `-keyEnumerator`, etc. are
+real Objective-C methods.
+
+**3. Autoreleasing a Swift object recursed until the stack overflowed.**
+libobjc2 picks its autorelease mechanism lazily: `useARCAutoreleasePool` is
+zero-initialised, and until `initAutorelease()` runs, `autorelease()` falls
+through to a manual `-autorelease` send. A Swift object at layout 2 has no
+Objective-C `-autorelease` of its own, so it inherits `NSObject`'s, which calls
+`objc_autorelease()`, which lands in `autorelease()` again. The first Swift
+object ever autoreleased in a process therefore overflowed the stack - reached
+for real through `-[NSDictionary allKeys]`, which autoreleases the Swift
+`_SwiftDictionaryNSEnumerator` that `-keyEnumerator` returns. `autorelease()`
+now calls the idempotent `initAutorelease()` first (patch 0011).
+
+**4. `NSUInteger` and `Int` are different selectors under type-dependent
+dispatch.** The last crash was `-[NSSet allObjects]` on a Swift set: it starts
+with `[self count]`, Clang encodes that as `Q16@0:8`, the Swift classes declared
+`@objc var count: Int` (encoding `q`), and libobjc2 keyed them as two different
+selectors. The `Q` lookup hit the *inherited* `NSSet -count`, which read
+`_members` at an offset the Swift object does not have. The fix follows the
+precedent the string and array cores already set: the shadow protocols'
+`count` requirement is `UInt` (`_NSSetCore`, `_NSDictionaryCore`), the four
+storage classes answer it as `UInt`, and the `__Cocoa*` wrappers convert at
+their edge. `-[NSSet count]`, `-[NSDictionary count]` and every method that
+walks them (`allObjects`, `member:`, `objectForKey:`, ...) now reach Swift.
+
+**5. The stdlib's "is this an NSString?" probe needs an answer.** `__StringStorage
+-isEqual:` asks the *other* object `-isNSString__` before comparing against a
+non-Swift string (Darwin's CoreFoundation strings answer it). Agora's `NSString`
+did not, so `swiftString == nsString` raised `doesNotRecognizeSelector:`. The
+base class now answers YES (patch 0007, next to the tagged-string probe it
+already carries).
+
+**The overlay now bridges by view.** `String`, `Array`, `Dictionary` and `Set`
+call `_bridgeToObjectiveCImpl()` (which is what Darwin's overlay does), and
+`Array`'s and the collections' inverse bridges adopt native storage through
+`_bridgeFromObjectiveCAdoptingNativeStorageOf()` before falling back to an
+element-wise copy. Measured on the installed toolchain: `"héllo 🌍" as NSString`
+is a `__StringStorage` (length, `-substringFromIndex:`, `-characterAtIndex:`,
+`-isEqual:`, `-rangeOfString:` all work), `[Int]` is a
+`__SwiftDeferredNSArray` (`-objectAtIndex:`, `-subarrayWithRange:`, and the
+round trip through `as? [Int]`), `[NSObject]` is the
+`_ContiguousArrayStorage<NSObject>` itself, and `Dictionary`/`Set` are
+`_SwiftDeferredNSDictionary`/`_SwiftDeferredNSSet` - all registered GNUstep
+class objects. Reproduce with the language gate's new "zero-copy bridges"
+section; the S4 gate gained the fixed-class-with-generic-superclass regression.
+
+One consequence worth recording: `-[NSSet allObjects]`, `-[NSSet member:]` and
+the other Agora methods that walk a Swift collection now genuinely run on it,
+so this is also the first time the class-cluster primitives are exercised from
+the other direction. They are correct because they were written over the
+primitives rather than the ivars; the zero-copy bridge is what proves it.
+
 ---
 
 ## 3. Change inventory
 
-`swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 45 files,
-~1950 insertions. The layout/registration table is from two rounds ago, the S1
-emission from three, S4/S4b from before that, S5 and the flip from earlier, and
-this round adds library evolution's `Update` strategy and GNUstep-shaped
-categories. S6 changed only the Agora-side scripts and docs. The libobjc2 side
-is `0006-libagora-objc-loadClass-np.patch` plus the new
-`0008-libagora-objc-dtable-rebase-untyped.patch`; the Agora-side shim is
-`0007-libagora-base-tagged-string-probe.patch`.
+`swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 57 files,
+~2150 insertions. The layout/registration table is from two rounds ago, the S1
+emission from three, S4/S4b from before that, S5 and the flip from earlier, the
+library-evolution `Update` strategy and GNUstep-shaped categories from two
+rounds ago, the importer's bridge check (§2.19) from the last one, and this
+round adds the class-object predicate and the collection-core encodings
+(§2.21). S6 changed only the Agora-side scripts and docs. The libobjc2 side
+is `0006-libagora-objc-loadClass-np.patch`,
+`0008-libagora-objc-dtable-rebase-untyped.patch` and (this round)
+`0011-libagora-objc-autorelease-pool-init.patch`; the Agora-side shims are
+`0007-libagora-base-tagged-string-probe.patch` (now also the `-isNSString__`
+door) and `0010-libagora-base-swift-bridge-attributes.patch`.
 
 | File (bridging) | Change |
 |---|---|
 | `lib/IRGen/GenClass.{h,cpp}` | `emitGNUstepCategory()`: a `struct objc_category` with GNUstep method lists; `emitGNUstepCategoryData()` puts it in `__objc_cats` and marks it used |
 | `lib/IRGen/GenDecl.cpp` | at layout 2 an extension's category takes that path instead of Apple's `category_t *` list |
-| `libagora-base/NSString.m` | `+newTaggedNSStringWithASCIIBytes_:length_:` answers nil (the Darwin SPI the stdlib probes; nil = use the storage fallback) |
+| `lib/IRGen/GenMeta.cpp` | this round: `isGNUstepClassObject()` (ObjC object model **or** `@objc` ancestry) for the pattern metaclass, and a runtime-pattern class without ObjC ancestry keeps a null `isa` (§2.21) |
+| `stdlib/public/core/ShadowProtocols.swift` | `_NSSetCore.count`/`_NSDictionaryCore.count` are `UInt` (`NSUInteger`'s `Q`), so Clang's typed `count` reaches the Swift override (§2.21) |
+| `stdlib/public/core/{Set,Dictionary}{Bridging,Storage}.swift` | the four storage classes answer `count` as `UInt`; the `__Cocoa*` wrappers convert to `Int` at their edge (§2.21) |
+| `libagora-base/NSString.m` | `+newTaggedNSStringWithASCIIBytes_:length_:` answers nil (the Darwin SPI the stdlib probes; nil = use the storage fallback); `-isNSString__` answers YES (the stdlib's "is the other object a string?" probe, §2.21) |
+| `libagora-objc/arc.mm` | `autorelease()` calls the idempotent `initAutorelease()` first, so the first Swift object autoreleased in a process does not recurse through `NSObject -autorelease` (§2.21; patch 0011) |
 | `libagora-objc/dtable.c` | `rebaseDtableRecursive()` reinstalls each of the class's own methods under its *untyped* selector index too (TDD mode), so `class_setSuperclass` does not lose an override to the new parent |
 | `libagora-base/*.h` (19 files) | the read-only getters become `@property` declarations (§2.17; patch 0009), so Swift reads `text.length`, not `text.length()` |
+| `lib/ClangImporter/ImportType.cpp` | `canBridgeBackToObjectiveC()`: adopt a `swift_bridge`d signature only when the Swift type is representable back in Objective-C, otherwise keep the Objective-C type (§2.19) |
+| `lib/ClangImporter/ImportDecl.cpp` | `getSwiftStdlibType`'s `ObjCBool` case accepts a one-byte `BOOL` typedef; the typedef's name is the contract (§2.20) |
+| `lib/SIL/IR/Bridging.cpp` | the `Bool` bridge uses `ObjCBool` when the clang type is a one-byte `unsigned char` and the `Darwin` module (`DarwinBoolean`) is absent (§2.20) |
+| `stdlib/public/runtime/SwiftValue.mm` | `__SwiftValue` implements `-copy` (Agora's `NSCopying` member), so a boxed value can be an `NSDictionary` key (§2.20) |
+| `libagora-base/{NSString,NSArray,NSDictionary,NSSet}.h` | `swift_bridge` attributes (patch 0010): `String`, `[Any]`, `[AnyHashable: Any]`, `Set<AnyHashable>` (§2.19, §2.20) |
+| `swift-toolchain/foundation-overlay/FoundationOverlay.swift` | the Swift-typed signatures the attributes produce (`allKeys` is `[Any]`, `NSError.init(domain:code:userInfo:)`'s overloads are no longer ambiguous, `NSString(string:)` is the imported initializer) |
 
 | File (library evolution) | Change |
 |---|---|
@@ -1316,14 +1624,16 @@ addition, and a plain `git diff` omits it.
 swift-toolchain/scripts/build-swift-toolchain.sh
 
 # the language/runtime gate (installed toolchain, now layout 2; also checks
-# the Foundation overlay's value bridges)
+# the Foundation overlay's value bridges, swift_bridge, and the zero-copy
+# collection/string views)
 swift-toolchain/scripts/verify-swift-port.sh
 
 # the S1 gate (layout-2 test compiler; builds the frontend if needed)
 swift-toolchain/scripts/verify-class-abi.sh
 
 # the S4 gate (layout-2 compiler AND stdlib in the build tree; builds them if
-# needed - a full stdlib rebuild is ~15-30 min)
+# needed - a full stdlib rebuild is ~15-30 min); it includes the regression for
+# a fixed class with a generic Swift superclass (§2.21)
 swift-toolchain/scripts/verify-generic-abi.sh
 
 # the S4b/S4c gate (same build tree; generic classes with an ObjC ancestor, and
@@ -1401,9 +1711,28 @@ done
 - **Foundation overlay**: `usr/lib/swift/linux/Foundation.swiftmodule/` and
   `libFoundation.so`, built by
   `swift-toolchain/scripts/build-foundation-overlay.sh` (called by
-  `build-swift-toolchain.sh` after the install). It belongs to the *installed*
-  toolchain; the build-tree compiler does not have it, which is why the
-  language gate skips the bridging check when `VERIFY_SWIFTC` points there.
+  `build-swift-toolchain.sh` after the install), rebuilt this round against the
+  `swift_bridge` headers. It belongs to the *installed* toolchain; the
+  build-tree compiler does not have it, which is why the language gate skips
+  the bridging checks when `VERIFY_SWIFTC` points there.
+- **This round's install**: `swift-frontend` was rebuilt and replaced
+  (`ninja swift-frontend`), `libswiftCore.so` was rebuilt for the
+  `__SwiftValue -copy` fix (`ninja lib/swift/linux/libswiftCore.so` with
+  `CPATH`/`LIBRARY_PATH` pointing at `build-prefix`), and the two overlay
+  modules were installed next to the target stdlib:
+  `usr/lib/swift/linux/ObjectiveC.swiftmodule` + `libObjectiveC.so` (new) and
+  the Foundation overlay. The authoritative rebuild is
+  `swift-toolchain/scripts/build-swift-toolchain.sh` (it now builds the
+  ObjectiveC module before the Foundation overlay).
+- **Clang module cache**: a compiler that predates a change to the imported
+  signature must not share a cache with one that has it; use
+  `-module-cache-path` (or clear `~/.cache/clang/ModuleCache`) when comparing
+  frontends. The `BOOL` change and the `swift_bridge` attributes both alter
+  imported signatures.
+- **Clang module cache**: the importer's bridge decision is baked into the
+  cached Foundation Clang module, so a compiler that predates §2.19 and one
+  that has it must not share a cache. Use `-module-cache-path` when comparing
+  frontends (the before/after in §2.19 was produced that way).
 - **Self-contained install**: `usr/lib/swift/host/runtime/` (the six host Swift
   runtime libraries), `usr/bin/clang` (a staged copy of the bootstrap clang) and
   `usr/lib/clang/21`; `usr/bin/swiftc` resolves the runtime relative to itself.
@@ -1417,9 +1746,10 @@ done
   ~5 minutes). The language gate's new export check runs against whichever
   `libswiftCore` the test program links.
 - **Current results**: installed toolchain - `verify-swift-port.sh` all green
-  (including S6's interop-export check), `run-native-probe.sh` 17/17 (only the
-  known `#selector` gap), the library-evolution gate green (`Update` +
-  `Singleton`, evolved v2 layout at `-Onone` and `-O`), and with
+  (including S6's interop-export check and this round's `swift_bridge`
+  section), `run-native-probe.sh` 17/17 (only the known `#selector` gap), the
+  library-evolution gate green (`Update` + `Singleton`, evolved v2 layout at
+  `-Onone` and `-O`), and with
   `SWIFTC_LAYOUT2=$T/bin/swiftc STDLIB_DIR=$T/lib/swift`: `S1 gate: ok`,
   `S4 gate: ok`, `S4b/S4c gate: ok`, `S5 gate: ok`. `import Dispatch` (the
   no-interop layout-2 overlay) builds and runs.
@@ -1524,14 +1854,21 @@ Debugging techniques that produced the findings above:
    bootstrap tree is needed to *build* the toolchain, not to use it. What a
    target program still needs is Agora's own prefix (`-L$AGORA_PREFIX/lib`);
    that is the product, not a build cheat.
-7. **Foundation bridging and the Cocoa-shaped surface - done** (§2.16,
-   §2.18). The overlay ships the value bridges, `Error` ↔ `NSError`, and the
-   hand-written API surface (`Sequence` collections, Swift-typed
-   `NSError`/`NSString` initializers, `NSObject: Hashable`). The one thing not
-   done is rewriting *every* imported signature via `swift_bridge`: the
-   importer then fails to bridge the arguments in the foreign thunk (a Swift
-   `Dictionary`'s storage pointer reaches Objective-C), which is an
-   importer/thunk ABI gap rather than an overlay one (§2.18).
+7. **Foundation bridging - feature parity with Darwin - done** (§2.16,
+   §2.18, §2.19, §2.20, §2.21). The `ObjectiveC` module ships (`BOOL` -> `Bool`,
+   `#selector`, `NSZone`), `AnyHashable` bridges to `NSObject` (which makes
+   `[AnyHashable: Any]`/`Set<AnyHashable>` representable and so lets
+   `swift_bridge` cover `NSDictionary`/`NSSet` too), every fixed-width number
+   and `Float` bridges to `NSNumber`, the Foundation value types exist and
+   bridge, the error protocols include `RecoverableError` and the
+   `_BridgedStoredNSError` family, the importer only rewrites a signature when
+   the bridge can be undone (§2.19), and the bridge is now **zero-copy** in
+   both directions (§2.21) - the same shape Darwin's has. That last step was
+   not an overlay change: it needed the class-object predicate fixed for
+   runtime-pattern classes, the `@_swift_native_objc_runtime_base` storages to
+   become class objects, the collection cores' `count` to carry the
+   `NSUInteger` encoding, a libobjc2 autorelease-pool init, and the
+   `-isNSString__` door.
 8. **`+allocWithZone:` - done** (§2.6). `NSObject()` and every imported `T()`
    now work through a compatibility door that forwards to `+alloc`, so a
    subclass's singleton override still wins. Swift classes now use it for real
@@ -1542,13 +1879,21 @@ Debugging techniques that produced the findings above:
    property (`utf8String`, not `UTF8String()`), so call sites written against
    the method spelling were updated.
 10. **Keep the gates green.** `verify-swift-port.sh` is the language/runtime
-   gate and now runs the *installed* layout-2 toolchain; `verify-class-abi.sh`
-   is the C-side S1/S3 gate; `verify-generic-abi.sh` (S4),
-   `verify-generic-objc-abi.sh` (S4b/S4c) and `verify-refcount-abi.sh` (S5)
-   check the stdlib too (`STDLIB_DIR`); `run-native-probe.sh` is the native
-   probe harness and passes 17/17 against the installed toolchain. The
-   published-container `run-probe.sh` and `compat/ObjCInteropShim.c` were
-   deleted in S6 (§2.13).
+   gate and now runs the *installed* layout-2 toolchain; it carries the
+   bridging, `swift_bridge` and (this round) zero-copy sections.
+   `verify-class-abi.sh` is the C-side S1/S3 gate; `verify-generic-abi.sh`
+   (S4, including the fixed-class-with-generic-superclass regression from
+   §2.21), `verify-generic-objc-abi.sh` (S4b/S4c) and `verify-refcount-abi.sh`
+   (S5) check the stdlib too (`STDLIB_DIR`); `run-native-probe.sh` is the
+   native probe harness and passes every check against the installed
+   toolchain. The published-container `run-probe.sh` and
+   `compat/ObjCInteropShim.c` were deleted in S6 (§2.13).
+11. **What is genuinely left** is polish, not structure: the value types' long
+   tails (§2.20), the `NS_SWIFT_NAME`/`NS_TYPED_ENUM` header annotations, the
+   remaining `NSUInteger`-encoded *parameter* selectors (`getObjects:range:`,
+   `getObjects:andKeys:count:`, `countByEnumeratingWithState:objects:count:`)
+   if an Objective-C caller ever sends them typed, and the prespecialized
+   generic-with-ObjC-ancestor case (§2.10). None of them blocks the bridge.
 
 ---
 
@@ -1560,25 +1905,48 @@ swift-toolchain/
 ├── patches/
 │   ├── 0001-libagora-base-objcxx-clean.patch   3 hunks / 2 files
 │   ├── 0002-libagora-core-objcxx-clean.patch   1 hunk  / 1 file
-│   ├── 0003-swift-enable-objc-interop.patch   45 files, ~1950 insertions
+│   ├── 0003-swift-enable-objc-interop.patch   57 files, ~2150 insertions
 │   ├── 0004-libdispatch-overlay-non-interop.patch  1 file (the Dispatch overlay)
 │   ├── 0005-libagora-base-allocWithZone.patch      2 files (NSObject)
 │   ├── 0006-libagora-objc-loadClass-np.patch       3 files (the runtime hook,
 │   │                                               its lock, the SONAME)
 │   ├── 0007-libagora-base-tagged-string-probe.patch 1 file (NSString, the
-│   │                                               stdlib's tagged-string SPI)
+│   │                                               stdlib's tagged-string SPI
+│   │                                               and -isNSString__)
 │   ├── 0008-libagora-objc-dtable-rebase-untyped.patch 1 file (the dtable
 │   │                                               rebuild after class_setSuperclass)
-│   └── 0009-libagora-base-property-shaped-accessors.patch 19 headers (readonly
-│                                                   getters declared as properties)
+│   ├── 0009-libagora-base-property-shaped-accessors.patch 19 headers (readonly
+│   │                                               getters declared as properties)
+│   ├── 0010-libagora-base-swift-bridge-attributes.patch 4 headers (NSString ->
+│   │                                               String, NSArray -> [Any],
+│   │                                               NSDictionary ->
+│   │                                               [AnyHashable: Any], NSSet ->
+│   │                                               Set<AnyHashable>; §2.19/2.20)
+│   └── 0011-libagora-objc-autorelease-pool-init.patch 1 file (arc.mm: choose the
+│                                                   ARC pool before the first
+│                                                   autorelease; §2.21)
+├── objectivec-overlay/
+│   └── ObjectiveC.swift                       the `ObjectiveC` module the
+│                                              importer looks BOOL/SEL/NSZone
+│                                              up in: ObjCBool, Selector,
+│                                              NSZone (§2.20)
 ├── foundation-overlay/
-│   └── FoundationOverlay.swift                the Swift Foundation overlay:
-│                                              String/Array/Dictionary/Set,
-│                                              NSNumber, Error <-> NSError,
-│                                              CustomNSError/LocalizedError
+│   ├── FoundationOverlay.swift                bridges (String, collections,
+│   │                                          every number, AnyHashable),
+│   │                                          Error <-> NSError and the error
+│   │                                          protocols, Sequence collections
+│   └── FoundationValueTypes.swift             Data, Date, URL, UUID, IndexPath,
+│                                              TimeZone, Locale, Calendar,
+│                                              DateComponents, DateInterval,
+│                                              Notification, PersonNameComponents,
+│                                              CharacterSet, IndexSet, Decimal,
+│                                              AffineTransform,
+│                                              NSAttributedString.Key
 └── scripts/
     ├── build-swift-toolchain.sh               build + install (incl. wrapper,
     │                                          host runtime, clang, overlay)
+    ├── build-objectivec-overlay.sh            build + install the ObjectiveC
+    │                                          module and self-check it
     ├── build-foundation-overlay.sh            build + install the overlay and
     │                                          self-check it
     ├── build-layout2-frontend.sh              rebuild the in-tree frontend
@@ -1683,10 +2051,23 @@ GNUstep structs in `__objc_cats` (not Apple's pointer list), and libobjc2's
 dtable rebuild after `class_setSuperclass` has to keep the untyped dispatch
 slot. The overlay also re-declares the Cocoa-shaped surface a program actually
 calls (`NSArray`/`NSDictionary`/`NSSet` are `Sequence`, Swift-typed
-`NSError`/`NSString` initializers, `NSObject: Hashable` for `AnyHashable`); the
-`swift_bridge` attribute that would rewrite every imported signature is not
-usable yet - the foreign thunk then hands a Swift value's storage to
-Objective-C (§2.18). The installed toolchain no longer borrows the bootstrap's runtime either:
+`NSError` initializers, `NSObject: Hashable` for `AnyHashable`). The last
+importer gap is closed too: `NSString *` now imports as `String` and `NSArray *`
+as `[Any]` (`swift_bridge` in the headers), and the importer adopts such a
+signature only when the Swift type can be converted back to an object type at
+the Objective-C boundary - so an attribute on a type without a bridge leaves
+the Objective-C type in place instead of handing the back end a Swift value
+where an object pointer belongs, which is exactly what used to abort IRGen
+(§2.19). Bridging is zero-copy now too (§2.21): `String`, `Array`, `Dictionary`
+and `Set` cross as views over their own storage and adopt it back, and that
+required fixing a class-object predicate that treated a non-generic class with a
+generic Swift superclass as registrable (it crashed in `objc_resolve_class`),
+extending the same predicate to the stdlib's `@_swift_native_objc_runtime_base`
+storage classes (they are reparented to Foundation's collections but answer
+`Native` to the object-model question), giving the collection cores' `count` the
+`NSUInteger` encoding Clang sends (typed dispatch keys on (name, encoding)), a
+libobjc2 autorelease-pool initialisation, and an `-isNSString__` door in
+NSString. The installed toolchain no longer borrows the bootstrap's runtime either:
 it ships the host Swift runtime and clang it needs and resolves them relative to
 itself, so the bootstrap is build-time only. The rest of this summary is the
 previous rounds' record of how the compiler got here.

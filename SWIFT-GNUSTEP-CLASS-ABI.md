@@ -421,16 +421,27 @@ stdlib, built in the build tree by `build-layout2-stdlib.sh`). The S1 gate, the
 language/runtime gate and both probes are also green against that same layout-2
 stdlib.
 
+**The mirror-image rule, added later (handoff §2.21).** A class whose metadata
+is instantiated from a pattern is a class object only if it has Objective-C
+ancestry - the same predicate as above. The original check was
+`isGenericContext()`, which is false for a *non-generic* class with a generic
+superclass (`class Sub: Base<Int>`); its pattern therefore carried an `isa`,
+libobjc2 was asked to register it, and resolving the superclass crashed, because
+`Base<Int>` is (correctly) not a class object. `addMetadataFlags()` now tests
+`isGenericContext() || checkAncestry(AncestryFlags::Generic)` for "is a
+pattern", and only emits a metaclass into it when `isGNUstepClassObject()` holds.
+
 **S4b result (2026-10-17).** The dynamic-class path of §3.2 is now used by the
 runtime, for the case that needs it: a generic class with an *imported* ObjC
 ancestor. `class Box<T>: NSObject` cannot have `@objc` members, but Swift
 allocates it through `objc_allocWithZone` and sends `-init` through the ObjC
 runtime, so its metadata must be a class object. What the pattern gained:
 
-- the 17-word GNUstep metaclass in the extra data (only when
-  `Target->getObjectModel() == ReferenceCounting::ObjC`; a pure Swift generic
-  class still stays a metadata-only object, which keeps the stdlib's storage
-  classes cheap);
+- the 17-word GNUstep metaclass in the extra data (only for a class with
+  Objective-C ancestry - `isGNUstepClassObject()`: the ObjC object model, or
+  `@objc`, which covers the stdlib's `@_swift_native_objc_runtime_base`
+  storage classes; a pure Swift generic class still stays a metadata-only
+  object);
 - relative pointers to the class's `objc_method_list` and `objc_ivar_list`
   (built by `ClassDataBuilder`, shared across instantiations). The method list is
   not optional: `-init` is a Swift thunk, and without the list the allocator's

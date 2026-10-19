@@ -251,9 +251,8 @@ This is where Agora's architecture and the Mac's agree, and the seam must be sta
 The 10.6 reference is the target. Measured against it, feature by feature:
 
 **In scope (the standard)**
-- Four window views: **Icon**, **List** (hierarchical, sortable columns), **Column** (`NSBrowser`),
-  **Cover Flow** (with a Quick Look preview).
-- A window shell: toolbar (Back/Forward, the four-view switcher, Action, Quick Look, Labels, New Folder, Delete,
+- Three window views: **Icon**, **List** (hierarchical, sortable columns), **Column** (`NSBrowser`).
+- A window shell: toolbar (Back/Forward, the three-view switcher, Action, Quick Look, Labels, New Folder, Delete,
   Connect, Eject, Search), a **source list sidebar** (Devices / Shared / Places / Search For), a **path bar**,
   a **status bar**, and a proxy icon in the title.
 - Navigation history (Back/Forward) per window.
@@ -340,7 +339,6 @@ workspace/
     WSIconView.{h,m}               icon view (NSCollectionView-backed)
     WSListView.{h,m}               list view (NSOutlineView-backed)
     WSColumnView.{h,m}             column view (NSBrowser-backed)
-    WSCoverFlowView.{h,m}          cover flow (late; needs libagora-quicklook)
     WSSidebarController.{h,m}      the source list
     WSToolbarController.{h,m}      the toolbar and its items
     WSPathBar.{h,m}  WSStatusBar.{h,m}
@@ -357,7 +355,7 @@ workspace/
 ```
 
 **`WSItemModel` is the load-bearing class.** Every view is a rendering of the same model — a directory, its
-items, the current sort and filter, and a change stream from `libagora-watch`. If the four views each own their
+items, the current sort and filter, and a change stream from `libagora-watch`. If the three views each own their
 own enumeration, the project will produce four subtly different file managers; making the model one object is
 the single decision that prevents that, and it is the same discipline `libagora-app` used when it made
 `NSTextStorage`/`NSLayoutManager`/`NSTextContainer` one web rather than three ad-hoc stores
@@ -498,7 +496,7 @@ the ingest are Apple's.
   are those stages' own. The W2 shell can be built now; **W2p** records the inventory that unblocked it. W4's list
   view also has its table foundation: editing, type-select, variable heights, column reordering, autosave and a local
   row drag are in; only the cross-process drag session waits for W7.
-- **Deliverable:** `WSFileWindowController` with toolbar, sidebar, path bar, status bar, the four-view
+- **Deliverable:** `WSFileWindowController` with toolbar, sidebar, path bar, status bar, the three-view
   switcher (only Icon works), Back/Forward history, and the Places list; a second window shows a second folder.
 - **Proves:** the window is a shell over `WSItemModel`, not a view.
 - **Test:** `history.m` (back/forward semantics, including that a new navigation truncates the forward stack);
@@ -506,9 +504,9 @@ the ingest are Apple's.
 - **Done (2026-10-19):** `workspace/src/WSFileWindowController` assembles the shell from `NSToolbar` (Back,
   Forward, view switcher), `NSOutlineView` in an `NSSplitView` (PLACES and DEVICES from `WSPlaces`),
   `NSPathControl` and a status bar — all reading ONE `WSItemModel`. `WSHistory` is the Back/Forward stack and its
-  truncation rule; `WSFileIconView` is the shell's simple Icon mode (W3 replaces it); a desktop folder double-click
+  truncation rule; `WSIconView` is the icon mode (W3); a desktop folder double-click
   posts `WSDesktopViewOpenFolderNotification` and the application opens a second window with its own model and
-  history. List, Columns and Cover Flow are disabled rather than empty. **MEASURED:** `workspace-history` (15
+  history. List and Columns are disabled rather than empty. **MEASURED:** `workspace-history` (15
   checks) and `workspace-file-window` (38 checks), and the live `--file-window` scene (the first one found that a
   flipped ROOT content view is drawn with the wrong strip order in this tier's live path — the window keeps an
   unflipped content view, recorded in `workspace/PROVENANCE.md`).
@@ -546,6 +544,14 @@ the ingest are Apple's.
 - **Proves:** the shared engine is shared.
 - **Test:** `icon_view.m` for selection/rename/keyboard; an `NSPasteboard`/`NSDragging` test for the drop
   policies (move within a volume, copy across, alias with the modifier).
+- **Done (2026-10-19):** `workspace/src/WSIconView` is the desktop's layout engine in the file window's order
+  (`WSIconOrderLeftToRightRows`), with keyboard navigation, a one-second prefix type-select, inline rename (the
+  extension left unselected), the tier's `NSDraggingSession` as source and a registered destination (Move within a
+  volume, Copy across, Option Copy, Command across Move, Command-Option Link), preflighted drops that refuse a
+  conflict, and a 0.6-second hover that posts `WSIconViewRequestFolderWindowNotification` for the application to
+  open. **THE LINK IS A SYMBOLIC LINK UNTIL `WSAlias` (W6)**, named where the operation is. **MEASURED:**
+  `workspace-icon-view`, **51 checks**, including a real drag from one window's icon view into another's; the
+  cross-volume cases use a second root on `/dev/shm`.
 
 ### W4 — List view
 - **Deliverable:** `WSListView` over `NSOutlineView`: Name, Date Modified, Size, Kind (F1), disclosure,
@@ -627,7 +633,7 @@ assumed"; `window-server/README.md`). Concretely:
 1. **The substrate is the schedule.** If F1–F3 are treated as "part of Workspace", the file manager will not
    reach a first honest screen for a very long time. The stage split exists to prevent that. **F1, F2 and F3
    are the critical path and should be built as standalone components with their own tests before W1.**
-2. **`WSItemModel` discipline.** Four views over four enumerations is the classic file-manager-clone failure. The
+2. **`WSItemModel` discipline.** Three views over three enumerations is the classic file-manager-clone failure. The
    model is one object and every view is a consumer; this is a review rule, not a suggestion.
 3. **Search scope creep.** Spotlight is a multi-year subsystem; §5.5 chops it into three slices and only the
    first is required for parity of the search *field*. Guard against W10 becoming the project.

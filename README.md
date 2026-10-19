@@ -107,7 +107,8 @@ The component repositories named below exist and build. This list will grow; fur
   installing into a shared SDK prefix). The dependency order is the one `release/components.conf`
   records, which the release driver checks.
 - **Read the design record.** `WORKSPACE-PLAN.md` (the shell's stages), `SWIFT-PORT-HANDOFF.md`
-  (where the Swift port stands), `DEVELOPMENT-TOOLS.md` (the interface-format/build-tool/IDE
+  (where the Swift port stands), `SWIFT-FOUNDATION-PARITY-PLAN.md` (how the Swift Foundation surface
+  reaches parity with Apple's), `DEVELOPMENT-TOOLS.md` (the interface-format/build-tool/IDE
   exploration), `RUST-BINDINGS.md`.
 - **Build the Swift toolchain.** `swift-toolchain/README.md` — it needs the bootstrap Swift release
   and this stack's `build-prefix`, and installs under `~/.agora-swift`.

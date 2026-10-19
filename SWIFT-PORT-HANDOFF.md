@@ -2048,6 +2048,10 @@ Debugging techniques that produced the findings above:
    module the toolchain builds emits one, so no program can reach it; closing
    it is a compiler task for the day a stdlib-like module declares such a
    class, and the handoff records what it would take.
+   **Foundation *overlay* parity** is a different, larger project and has its
+   own plan: [`SWIFT-FOUNDATION-PARITY-PLAN.md`](SWIFT-FOUNDATION-PARITY-PLAN.md)
+   (the measurement harness, the rename/annotation pass, and the decision to
+   port `swift-foundation` rather than keep re-implementing it).
 12. **Two Agora-side bugs surfaced by the value-type gate and are fixed**
    (§2.22): `NSCalendar -setTimeZone:` stored the zone without retaining it
    (the next `-startOfDayForDate:` read freed memory), and `IndexSet`'s Swift

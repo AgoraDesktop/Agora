@@ -24,21 +24,16 @@ AgoraDesktop/libagora-iconservices  Icon Services
 AgoraDesktop/libagora-launchservices Launch Services
 AgoraDesktop/window-server      the Wayland compositor
 AgoraDesktop/widget-zoo         demonstration application
+AgoraDesktop/workspace          Workspace — the desktop surface and file manager
+AgoraDesktop/swift-toolchain    the Swift-on-Agora toolchain
+AgoraDesktop/swift-interop-probe the Swift/Agora interop probes
 AgoraDesktop/AgoraDesktop.github.io  project website (public)
 AgoraDesktop/.github            org profile (public)
 ```
 
-Three repositories are new and have to be created before they can be pushed (their remotes are
-already recorded locally):
-
-```sh
-gh repo create AgoraDesktop/workspace            --private \
-  --description "Workspace — Agora's desktop surface and file manager"
-gh repo create AgoraDesktop/swift-toolchain      --private \
-  --description "The Swift-on-Agora toolchain: build scripts, patches, overlays, gates"
-gh repo create AgoraDesktop/swift-interop-probe  --private \
-  --description "The Swift/Agora interop probes"
-```
+`workspace`, `swift-toolchain` and `swift-interop-probe` were created for this preparation and are
+**public**; the component repositories above them are private. Flip the three with
+`gh repo edit AgoraDesktop/<name> --visibility private` if the federation should be uniformly private.
 
 ## Push order
 

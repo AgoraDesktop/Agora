@@ -227,8 +227,10 @@ closed (S1-S6); these are independent of it:
   and the Foundation value types (`Data`, `Date`, `URL`, `UUID`, `IndexPath`,
   `TimeZone`, `Locale`, `Calendar`, `DateComponents`, `DateInterval`,
   `Notification`, `PersonNameComponents`, `CharacterSet`, `IndexSet`, `Decimal`,
-  `AffineTransform`, `NSAttributedString.Key`) bridge to their classes, and the
-  bridge is **zero-copy in both directions** (§2.21), like Darwin's.
+  `AffineTransform`, `NSAttributedString.Key`) bridge to their classes, the
+  bridge is **zero-copy in both directions** (§2.21), and `as?` on a bridged
+  collection or number is a **check, not a conversion** (§2.22): a mismatched
+  element or an out-of-range `NSNumber` gives nil, as on Darwin.
 - **`__SwiftValue` and the `SwiftNativeNS*` wrapper classes** were expected to
   fail at layout 0 (no Swift heap header); at layout 2 they carry one. The
   class-identity side is exercised (`__SwiftValue` above), and the box's
@@ -1308,6 +1310,11 @@ compiles (or reports the type error) with this one.
 
 ### 2.20 Bridging parity with Apple
 
+*"Parity" in this section means coverage - which types bridge, in which
+directions, and with what shape. The cast semantics were checked against
+corelibs Foundation's reference implementation later and two of them were
+wrong; §2.22 records that and the fix.*
+
 The previous round closed the `swift_bridge` *mechanism* (§2.19) but left four
 kinds of gap against Darwin. This round closes them:
 
@@ -1577,10 +1584,45 @@ compiles to `__swift_instantiateConcreteTypeFromMangledName` plus
 per-specialization name and putting the metadata in `__objc_classes`; the
 handoff records it rather than implementing an unreachable path.
 
+**Cast semantics are checks, not conversions.** Asking "is the bridge at parity?"
+with the overlay open showed that the *coverage* was there but two casts were
+wrong, and both are silent-data bugs rather than performance deltas:
+
+- the collection bridges were implemented as `_unconditionallyBridgeFromObjectiveC`
+  and both the conditional and the force entry points called it, so
+  `[1, "x"] as NSArray as? [Int]` returned `[1]` (the string was dropped) and
+  `as!` did not trap. Darwin's conditional bridge checks every element and
+  returns nil; the force bridge traps. The overlay now does the same for
+  `Array`, `Dictionary` and `Set` (keys and values), and its `AnyHashable` key
+  helper no longer invents `AnyHashable(0)` for an unbridgeable key - it fails
+  the cast.
+- the numeric bridges used `integerValue()`/`charValue()`/`boolValue()`
+  unconditionally, so `NSNumber(value: 1.5) as? Int` was `1`,
+  `NSNumber(integer: 300) as? Int8` was `44`, `NSNumber(integer: -1) as? UInt`
+  was `UInt.max`, and `NSNumber(integer: 2) as? Bool` was `true`. The
+  reference implementation (swift-corelibs-foundation's `NSNumber.swift`, the
+  same semantics as Darwin's overlay) makes `as?` an *exact* check: every
+  integer type uses the NSNumber's own encoding plus a range check, `Float`/
+  `Double` use `exactly:`, and `Bool` accepts only 0/1. Ours now does the same.
+  (Agora's `-isEqualToNumber:` compares across the signed/unsigned line in the
+  unsigned domain - `-1` equals `UINT64_MAX` - which is right for `NSNumber`
+  equality and wrong for a bridge, so the exact check uses the encoding and
+  range, not `-isEqual:`.)
+
+Measured before/after on the installed toolchain:
+`([1, "x"] as NSArray) as? [Int]` was `[1]`, now `nil`;
+`NSNumber(double: 1.5) as? Int` was `1`, now `nil`;
+`NSNumber(integer: 300) as? Int8` was `44`, now `nil`;
+`NSNumber(integer: -1) as? UInt` was `UInt.max`, now `nil`;
+`NSNumber(integer: 2) as? Bool` was `true`, now `nil`. The gate's bridging
+section now pins all five, plus the successful directions (a good cast still
+returns the array; `NSNumber(integer: 1) as? Bool` is true; `UInt64.max` still
+bridges to `UInt`).
+
 Verified by the language gate's new "value types and header annotations"
 section (the table above, the four annotations, and `Sendable`), the existing
-bridging/zero-copy sections, and the whole gate suite plus both probes against
-the installed toolchain.
+bridging/zero-copy sections (now including the cast-semantics checks), and the
+whole gate suite plus both probes against the installed toolchain.
 
 ---
 
@@ -2198,7 +2240,11 @@ actually calls (`Data` as a collection, `IndexSet`/`CharacterSet` as
 and Agora's headers use `NS_TYPED_ENUM`/`NS_SWIFT_NAME`/`NS_REFINED_FOR_SWIFT`/
 `NS_SWIFT_SENDABLE`. Two Agora bugs fell out of the new gate: an unretained
 `NSCalendar` time zone (use-after-free) and an `IndexSet` iterator that started
-at `-1` against an `NSUInteger` API (empty iteration); both are fixed. The only
+at `-1` against an `NSUInteger` API (empty iteration); both are fixed. The
+bridging *semantics* were then checked against swift-corelibs-foundation and
+brought into line: a conditional collection/number cast is a check that fails
+(nil), not a conversion that truncates or drops - a data-loss bug the earlier
+"parity" claim had missed. The only
 item left is the *unreachable* prespecialized-generic-with-ObjC-ancestor
 compiler case, recorded with what it would take. The installed toolchain no longer borrows the bootstrap's runtime either:
 it ships the host Swift runtime and clang it needs and resolves them relative to

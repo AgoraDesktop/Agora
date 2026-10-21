@@ -33,8 +33,11 @@ it is the **10.6 surface this tree never finished**.
 That split changes the plan in three ways:
 
 1. **"Add 10.11" would produce a façade.** Adding `NSStackView` and `NSCollectionViewLayout` while
-   `NSOpenPanel`, `NSSavePanel`, `NSPredicate`, `NSProgress`, `NSWorkspace` and `NSDocument` are still absent
-   would satisfy a name list and fail every real client. Completeness comes first.
+   `NSOpenPanel`, `NSSavePanel`, `NSPredicate`, `NSProgress` and `NSDocument` are still absent
+   would satisfy a name list and fail every real client. Completeness comes first. (`NSWorkspace`,
+   `NSRunningApplication` and `NSDockTile`'s data half are no longer on that list: they landed in
+   `libagora-app` over Launch Services, Icon Services and the window server's window list, with the
+   deviations `NSRunningApplication.h` states at their doors.)
 2. **The work is not uniform across the four frameworks.** Core Text is one 10.6 function away from its old
    baseline and 31 functions from 10.11; Core Graphics is missing 280 functions that 10.6 already had, almost
    all of them the display/event/PDF half rather than drawing. Foundation's gap is dominated by scripting

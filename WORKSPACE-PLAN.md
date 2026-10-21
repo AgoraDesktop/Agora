@@ -72,9 +72,9 @@ Grounding each row in the tree, so the boundary is measured rather than asserted
 | Lists, outlines, columns, toolbars, split views | AppKit | **assumed** by the premise (`NSOutlineView`, `NSTableView`, `NSBrowser`, `NSToolbar`, `NSSplitView`) |
 | Directory enumeration, copy/move/remove, attributes | Foundation | **present** — `libagora-base/NSFileManager.h` (including `trashItemAtURL:`, `mountedVolumeURLsIncludingResourceValuesForKeys:`, `URLForDirectory:`, display names) |
 | File URLs and resource values (kind, size, dates, icon, label) | Foundation | **present in shape** — `libagora-base/NSURL.h` (resource-value doors) |
-| Open / reveal / launch an item, default application, notifications | AppKit `NSWorkspace` | **assumed** by the premise; **its platform backing does not exist** (see §2) |
-| Type identity (`Kind`, `Open With`, which app owns an extension) | Launch Services | **absent** |
-| File and type icons, custom icons | Icon Services | **absent** |
+| Open / reveal / launch an item, default application, notifications | AppKit `NSWorkspace` | **present** — `libagora-app/NSWorkspace.h` and `NSRunningApplication.h`, over `libagora-launchservices`, `libagora-iconservices` and the window server's window list; running applications are the ones with windows until the `session` component owns process lifetime |
+| Type identity (`Kind`, `Open With`, which app owns an extension) | Launch Services | **present** — `libagora-launchservices` |
+| File and type icons, custom icons | Icon Services | **present** — `libagora-iconservices` (custom icons still owed) |
 | A directory that announces changes | FSEvents | **absent** (backing: `inotify` on Linux, `kqueue` on the BSDs) |
 | Find by name / by content, Smart Folders | Spotlight | **absent** |
 | Quick Look preview panel and generators | Quick Look framework | **absent** |
@@ -113,7 +113,7 @@ not binding, and follow the `libagora-<domain>` convention.
 | `libagora-disk` | volume enumeration, mount/eject, mount/unmount notifications | **Domain framework** → `DiskArbitration.framework` (`DADiskRef`) | **in-tree**; no udev, no udisks2, no libmount | Linux: `/sys` + `mount(2)`; FreeBSD: `libgeom` + `devctl`; NetBSD & OpenBSD: `getmntinfo` + `mount(2)` | medium — blocks Devices sidebar, W12 |
 | `libagora-netfs` | remote share browsing and mounting | `NetFS.framework`; discovery via Bonjour (`NSNetService`), transport via CFNetwork | discovery: **mDNSResponder** (Apache-2.0 ✓); SMB: **libsmb2** (LGPL-2.1, dyn); NFS: **libnfs** (LGPL-2.1, dyn); Samba ✗ (GPL-3.0) | SMB/NFS via the kernel or libsmb2/libnfs (dynamic); discovery via mDNS | low — defer to W12 |
 | `session` (name TBD) | login/session start, launching the shell's components at login, app lifetime | **Darwin** → `launchd` + loginwindow (not a Core Services framework) | in-tree; **libdbus** (AFL-2.1) if a bus is used; **no systemd, logind, elogind or sd-bus** | in-tree session manager; no logind | medium — blocks "Workspace at login", Force Quit |
-| `Dock` (name TBD) | the Dock as its own client; the Trash icon; running-app list | Apple's `Dock.app` (a desktop client, not a framework) | in-tree | in-tree; an `agora_shell` client at `NSDockWindowLevel` | medium — blocks Trash drop, but not desktop |
+| `Dock` | the Dock as its own client; the Trash icon; running-app list | Apple's `Dock.app` (a desktop client, not a framework) | in-tree | **present at `dock/`** (`io.github.agoradesktop.dock`): an `agora_shell` client at `NSDockWindowLevel`, vertical on the right (left optional), reserving its edge; running applications from `NSWorkspace` over the window server's window list | Trash drop still blocked on the contract (§5.3) and on the drag transport |
 
 **Three parts of the band deliberately get no repository of their own.** The **CarbonCore File Manager**
 (`FSRef`, `FSCatalogInfo`, `FSGetCatalogInfo`) and **Alias Manager** (`AliasHandle`, `FSResolveAlias`) are the

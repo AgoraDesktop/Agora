@@ -1,4 +1,17 @@
-# The demo
+# The default session and the demo
+
+## The default session
+
+```
+demo/agora-session.sh [WIDTHxHEIGHT]   # 1280x720 by default; Ctrl-C stops it
+```
+
+The default session runs the three pieces a login session needs: the **window server**, the **wallpaper client**,
+and **Workspace** (desktop, icons and menu bar). It deliberately does not start the controls application. It uses
+the same nested, non-grabbing X11 setup as the demo, defaults the desktop to `$HOME/Desktop`, and accepts
+`AGORA_DESKTOP`, `AGORA_WALLPAPER` and `AGORA_SESSION_SOCKET`.
+
+## The demo
 
 One window server, three clients, and a menu bar that belongs to whichever of them is **active**.
 

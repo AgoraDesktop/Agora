@@ -19,7 +19,10 @@ cd "$ROOT"
 
 SERVER_BIN="$ROOT/window-server/build/window-server"
 CLIENT_BIN="$ROOT/window-server/build/tests/window-server-test-client"
-WORKSPACE_BIN="$ROOT/workspace/build/Workspace.app/Contents/MacOS/Workspace"
+# The bundle is laid out per platform and architecture — Contents/<platform>/<arch>/Workspace — and a
+# developer's build tree carries exactly one slice, so the glob is exact where a hand-written mapping
+# (Linux/FreeBSD/MacOS × amd64/arm64) would be a second copy of libagora-core's vocabulary.
+WORKSPACE_BIN="$(ls "$ROOT"/workspace/build/Workspace.app/Contents/*/*/Workspace 2>/dev/null | head -1)"
 CONTROLS_BIN="$ROOT/libagora-app/build/tests/appkit_controls_draw"
 
 for b in "$SERVER_BIN" "$CLIENT_BIN" "$WORKSPACE_BIN" "$CONTROLS_BIN"; do
@@ -59,7 +62,7 @@ DESK="/tmp/agora-demo-desktop"
 # colour the server tests use, so the demo still runs in a tree without the picture.
 WALLPAPER="${AGORA_WALLPAPER:-$ROOT/wallpaper.jpg}"
 
-pkill -f "MacOS/Workspace" 2>/dev/null
+pkill -f "Workspace.app/Contents/" 2>/dev/null
 pkill -f "backend x11" 2>/dev/null
 pkill -f "appkit_controls_draw" 2>/dev/null
 pkill -f "window-server-test-client" 2>/dev/null

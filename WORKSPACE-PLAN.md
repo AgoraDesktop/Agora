@@ -497,7 +497,7 @@ the ingest are Apple's.
 - **READY (2026-10-18): THE APPKIT PREREQUISITES ARE COMPLETE.** A file window is a toolbar, a sidebar, a path bar
   and a view switcher, and the AppKit now has all four: `NSToolbar` with `NSToolbarItemGroup`, the cell-based table
   and `NSOutlineView` in an `NSSplitView`, `NSSegmentedControl` for the switcher and `NSPathControl` for the bar.
-  `NSBrowser` is here now (W5, table-backed); `NSSearchField` and `NSProgressIndicator` remain W10's and W6's. The W2 shell can be built now; **W2p** records the inventory that unblocked it. W4's list
+  `NSBrowser` is here now (W5, table-backed); `NSSearchField` is here with its ornaments and recents (W10 still owns the query), and `NSProgressIndicator` is W6's. The W2 shell can be built now; **W2p** records the inventory that unblocked it. W4's list
   view also has its table foundation: editing, type-select, variable heights, column reordering, autosave and a local
   row drag are in; only the cross-process drag session waits for W7.
 - **Deliverable:** `WSFileWindowController` with toolbar, sidebar, path bar, status bar, the three-view
@@ -533,7 +533,7 @@ the ingest are Apple's.
   | view switcher | `NSSegmentedControl`, `NSSegmentedCell` | **have** |
   | list view (W4) | `NSTableView`, `NSTableColumn`, `NSTableHeaderView`, `NSTableHeaderCell` | **have (cell-based)**; editing, type-select, variable heights, column reordering and autosave **have**; cross-process drag session **missing** |
   | column view (W5) | `NSBrowser` | **have** (table-backed; the `NSMatrix` form is absent) |
-  | search (W10) | `NSSearchField`, `NSSearchFieldCell` | **missing** |
+  | search (W10) | `NSSearchField`, `NSSearchFieldCell` | **have** (the field, its ornaments and its recents; W10 still owns the query) |
   | progress (W6) | `NSProgressIndicator` | **have** |
   | status bar | `NSTextField`, `NSTextFieldCell` | **have** |
   | scrolling | `NSScrollView`, `NSClipView`, `NSScroller` | **have** |
@@ -545,8 +545,8 @@ the ingest are Apple's.
 - **Order, and why:** `NSTableView` first — it is the source list's engine (`NSOutlineView` is a subclass) AND the
   list view of W4. **Every file-shell prerequisite is now here**: the table/outline, `NSSplitView`,
   `NSSegmentedControl`, `NSToolbarItemGroup` and `NSPathControl`. W2 can return to its deliverable; W4's list view
-  can start on the table core's missing editing/type-select/drag-drop half, and `NSProgressIndicator` and
-  `NSSearchField` still wait for W6 and W10.
+  can start on the table core's missing editing/type-select/drag-drop half, `NSProgressIndicator` waits for W6,
+  and `NSSearchField` is here — W10 still owns the search semantics behind it.
 - **Proves:** the window shell is a real shell — its parts are the platform's, not painted pictures of them.
 
 ### W3 — Icon view

@@ -171,6 +171,16 @@ rebuilt inside it.
 - **An app bundle.** Cocoa's product *is* a `.app`: `Contents/MacOS`, `Contents/Resources`, `Info.plist`.
   `NSBundle.h` already models exactly this layout and already reads it, so the packager is a *writer* for
   a layout the runtime *reader* already understands. That symmetry is the design.
+- **The bundle is UNIVERSAL — several machines, not one.** Apple's universal binary is a Mach-O container with
+  several architectures inside; the ELF loaders on Linux and the BSDs have no such container and would not `exec`
+  one. So an Agora bundle carries **one complete binary per platform** in `Contents/MacOS`, and the manifest names
+  them: `AGBundleExecutables = { "linux-x86_64" = …; "linux-aarch64" = …; "freebsd-amd64" = …; }`. `NSBundle
+  -executablePath` resolves that table against the running machine first and falls back to `CFBundleExecutable`, so
+  every bundle that exists today keeps working and a multi-platform one picks the right file by construction. The
+  platform spelling is `uname`'s sysname and machine, lowercased and hyphenated — measured per process rather than
+  tabulated, so a machine nobody has built for yet still matches itself.
+  The writer exists now (`tests/agora_bundler.m`, which runs the tool and then opens what it wrote); what is still
+  missing is the manifest that says *what* to build for each platform, which is the rest of this section.
 - **An SDK/profile.** Applications build against the installed stack, which `build-prefix/` already
   is. Turning that into a *named, versioned SDK* an app project can pin is packaging work, not runtime
   work — and it is the same "pins, not floating versions" rule the README states for components.

@@ -405,6 +405,11 @@ the ingest are Apple's.
 - **Done (2026-10-16):** `libagora-iconservices` — C over Core Graphics and Launch Services, **no third-party
   library** (PNG rides `libagora-drawing`), the generics drawn rather than shipped, **16 checks**. See the
   component `README.md`.
+- **Interim default art (2026-10-19):** **Frost v0.3.1** (MIT) is vendored at
+  `libagora-iconservices/themes/Frost`. A type's preferred MIME name is looked up there before the drawn
+  generic (`image/png` → `image-png`, a folder → `folder`), both scales are representations, and
+  `AGORA_ICON_THEME` overrides the installed default. It is data and not a linked dependency; the suite is
+  **24 checks**. The choice and its pin are in `libagora-iconservices/themes/PROVENANCE.md`.
 
 ### F3 — Watch: the change stream
 - **Deliverable:** `libagora-watch`, `inotify`/`kqueue`-backed, coalescing bursts, with a startup rescan so a change during
@@ -505,10 +510,15 @@ the ingest are Apple's.
   `NSPathControl` and a status bar — all reading ONE `WSItemModel`. `WSHistory` is the Back/Forward stack and its
   truncation rule; `WSIconView` is the icon mode (W3); a desktop folder double-click
   posts `WSDesktopViewOpenFolderNotification` and the application opens a second window with its own model and
-  history. Column is W5's now; List is W4's. **MEASURED:** `workspace-history` (15
-  checks) and `workspace-file-window` (45 checks), and the live `--file-window` scene (the first one found that a
-  flipped ROOT content view is drawn with the wrong strip order in this tier's live path — the window keeps an
-  unflipped content view, recorded in `workspace/PROVENANCE.md`).
+  history. Column is W5's now; List is W4's. **AND THE SHELL'S STRIPS ARE AUTO LAYOUT NOW:** the path bar is pinned
+  to the content's top, the status bar to its bottom and the split view fills the band; the split's delegate keeps
+  the sidebar's width and gives the content pane the rest, so a window resize moves the boundary instead of scaling
+  both panes. **AND THE SIDEBAR'S DIVIDER IS A GUTTER:** the split view is in `NSSplitViewDividerStylePaneSplitter`, an
+  eighteen-point three-ring grip a person can drag, and the sidebar's bar autohides when its rows fit.
+  **MEASURED:** `workspace-history` (15 checks) and `workspace-file-window` (57 checks, including two
+  window resizes and both panes), and the live `--file-window` scene (the first one found that a flipped ROOT content
+  view is drawn with the wrong strip order in this tier's live path — the window keeps an unflipped content view,
+  recorded in `workspace/PROVENANCE.md`).
 
 ### W2p — The AppKit prerequisites for the file window
 - **Why it exists:** W2's shell is assembled from controls, and the inventory below is what the AppKit actually has.
@@ -528,7 +538,9 @@ the ingest are Apple's.
   | status bar | `NSTextField`, `NSTextFieldCell` | **have** |
   | scrolling | `NSScrollView`, `NSClipView`, `NSScroller` | **have** |
   | buttons, sliders, pop-ups | `NSButton`/`Cell`, `NSSlider`/`Cell`, `NSPopUpButton`/`Cell` | **have** |
-  | the window itself | `NSWindow`, `NSWindowController`, `NSView`, `NSViewController` | **have** (`NSPanel` missing) |
+  | the window itself | `NSWindow`, `NSWindowController`, `NSView`, `NSViewController` | **have** |
+  | dialogs (W6) | `NSPanel`, `NSAlert` | **have** (the conflict sheet has not moved to them yet) |
+  | resizing (W2) | `NSLayoutConstraint`, `NSLayoutAnchor` | **have** (post-10.6 slice; used by the shell's strips) |
 
 - **Order, and why:** `NSTableView` first — it is the source list's engine (`NSOutlineView` is a subclass) AND the
   list view of W4. **Every file-shell prerequisite is now here**: the table/outline, `NSSplitView`,
@@ -549,7 +561,8 @@ the ingest are Apple's.
   volume, Copy across, Option Copy, Command across Move, Command-Option Link), preflighted drops that refuse a
   conflict, and a 0.6-second hover that posts `WSIconViewRequestFolderWindowNotification` for the application to
   open. **THE LINK IS A SYMBOLIC LINK UNTIL `WSAlias` (W6)**, named where the operation is. **MEASURED:**
-  `workspace-icon-view`, **51 checks**, including a real drag from one window's icon view into another's; the
+  `workspace-icon-view`, **54 checks**, including a real drag from one window's icon view into another's and the
+  label cut to its cell in the middle rather than spilling into the next one; the
   cross-volume cases use a second root on `/dev/shm`.
 
 ### W4 — List view
@@ -561,22 +574,29 @@ the ingest are Apple's.
   (children are child models made on first expansion), with Name, Date Modified, Size and Kind columns; `WSItemSort`
   keeps directories first and orders names naturally (`file2` before `file10`), dates, sizes and Kinds; expansion is
   remembered by PATH across a reload; the Name column's field editor performs one `NSFileManager` move. **MEASURED:**
-  `workspace-list-view`, **30 checks** (four folders and five files, the column values, size/date/Kind orders, a
-  folder open across a reload, a rename through the field editor, Return/Right/Left/Command-Down), and the live
-  `--list-view` scene. **AND THE FIELD EDITOR'S DOOR IS A FINDING:** an outline's editor ends through the TABLE
-  data-source method with a row, not the outline's by-item method, so `WSListView` implements both; recorded in
-  `workspace/PROVENANCE.md`. Still absent: list drag/drop and row icons.
+  `workspace-list-view`, **33 checks** (four folders and five files, the column values, size/date/Kind orders, a
+  folder open across a reload, a rename through the field editor, Return/Right/Left/Command-Down, and the Name
+  column's 16-point icon), and the live `--list-view` scene. **AND THE FIELD EDITOR'S DOOR IS A FINDING:** an
+  outline's editor ends through the TABLE data-source method with a row, not the outline's by-item method, so
+  `WSListView` implements both; recorded in `workspace/PROVENANCE.md`. **AND `--list-view` ITSELF WAS ONE:** the
+  two mode setters both assigned the mode unconditionally, so the list-then-column call order reset it to 0;
+  a false flag now means "not this mode". Still absent: list drag/drop.
 
 ### W5 — Column view
 - **Deliverable:** `WSColumnView` over `NSBrowser`, with the preview column.
 - **Test:** `column_view.m` for the selection→next-column relationship and for the last column's preview.
 - **Done (2026-10-19):** `libagora-app`'s `NSBrowser`/`NSBrowserCell` are here as a table-backed browser (one
-  `NSScrollView`, one `NSTableView` per column, the 10.6 delegate surface; the `NSMatrix` form is named absent), and
-  `workspace/src/WSColumnView` puts it over the per-directory `WSItemModel`s with a fixed preview panel at the right
-  (icon, name, Kind, size, date). A folder selection loads the next column; a leaf adds none and previews. **MEASURED:**
-  `appkit-browser` (20 checks) and `workspace-column-view` (**21 checks**), plus the live `--column-view` scene.
-  **AND THE BROWSER FOUND A TABLE BUG:** `NSTableView` released the proposed selection set before copying it when a
-  delegate returned that same set, so the selection became empty; fixed and recorded in
+  horizontal `NSScrollView` holding one vertical `NSScrollView` + `NSTableView` per column, the 10.6 delegate surface;
+  the `NSMatrix` form is named absent), and `workspace/src/WSColumnView` puts it over the per-directory
+  `WSItemModel`s with a fixed preview panel at the right (icon, name, Kind, size, date). A folder selection loads the
+  next column and scrolls the browser to its end so the new column is against the right edge; a leaf adds none and
+  previews. **MEASURED:** `appkit-browser` (37 checks) and `workspace-column-view` (**28 checks**), plus the live
+  `--column-view` scene. **AND THE COLUMNS ARE INDIVIDUAL NOW:** each has its own vertical scroller, `-widthOfColumn:`/
+  `-setWidth:ofColumn:` are per column, and `NSBrowserUserColumnResizing` makes the gap a drag handle (Workspace sets
+  it) drawn as `NSSplitView`'s eighteen-point, three-ring pane-splitter gutter. A column's bar autohides when its
+  rows fit. **AND THE COLUMNS ARE FINDER'S 256-SLOT POOL:** empty slots are visible columns and keep their widths,
+  while only the visible/active slots size the horizontal document. **AND THE BROWSER FOUND A TABLE BUG:** `NSTableView` released the proposed selection set before copying it when
+  a delegate returned that same set, so the selection became empty; fixed and recorded in
   `libagora-app/PROVENANCE.md` § 18. Still absent: a Quick Look preview inside the column (W9), column drag/drop and
   rename.
 
@@ -589,8 +609,9 @@ the ingest are Apple's.
 - **Done (2026-10-19):** `workspace/src/WSFileOperations` and `WSTrash` implement New Folder, Duplicate, Rename,
   Move/Copy (including across volumes), Move to Trash, Put Back, Empty and Compress, with inverses registered in
   `NSUndoManager`; the inline renames in the icon and list views route through the manager. Conflicts are a
-  handler answered by `WSConflictSheet` (a modal Replace/Skip/Keep Both/Cancel panel; this tier has no
-  `NSPanel`/`NSAlert`), progress is a handler feeding `WSProgressWindow`, and Compress is a ZIP writer using
+  handler answered by `WSConflictSheet` (a modal Replace/Skip/Keep Both/Cancel panel built before the tier had
+  `NSPanel`/`NSAlert`; both classes are here now and the sheet has not moved to them), progress is a handler feeding
+  `WSProgressWindow`, and Compress is a ZIP writer using
   zlib's raw deflate (no shell-out). `WSTrash` uses `~/.Trash` or a per-volume `.Trash-<uid>` and Put Back records.
   **MEASURED:** `workspace-file-ops` (**28 checks**) and `workspace-trash` (**19 checks**), plus
   `appkit-progress-indicator` (**11 checks**) in libagora-app. Named absences: no Trash window/Dock contract (W7/

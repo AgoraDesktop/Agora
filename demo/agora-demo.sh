@@ -48,6 +48,10 @@ for d in "$ROOT"/libagora-*/build; do
 	[ -d "$d" ] && DEMO_BUILD_LIBS="${DEMO_BUILD_LIBS}${DEMO_BUILD_LIBS:+:}$d"
 done
 export LD_LIBRARY_PATH="${DEMO_BUILD_LIBS}${DEMO_BUILD_LIBS:+:}${AGORA_PREFIX:-$ROOT/build-prefix}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# **THE ICON THEME IS THE VENDORED FROST, EVEN UNINSTALLED.** The library's compiled default is the install
+# prefix's share/icons/Frost; a developer running the build trees may never have installed it. An explicit
+# AGORA_ICON_THEME still wins, and an absent directory falls back to Icon Services' drawn generics.
+export AGORA_ICON_THEME="${AGORA_ICON_THEME:-$ROOT/libagora-iconservices/themes/Frost}"
 RUNTIME="${XDG_RUNTIME_DIR:-/tmp}"
 SOCK="agora-demo"
 DESK="/tmp/agora-demo-desktop"

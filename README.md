@@ -26,8 +26,9 @@ Agora is a desktop environment for Linux and BSD. It is three things that compos
 3. **Applications** — a reference set (document, text, grid/formula, presentation, canvas,
    image) written against the stack, shipped as the desktop's content.
 
-Everything is compiled from source. A single **release** repository composes a whole desktop by
-pinning, in a tagged release, one exact revision of every component.
+Everything is compiled from source, apart from the one piece of third-party *art* the desktop vendors — the
+MIT-licensed Frost icon theme (see the Conventions below). A single **release** repository composes a whole
+desktop by pinning, in a tagged release, one exact revision of every component.
 
 ## Repository model — one component, one repository
 
@@ -81,7 +82,7 @@ The component repositories named below exist and build. This list will grow; fur
 |---|---|
 | `window-server` | the Wayland compositor: Agora's implementation of the Mac window server — outputs, seats, input routing, surface roles, layers |
 | `libagora-watch` | the change stream — a path changed, and here is which way |
-| `libagora-iconservices` | Icon Services — the icon an item or a type is drawn with: the lookup and the representations |
+| `libagora-iconservices` | Icon Services — the icon an item or a type is drawn with: the lookup, the representations, and the vendored Frost default theme |
 | `libagora-launchservices` | Launch Services — the type model (Uniform Type Identifiers), and what opens what |
 | `widget-zoo` | a demonstration application: the view and control classes and the menu system |
 | `workspace` | Workspace — the desktop surface (wallpaper, icons, menu bar) and the file-manager windows; an application, consuming the AppKit |
@@ -106,7 +107,8 @@ The component repositories named below exist and build. This list will grow; fur
 - **Build a component.** Each repository's `README.md` carries its build (CMake, into `build/`,
   installing into a shared SDK prefix). The dependency order is the one `release/components.conf`
   records, which the release driver checks.
-- **Read the design record.** `WORKSPACE-PLAN.md` (the shell's stages), `SWIFT-PORT-HANDOFF.md`
+- **Read the design record.** `WORKSPACE-PLAN.md` (the shell's stages), `COCOA-10.11-SURFACE-PLAN.md`
+  (the four frameworks' 10.11 API surface and the plan to reach it), `SWIFT-PORT-HANDOFF.md`
   (where the Swift port stands), `SWIFT-FOUNDATION-PARITY-PLAN.md` (how the Swift Foundation surface
   reaches parity with Apple's), `DEVELOPMENT-TOOLS.md` (the interface-format/build-tool/IDE
   exploration), `RUST-BINDINGS.md`.
@@ -137,6 +139,11 @@ The component repositories named below exist and build. This list will grow; fur
 - **Third-party code is a component.** Libraries taken from elsewhere become pinned Agora components
   of their own — `libagora-core` and `libagora-dispatch` are both extracted from upstream at a pinned
   revision, not vendored inside a consumer.
+- **Third-party *art* that is data may be vendored, pinned and attributed.** The interim default icon
+  set is **Frost** (MIT, v0.3.1), committed as its built PNGs in `libagora-iconservices/themes/Frost`
+  with a provenance record and its own licence. It is data, not linked code, and the rule above still
+  governs code. `AGORA_ICON_THEME` can replace it at run time, and Icon Services' drawn generics remain
+  the fallback.
 - **System ICU.** Text, locale and formatting support uses the platform's **ICU** directly; Agora
   neither vendors ICU nor pins a copy of it.
 - **System OpenSSL.** Cryptography uses the platform's **OpenSSL** directly, on the same terms as

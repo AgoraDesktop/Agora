@@ -342,18 +342,20 @@ A census of the AppKit classes an editor shell leans on, checked against the tre
   `NSFont`, `NSColor`, `NSBezierPath`, `NSGraphicsContext`, `NSViewController`, `NSWindowController`,
   `NSButton`, `NSSlider`, `NSTextField`, `NSPopUpButton`, `NSComboBox`, `NSTableView`, `NSOutlineView`,
   `NSSplitView`, `NSSegmentedControl`, `NSToolbar`, `NSToolbarItemGroup`, `NSPathControl`,
+  `NSPanel`, `NSAlert`, `NSProgressIndicator`, `NSBrowser`, `NSDraggingSession`, `NSLayoutConstraint`/`NSLayoutAnchor`,
   `NSTextAttachment` — **and `NSUndoManager`**, which is the one most likely to be assumed missing and is not: Foundation ships it and
   `NSResponder.h:157` walks the chain to it.
-- **Absent (the furniture):** `NSTabView`, `NSPanel`, `NSAlert`, `NSDrawer`, `NSBox`, `NSProgressIndicator`,
+- **Absent (the furniture):** `NSTabView`, `NSDrawer`, `NSBox`,
   `NSPopover`, `NSColorPanel`, `NSFontPanel`, `NSRulerView`, `NSCollectionView`, `NSTextFinder`,
-  `NSBrowser`, `NSDraggingSession`, `NSTreeController`, `NSArrayController`, `NSDictionaryController`,
-  `NSDocument`.
+  `NSTreeController`, `NSArrayController`, `NSDictionaryController`, `NSDocument`.
 
 That list is the honest cost: an IDE needs an **outline** for the navigator and the view hierarchy, a
 **split view** for panes, **panels/alerts** for dialogs, a **drag session** for reordering and for
-connection-dragging, **temporary attributes** for syntax highlighting (`NSLayoutManager` names its
-background/underline doors as owed), and a **document model**. Each is a documented class → buildable,
-but each is a slice like the ones already in the tree, and there are ~20–30 of them.
+connection-dragging, **temporary attributes** for syntax highlighting (`NSLayoutManager` names the
+marked-range/temporary-attribute pair as still absent), and a **document model**. The outline, the split view,
+panels/alerts and the drag session are now in the tree; the temporary-attribute pair, the document model, the
+tab/collection views and the three bindings controllers are not. Each absent one is a documented class →
+buildable, but each is a slice like the ones already here, and there are a dozen of them.
 
 Two corrections that keep the cost from being overstated: the negative one first.
 

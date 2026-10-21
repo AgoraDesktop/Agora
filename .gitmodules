@@ -73,3 +73,6 @@
 	path = swift-interop-probe
 	url = https://github.com/AgoraDesktop/swift-interop-probe.git
 	branch = main
+[submodule "dock"]
+	path = dock
+	url = https://github.com/AgoraDesktop/dock.git

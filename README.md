@@ -6,8 +6,9 @@ applications — written in Objective-C, built from source.*
 **Status: working, pre-release.** The components are implemented and run together: Foundation,
 Core Graphics, Core Text and the Application Kit carry the Cocoa surface an application uses; the
 window server is a Wayland compositor with client-side chrome, layers and input routing; the Workspace
-shell draws the desktop, icons, menu bar and file windows; and `demo/agora-demo.sh` starts all of them nested on an
-X11 desktop. There is also a Swift toolchain that compiles Swift against this stack (the standard
+shell draws the desktop, icons, menu bar and file windows; `demo/agora-session.sh` starts the default session — the
+window server, the wallpaper client and Workspace — nested on an X11 desktop, and `demo/agora-demo.sh` adds the
+controls application to that scene. There is also a Swift toolchain that compiles Swift against this stack (the standard
 library, the Foundation overlay and the GNUstep class ABI). What is not there yet is an installable
 image: the `release` repository pins and builds the components, but no release is tagged. This
 document is the top-level record of what Agora is and how its repositories are organised; each
@@ -86,6 +87,7 @@ The component repositories named below exist and build. This list will grow; fur
 | `libagora-launchservices` | Launch Services — the type model (Uniform Type Identifiers), and what opens what |
 | `widget-zoo` | a demonstration application: the view and control classes and the menu system |
 | `workspace` | Workspace — the desktop surface (wallpaper, icons, menu bar) and the file-manager windows; an application, consuming the AppKit |
+| `dock` | the Dock — running applications as tiles, in a vertical strip on the right (or the left), at `NSDockWindowLevel` and reserving its edge; an application, a separate client of the window server |
 
 ### Tooling
 
@@ -102,8 +104,10 @@ The component repositories named below exist and build. This list will grow; fur
 
 ## Where to start
 
-- **Run the demo.** `demo/agora-demo.sh` starts the window server, Workspace and the controls
-  application nested on an X11 desktop (`demo/README.md`).
+- **Run the default session.** `demo/agora-session.sh` starts the window server, the wallpaper client and
+  Workspace nested on an X11 desktop.
+- **Run the demo.** `demo/agora-demo.sh` adds the controls application to that scene to show two applications
+  sharing one menu bar (`demo/README.md`).
 - **Build a component.** Each repository's `README.md` carries its build (CMake, into `build/`,
   installing into a shared SDK prefix). The dependency order is the one `release/components.conf`
   records, which the release driver checks.
@@ -124,6 +128,13 @@ The component repositories named below exist and build. This list will grow; fur
   Linux and BSD. GCC is not a supported compiler.
 - **Naming.** Reusable libraries are `libagora-<domain>` (`libagora-core`, `libagora-base`, …);
   programs take a plain kebab-case name (`window-server`, `widget-zoo`).
+- **Bundle identity.** Every first-party application bundle declares
+  **`io.github.agoradesktop.NAME`** — the component's name in lower case, because an identifier is reverse-DNS
+  and Apple's own are (`com.apple.finder`, `com.apple.dock`), while `CFBundleName` keeps the product's spelling
+  (`Workspace`). The identifier is what a window's `set_app_id` carries, what a shell groups windows by, and what
+  Launch Services keys its registry on, so it is a source-compatibility fact and not a caption: renaming a
+  bundle renames the window's application. Libraries carry no identity of their own (their `Info.plist`s, where
+  they have one, record what they *are*, not what they would be called in a Dock).
 - **One repo per component.** Each repository is self-contained: its own build, its own tests, its
   own `README`.
 - **Build into `build/`.** Each repository builds into its own top-level `build/` directory, which
@@ -143,7 +154,11 @@ The component repositories named below exist and build. This list will grow; fur
   set is **Frost** (MIT, v0.3.1), committed as its built PNGs in `libagora-iconservices/themes/Frost`
   with a provenance record and its own licence. It is data, not linked code, and the rule above still
   governs code. `AGORA_ICON_THEME` can replace it at run time, and Icon Services' drawn generics remain
-  the fallback.
+  the fallback. **The default font set is the same kind of asset**: `libagora-drawing/fonts/` carries
+  open-licensed faces (SIL OFL 1.1 and Apache 2.0, each with its licence beside it) that fill the roles
+  macOS fills with its non-redistributable catalogue, plus a provenance record with upstream revisions
+  and checksums. `FN_FONT_PATH` replaces the search path, `AGORA_UI_FONT`/`AGORA_MONO_FONT` replace the
+  role preferences, and a host font of the same name still wins an exact match.
 - **System ICU.** Text, locale and formatting support uses the platform's **ICU** directly; Agora
   neither vendors ICU nor pins a copy of it.
 - **System OpenSSL.** Cryptography uses the platform's **OpenSSL** directly, on the same terms as

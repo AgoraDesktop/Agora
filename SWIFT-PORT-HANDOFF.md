@@ -27,7 +27,10 @@ FormatStyle family. Then P3 started for real: `import Foundation` is now one
 module that re-exports FoundationEssentials and FoundationInternationalization
 and bridges their eleven value types to Agora's Objective-C classes, with a probe
 that round-trips every one of them (and an Agora `-setLocale:` retain bug found
-and fixed on the way). §2.30, §2.31, §2.32, §2.33.
+and fixed on the way). The install was then measured with the ported Foundation
+in place of the overlay — the language gate, both probes and every class-ABI gate
+green — and rolled back for one name collision (`Bundle`) that the test harness
+hits; §2.34 records the three ways out. §2.30, §2.31, §2.32, §2.33, §2.34.
 
 **The Swift surface is finished.** The Cocoa value types carry the API a
 program actually calls (`Data` is a collection you can slice and mutate,
@@ -2646,6 +2649,89 @@ the overlay is out of the way.
 
 ---
 
+### 2.34 P3 slice 2: the module installed, measured — and rolled back for one collision
+
+The next P3 step is "install the module beside the target stdlib and retire the
+overlay". It is now **implemented and measured**, and then **reverted**, because
+one collision remains. Both halves are worth keeping.
+
+**What the install does** (`build-foundation-p3.sh --install`): copies
+FoundationEssentials, FoundationInternationalization and their two support
+libraries next to the target stdlib, moves the overlay's `Foundation.swiftmodule`
+and `libFoundation.so` into `Foundation.overlay-backup/`, installs this module in
+their place, ships the two C modules (`_FoundationCShims`, `_FoundationICU`) under
+`lib/swift/linux/foundation-c-modules/`, and — the piece an SDK would supply —
+teaches the toolchain's `swiftc` wrapper to add those two include directories
+when they are present (`build-swift-toolchain.sh`; the block is conditional, so a
+toolchain without the install behaves exactly as before). `--uninstall` reverses
+all of it.
+
+**What it measured, with the ported Foundation installed as `Foundation`:**
+
+| Gate | Result |
+|---|---|
+| language gate (`verify-swift-port.sh`) | **all checks passed** — including the three sections that only run against the installed toolchain: the `swift_bridge`/value-type bridging, the zero-copy views, and the value-type surfaces (`Data` as a collection, `IndexSet`/`CharacterSet` set algebra, `Decimal` arithmetic, `Calendar` date math, `DateFormatter`, the four header annotations) |
+| the two probes | 18/18 |
+| class-ABI gates (S1, S4, S4b/S4c, S5), library evolution, generic release | green |
+| a plain client | `import Foundation` gives FE's `Data`/`Date`/`Locale`, and `Data as NSData` bridges to Agora's class, with no extra Foundation flags |
+
+That is the point P3 was aiming at: the same programs the toolchain's own gate
+runs are served by the ported Foundation, with the overlay's hand-written value
+types gone.
+
+**Three shims the install needed** (in `foundation-p3/FoundationCompat.swift`,
+each one line of API, not a type):
+
+- `Data.range(of:options:in:)` — FE has the collection surface, corelibs supplies
+  the *search* on Darwin; the shim routes it through Agora's
+  `NSData -rangeOfData:options:range:` so there is one implementation.
+- `Decimal("1.5")` — the unlabelled string initializer, spelled `Decimal(_:)` on
+  Darwin (non-failable, NaN for text it cannot parse) where FE has
+  `init?(string:locale:)`.
+- `Calendar.Identifier: ExpressibleByStringLiteral` — `Calendar(identifier:
+  "gregorian")`, which the toolchain's own gate and a lot of Darwin-written code
+  use, through the CoreFoundation identifier table the `NSCalendar` bridge already
+  carries.
+
+Two gate spellings were wrong on their own terms and were fixed rather than
+shimmed: `TimeZone(identifier:)` is failable on Darwin, and the overlay's copy was
+not — the overlay's two `TimeZone` initializers are failable now
+(`FoundationValueTypes.swift`), so the same source compiles against both modules.
+(`calendar.timeZone = TimeZone(identifier:)` therefore needs the `!` it needs on
+Darwin.)
+
+**Why it was rolled back: `Bundle`.** With the ported Foundation installed, the
+Foundation *test* harness stops building:
+
+```
+ResourceUtilities.swift:24:14: error: ambiguous name 'Bundle' in module 'Foundation'
+```
+
+`import class Foundation.Bundle` is ambiguous because two things are called
+`Bundle` once `@testable import FoundationEssentials` is in scope:
+FoundationEssentials' `package struct Bundle` (its stub for platforms with no
+Objective-C Foundation, and FoundationInternationalization *uses* it) and Agora's
+`NSBundle`, which the importer publishes as `Bundle`. On Darwin there is one
+name because the framework's class *is* the one Foundation defines; here the stub
+and the class are two.
+
+The honest options, none of them taken in this round:
+
+1. **Gate the stub** on the fact it stands for, `#if !FOUNDATION_FRAMEWORK &&
+   !canImport(ObjectiveC)`. Tried and reverted: FI calls `Bundle` (Locale_ICU),
+   so the stub is not dead code and gating it out breaks FI's build.
+2. **Make FI not need the stub** (use `NSBundle` through the bridge), then gate it.
+   That is a small, upstreamable patch plus a rebuild of both modules.
+3. **Have the harness drop `@testable import FoundationEssentials`** — it is the
+   tests' own source, so that is a patch to swift-foundation too.
+
+So the install is a *measured, reversible* step whose remaining blocker is one
+name, and the shipped toolchain is unchanged (the overlay is back, the language
+gate and both harnesses are green). The next round picks one of the three above —
+option 2 is the one that leaves the modules closest to upstream.
+
+---
+
 ## 3. Change inventory
 
 `swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 63 files,
@@ -2694,6 +2780,18 @@ P3's first slice (§2.33):
 | `swift-toolchain/foundation-p3/Probe.swift` | the gate's client: every bridge round-tripped, the stdlib bridges, FI types, `NSObject` interop |
 | `swift-toolchain/scripts/build-foundation-p3.sh` | builds the module into a staging tree and runs the probe |
 | `libagora-base/NSCalendar.m` | `-setLocale:` retains its argument instead of borrowing it (patch `0015`) |
+
+P3's second slice (§2.34):
+
+| File | Change |
+|---|---|
+| `swift-toolchain/foundation-p3/FoundationCompat.swift` | the three shims the install needed: `Data.range(of:options:in:)`, `Decimal(_:)`, `Calendar.Identifier: ExpressibleByStringLiteral` |
+| `swift-toolchain/foundation-p3/FoundationKeptTypes.swift` | the five value types FoundationEssentials does not ship (`Notification`, `PersonNameComponents`, `CharacterSet`, `IndexSet`, `AffineTransform`), their bridges and set algebra, plus the ObjC-class and C-struct conformances the overlay owned |
+| `swift-toolchain/scripts/build-foundation-p3.sh` | `--install`/`--uninstall`: FE/FI, the ported module and the two C modules beside the target stdlib, with the overlay moved to `Foundation.overlay-backup/` |
+| `swift-toolchain/scripts/build-swift-toolchain.sh` | the driver adds the C modules' include directories when they are installed (the SDK piece) |
+| `swift-toolchain/foundation-overlay/FoundationValueTypes.swift` | `TimeZone`'s two initializers are failable, as Darwin's are, so one source compiles against the overlay and FoundationEssentials alike |
+| `swift-toolchain/scripts/verify-swift-port.sh` | the two `TimeZone(identifier:)` spellings gain the `!` Darwin's failable initializer needs |
+| `swift-toolchain/scripts/run-foundation-tests.sh` | the harness keeps the spike's re-export `Foundation` (the reason is §2.34's `Bundle` collision) |
 
 | File (bridging) | Change |
 |---|---|
@@ -2866,6 +2964,11 @@ swift-toolchain/scripts/run-foundation-tests.sh --fi --all   # Locale/Formatting
 # P3's first slice (§2.33): build the re-export `Foundation` module into a
 # staging tree and round-trip every value bridge through Agora's classes
 swift-toolchain/scripts/build-foundation-p3.sh
+
+# P3's second slice (§2.34): install it as `Foundation` beside the target stdlib
+# (the overlay moves to Foundation.overlay-backup/) and roll that back
+swift-toolchain/scripts/build-foundation-p3.sh --install
+swift-toolchain/scripts/build-foundation-p3.sh --uninstall
 
 # the library-evolution gate (same build tree; a class with a resiliently sized
 # member: Update and Singleton, and a client run against an evolved v2 library)
@@ -3171,6 +3274,17 @@ Debugging techniques that produced the findings above:
    (`NSRunLoop -setFireDate:`, `NSTask`'s four, `NSOperation`/`NSThread
    -setName:`, `NSUserUnixTask`'s three, `NSXMLDocument -setDTD:`); then the T2
    value-type diff once the overlay is gone.
+   **Slice 2 (§2.34): the install is implemented and measured.** With the ported
+   module in the overlay's place, the language gate passes *all* its checks
+   (including the three that only run against an installed toolchain), the probes
+   are 18/18, and every class-ABI gate stays green. It ships FoundationEssentials,
+   FoundationInternationalization and the two C modules beside the stdlib, and the
+   driver adds those include directories when they exist (the SDK piece). It was
+   rolled back because the Foundation *harness* cannot build against it: FE's
+   `package struct Bundle` stub and Agora's `NSBundle` are both `Bundle` under
+   `@testable import FoundationEssentials`. The next round's first task is that
+   name — the preferred fix is to make FoundationInternationalization stop needing
+   the stub and then gate it on `canImport(ObjectiveC)`.
 16. **The macro plugin and the internationalization suites are in** (§2.32):
    `build-foundation-macros.sh` builds `FoundationMacros` as a library plugin
    (host build, `-load-plugin-library`), so `PredicateTests` passes, and the

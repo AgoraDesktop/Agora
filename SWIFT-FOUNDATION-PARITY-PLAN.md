@@ -462,12 +462,15 @@ Effort is rough and single-developer; gates are what matter.
    FoundationInternationalization suites / 329 tests green. What it found is recorded there: the spike's ICU
    has no table-driven converters, `Duration(seconds:milliseconds:)` is newer than the fork's stdlib, and
    the `NotificationCenter` assertion needs tagged `NSNumber`s.
-3. **P3's first slice — in** (handoff §2.33): `import Foundation` is one module re-exporting
-   FoundationEssentials + FoundationInternationalization, and its eleven value types bridge to Agora's
-   classes, round-tripped by `build-foundation-p3.sh`'s probe. What P3 still needs: install the module
-   beside the target stdlib and retire the overlay's `FoundationValueTypes.swift`; make the `Data`/`String`
-   bridges views rather than copies; the setter-retain audit the `NSCalendar -setLocale:` bug opened; then
-   the T2 value-type diff. `run-foundation-tests.sh` is the regression harness for all of it.
+3. **P3's first two slices — in** (handoff §2.33, §2.34): `import Foundation` is one module re-exporting
+   FoundationEssentials + FoundationInternationalization with eleven value bridges (probe round-tripped),
+   and `build-foundation-p3.sh --install` puts it in the overlay's place — measured green across the
+   language gate, both probes and every class-ABI gate — with `--uninstall` to roll back. It was rolled
+   back because the Foundation test harness hits one name collision (FE's package `Bundle` stub vs Agora's
+   `NSBundle`). Next, in order: resolve that (make FI stop needing the stub, then gate it on
+   `canImport(ObjectiveC)`), keep the install in place, then make the `Data`/`String` bridges views rather
+   than copies, the setter-retain audit the `NSCalendar -setLocale:` bug opened, and the T2 value-type
+   diff. `run-foundation-tests.sh` is the regression harness for all of it.
 4. **P1, `CustomReflectable`**: 21 edges, and the only remaining conformance cluster that is
    mechanical. A `customMirror` per value type, delegating to the backing object.
 5. **P5, archiving**: 44 `NSCoding`/`NSSecureCoding` edges need `-encodeWithCoder:`/`-initWithCoder:`

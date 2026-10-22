@@ -283,8 +283,10 @@ Open items, in order:
 4. **P3's first slice — in** (handoff §2.33): the `Foundation` module now re-exports FE + FI and bridges
    eleven value types to Agora's classes (`Data`, `Date`, `URL`, `UUID`, `IndexPath`, `Decimal`, `TimeZone`,
    `Locale`, `Calendar`, `DateComponents`, `DateInterval`), with `build-foundation-p3.sh` rounding every one
-   through a probe. Still to do: install it beside the target stdlib, retire the overlay's value types, make
-   the `Data`/`String` bridges views instead of copies, and the setter-retain audit the `NSCalendar`
+   through a probe. The install step exists too (`--install`): measured green across the language gate,
+   both probes and every class-ABI gate, then rolled back for one `Bundle` name collision with the test
+   harness — handoff §2.34. Still to do: that collision, the overlay's value types retired for good, the
+   `Data`/`String` bridges as views instead of copies, and the setter-retain audit the `NSCalendar`
    `-setLocale:` fix opened.
 
 ## 9. Reproduction

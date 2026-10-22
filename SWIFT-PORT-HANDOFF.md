@@ -2241,6 +2241,24 @@ through `objc_msgSend_fpret` (typed dispatch, libobjc2) — which is the first P
 milestone, and the plan records **GO** for strategy B: sources unmodified, core
 value types green, failures in the runtime rather than in missing Foundation API.
 
+That defect has since been reduced to five lines and is not Foundation's at all:
+
+```swift
+final class Box<T> { var value: T; init(_ v: T) { value = v } }
+var a: [Box<Int>] = []
+for n in 0..<8 { a.append(Box(n)) }
+a.removeAll()                       // SIGSEGV
+```
+
+A non-generic pure-Swift class releases correctly. The chain is `swift_arrayDestroy`
+→ the element metadata's value witnesses → `objc_release` → `objc_msgSend_fpret` on a
+class with no dispatch table: a generically-instantiated pure-Swift class is a
+runtime **pattern** class, emitted at layout 2 with the Objective-C class witnesses,
+while §2.21 deliberately makes such a pattern class **not a class object** (null isa).
+Closing it is a compiler/runtime decision (give those metadata Swift value witnesses,
+or make them class objects), and `swift-toolchain/scripts/verify-generic-release.sh`
+is its gate — RED today, on purpose.
+
 ---
 
 ## 3. Change inventory

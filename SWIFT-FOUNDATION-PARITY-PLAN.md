@@ -449,10 +449,12 @@ Effort is rough and single-developer; gates are what matter.
 
 ## 8. Immediate next actions
 
-1. **Fix the `-release` dispatch crash**: `swift_arrayDestroy` sends `-release` through
-   `objc_msgSend_fpret` (typed-dispatch trouble in libobjc2) and takes `UUIDTests`,
-   `DateIntervalTests` and `IndexPathTests` with it. P3 starts here, because it is the last thing between
-   the spike and a green value-type suite.
+1. **Fix the generic-class release crash**: an array of a *generic pure-Swift* class crashes on release
+   (`swift_arrayDestroy` → Objective-C value witnesses → `objc_release` on a pattern class that §2.21
+   deliberately does not make a class object). It takes `UUIDTests`, `DateIntervalTests` and
+   `IndexPathTests` with it. Diagnosed to a five-line repro, and pinned by
+   `swift-toolchain/scripts/verify-generic-release.sh` (currently RED, by design). P3 starts here,
+   because it is the last thing between the spike and a green value-type suite.
 2. **P1, `CustomReflectable`**: 21 edges, and the only remaining conformance cluster that is
    mechanical. A `customMirror` per value type, delegating to the backing object.
 3. **P5, archiving**: 44 `NSCoding`/`NSSecureCoding` edges need `-encodeWithCoder:`/`-initWithCoder:`

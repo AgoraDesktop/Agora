@@ -2271,11 +2271,17 @@ gives *any* pattern without a metaclass Swift witnesses unconditionally
 is not the path this program takes, and the guard stands on its own as a correctness
 measure rather than as the fix. (2) The compiled IR has no `objc_release`, so the
 Objective-C destroy is chosen at run time from a witness table *or* a layout string.
-The next probe is the one that will settle it: break in
-`initializeClassMetadataFromPattern` and read `pattern->Flags` and
-`MetaclassObjectOffset`, and check whether the array's destroy goes through the
-layout-string engine (`swift_cvw_arrayDestroy` → `objcStrongDestroy`), which would
-move the fix to the layout string's refcounting decision.
+The probes have since been run, and they move the target again. The generic pattern's
+`ClassFlags` are **2** — `UsesSwiftRefcounting` *is* set, so the runtime already picks
+Swift's class witnesses, and the flags branch was never the problem. The layout-string
+destroy symbols are never reached either. The crashing call is `swift_arrayDestroy`
+with a small count whose `self` metadata sits beside `Any`/`AnyObject`, i.e. the array
+being destroyed is an **existential** one; its element destroy is `objc_release` by
+design, and the element is an instance of a Swift class that is not a class object.
+The next probe is to read that element's type descriptor (and the caller of
+`swift_arrayDestroy`) to name the existential array responsible; the fix then lies
+either in making the runtime's existential release tolerate non-class-object Swift
+classes, or in making the generic pattern a class object.
 
 ---
 

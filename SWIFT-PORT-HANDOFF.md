@@ -2286,11 +2286,17 @@ statically emitted class gets that word from IRGen; a runtime-instantiated gener
 class gets it from `swift_allocateGenericClassMetadata`, and that allocation is where
 the two halves can disagree. The breakpoint readings that followed are not trustworthy,
 though: they were taken against the installed `-O` libswiftCore, where breakpoints land
-after the prologue and the argument registers have moved. The next step is a scratch
-`-O0 -g` build of the stdlib runtime (same tree, separate build dir), so `pattern`,
-`metadata` and `bounds` can be read as typed values and the VWT word before an
-instantiated class printed directly. That is a debugging-infrastructure step, not a
-guess, and it is what the gate's header now records.
+after the prologue and the argument registers have moved. Instead of a debug build, the runtime now carries an env-gated diagnostic
+(`SWIFT_LAYOUT2_DIAG=1`, folded into patch `0003`): the pattern initialiser prints the
+flags, the bounds and the VWT word it installs, and `swift_arrayDestroy` prints its
+`self`, that `self`'s kind word, the witness table, the `destroy` symbol and its caller.
+It settled two things at once. The class's own witnesses are correct (`flags=2`, a `Bo`
+table), and the `self` that `_ContiguousArrayStorage.deinit` hands to
+`swift_arrayDestroy` is **not the element class's metadata** — its first word is `0x303`,
+which is a witness-table flags word, not a metadata kind. So the defect is in how the
+generic array storage passes (or destroys) its element metadata at layout 2, not in the
+class pattern or the VWT choice. The next probe prints that `self`'s first words and the
+element metadata the storage holds; the fix follows from which pointer it is.
 
 ---
 

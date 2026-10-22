@@ -2264,6 +2264,19 @@ classes (Swift witnesses for a Swift class, or make the pattern a class object),
 `swift-toolchain/scripts/verify-generic-release.sh` as its gate — RED today, on
 purpose.
 
+Two hypotheses were then tested and both came back negative. (1) The runtime chooses
+the class VWT from the generic pattern's `UsesSwiftRefcounting` flag; a guard now
+gives *any* pattern without a metaclass Swift witnesses unconditionally
+(`stdlib/public/runtime/Metadata.cpp`, in patch `0003`) — the gate stayed red, so that
+is not the path this program takes, and the guard stands on its own as a correctness
+measure rather than as the fix. (2) The compiled IR has no `objc_release`, so the
+Objective-C destroy is chosen at run time from a witness table *or* a layout string.
+The next probe is the one that will settle it: break in
+`initializeClassMetadataFromPattern` and read `pattern->Flags` and
+`MetaclassObjectOffset`, and check whether the array's destroy goes through the
+layout-string engine (`swift_cvw_arrayDestroy` → `objcStrongDestroy`), which would
+move the fix to the layout string's refcounting decision.
+
 ---
 
 ## 3. Change inventory

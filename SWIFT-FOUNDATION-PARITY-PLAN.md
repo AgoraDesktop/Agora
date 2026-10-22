@@ -108,7 +108,8 @@ What the harness measures:
   a count that is now too large, so every landing has to shrink the list.
 
 The allowlist is *prefix*-based (`Foundation:NSData` covers `NSData` and everything under it), so the
-baseline is 372 reviewable entries rather than 8,709 lines.
+baseline is 373 reviewable entries rather than 8,680 lines. `--update-allowlist` rewrites the counts,
+*appends* an entry for a gap nothing accepts (a rename can expose one — see §3.1), and keeps the reasons.
 
 ---
 
@@ -120,11 +121,13 @@ baseline is 372 reviewable entries rather than 8,709 lines.
 |---|---|
 | reference symbols | 10,455 |
 | our symbols | 11,314 |
-| **missing** | **8,259 distinct `(path, kind)` — 8,704 declarations in 301 containers** |
+| **missing** | **8,235 distinct `(path, kind)` — 8,680 declarations in 301 containers** |
 | … of those, containers absent entirely | 217 |
 | … members that exist here only in the other shape | 20 |
-| **missing conformances** | **320 edges over 71 types** |
+| **missing conformances** | **322 edges over 72 types** |
 | extra symbols (ours only) | 9,632 — 223 CoreFoundation type containers plus Agora's own additions |
+
+(The `Bundle` slice of §3.1 already landed, hence 8,235 rather than the 8,259 first measured.)
 
 By the allowlist's stage reasons, the missing symbols split roughly: **T3 ≈ 4,400**, **P1 ≈ 3,000**,
 **P4 ≈ 420**, out-of-scope/capped subsystems ≈ 270, and 144 geometry symbols that Darwin's Foundation
@@ -160,6 +163,17 @@ allowlist also shows the enum-shaped half of this pass: `NSAlignmentOptions` →
 `NSQualityOfService` → `QualityOfService`, `NSOperatingSystemVersion` → `OperatingSystemVersion`, and the
 `NS_ERROR_ENUM`/`NS_TYPED_ENUM` members that Darwin imports as enum cases (≈ 80 containers of one or two
 symbols each). `DateFormatter` and `Notification.Name` are already done; they are the pattern.
+
+**The mechanism is verified, and the first rename landed.** A class-level
+`NS_SWIFT_NAME(Bundle)` on `@interface NSBundle` is honoured by this importer (checked first with a
+throwaway module, then in `libagora-base/NSBundle.h`), so the layer is header annotations rather than
+Swift-side typealiases — and the symbol graph moves with it, which is what makes the gate measure the
+work. `Bundle` went from 60 missing symbols to 36: the rename closed 24 outright, and the rest are
+members this class does not have yet or imports in the method shape where Darwin has a property
+(`bundleIdentifier`, `resourceURL`, …). One side effect worth knowing: a rename also makes that type's
+*conformances* measurable (they were unmeasurable while the type did not exist under its Swift name), so
+the allowlist grew a `Bundle -> *` conformance entry — the ratchet's "an unallowlisted gap fails" working
+as intended.
 
 ### 3.2 Conformances the value types do not carry
 
@@ -277,8 +291,9 @@ Effort is rough and single-developer; gates are what matter.
 
 ### P1 — Names and annotations (≈1 week)
 
-- Complete the rename layer (`public typealias Bundle = NSBundle`, … and the irregulars), preferring
-  `NS_SWIFT_NAME` in the headers where the importer can do it and a Swift alias where it cannot.
+- Complete the rename layer with `NS_SWIFT_NAME` in the headers (the mechanism is verified; `Bundle`
+  has landed). 27 names plus the irregulars remain. A Swift alias is only the fallback where the
+  importer cannot do it — an alias would not move the symbol graph, and so would not move the gate.
 - Finish property-shaped accessors across Foundation's headers (the `dateStyle` class of gap).
 - `NS_ENUM`/`NS_OPTIONS` for the remaining C enums; `NS_TYPED_ENUM` for the remaining string typedefs;
   `NS_REFINED_FOR_SWIFT` where the overlay wants the un-renamed door; `NS_SWIFT_SENDABLE` for the
@@ -363,10 +378,10 @@ Effort is rough and single-developer; gates are what matter.
 
 ## 8. Immediate next actions
 
-1. **P1, the rename layer** (§3.1): `public typealias Bundle = NSBundle`, … for the 28 names, the
-   irregulars, and the `NS_ENUM`/`NS_TYPED_ENUM` members. Mechanical, and it removes ~3,000 symbols from
-   the measured gap before any strategic work. Land it in slices and run `--update-allowlist` with each
-   slice; the counts in the diff are the progress metric.
+1. **P1, the rename layer** (§3.1): 27 names plus the irregulars and the `NS_ENUM`/`NS_TYPED_ENUM`
+   members. Mechanical, and it removes ~3,000 symbols from the measured gap before any strategic work.
+   Land it in slices (one header each) and run `--update-allowlist` per slice; the counts in the diff are
+   the progress metric. `Bundle` is the worked example.
 2. **P1, property shapes**: the `dateStyle` class of gap, plus `CustomStringConvertible` on `NSObject`
    (64 edges close with one extension).
 3. **P2, the strategy spike**: build `FoundationEssentials` from `~/.agora-swift/src/swift-foundation`

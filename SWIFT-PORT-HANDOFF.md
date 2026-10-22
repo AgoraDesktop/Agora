@@ -2015,12 +2015,13 @@ edges. Two details that make it trustworthy:
   the declaration's, and the second (`CGFloat` here *is* `Double`) would measure
   the alias rather than a missing declaration.
 
-**The baseline** (2026-10-22, installed toolchain):
+**The baseline** (2026-10-22, installed toolchain; re-measured after the `Bundle`
+slice below):
 
 ```
 reference symbols 10,455      our symbols 11,314
-missing           8,259 distinct (8,704 declarations, 301 containers)
-conformance gaps  320 edges over 71 types
+missing           8,235 distinct (8,680 declarations, 301 containers)
+conformance gaps  322 edges over 72 types
 ```
 
 Eight thousand sounds worse than the earlier "surface is finished" (§2.22) — it is
@@ -2037,6 +2038,16 @@ One measured correction to the plan's earlier estimate: the "caps on T2" (missin
 Objective-C subsystems: `NSPredicate`, `NSMeasurement`, `NSProgress`,
 `NSByteCountFormatter`, `URLSession`) total ≈ 270 symbols — the gap is
 overwhelmingly Swift-native Foundation, not Objective-C Foundation.
+
+**One P1 slice landed with it, to prove the gate moves.** A class-level
+`NS_SWIFT_NAME(Bundle)` on `@interface NSBundle` is honoured by this importer
+(verified first with a throwaway module), so the rename layer is header
+annotations, not Swift aliases — and because the annotation moves the symbol
+graph, the diff measures it. `Bundle` went from 60 missing symbols to 36, and the
+allowlist's `Bundle` entry dropped with it. The rename also *exposed* a gap —
+`Bundle`'s two conformances became measurable the moment the type existed under
+its Swift name — which `--update-allowlist` now appends rather than hides, so the
+gate's "unallowlisted gap fails" rule held on the first real change.
 
 ---
 
@@ -2471,8 +2482,8 @@ Debugging techniques that produced the findings above:
    **Foundation *overlay* parity** is a different, larger project and has its
    own plan: [`SWIFT-FOUNDATION-PARITY-PLAN.md`](SWIFT-FOUNDATION-PARITY-PLAN.md).
    Its P0 (measurement) landed this round (§2.29): the harness, the gate and a
-   measured baseline (8,259 missing symbols, 320 missing conformance edges
-   against a 10,455-symbol three-module reference). P1 (the rename/annotation
+   measured baseline (8,235 missing symbols, 322 missing conformance edges
+   against a 10,455-symbol three-module reference, after the first rename — `Bundle` — landed). P1 (the rename/annotation
    pass) is next; P2 (the `swift-foundation` spike) decides whether the T3 work
    is "port and bridge" or "port the sources".
 12. **Two Agora-side bugs surfaced by the value-type gate and are fixed**
@@ -2726,7 +2737,7 @@ before the default flips.
 The Foundation *overlay* is now measured rather than estimated (§2.29): a
 three-module reference (Foundation + FoundationEssentials +
 FoundationInternationalization, 10,455 symbols) against Agora's 11,314, with
-8,259 symbols and 320 conformance edges still missing, recorded in a 372-entry
+8,235 symbols and 322 conformance edges still missing, recorded in a 373-entry
 allowlist that `verify-foundation-parity.sh --check` ratchets in both directions
 (a gap may not grow, and a count that is now too large must shrink). The
 measurement needed one compiler fix: `swift-symbolgraph-extract` is a direct

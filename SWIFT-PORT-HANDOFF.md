@@ -6,6 +6,19 @@ protocols, existentials, error handling and Unicode strings; and Swift can
 import Agora's `Foundation`, allocate its `NSObject` and message it. Verified by
 [`swift-toolchain/scripts/verify-swift-port.sh`](swift-toolchain/scripts/verify-swift-port.sh).
 
+**Every Swift class is a GNUstep class object at run time now, generic ones
+included.** The previous round left one carve-out: a class instantiated from a
+metadata *pattern* without Objective-C ancestry stayed a plain metadata object
+with a null `isa`. The standard library does not cooperate with that: it stores
+class elements in `_ContiguousArrayStorage<AnyObject>`, so releasing an array of
+a generic class destroys them with `objc_release`, and `-[NSMutableArray
+addObject:]` retains the same way — both faulted. Pattern classes are class
+objects now, and the VWT of a pattern class follows its `UsesSwiftRefcounting`
+flag (a second, independent defect: `Box<Int>: NSObject` was getting Swift's
+witnesses and refcounting over its first stored property). The three
+FoundationEssentials suites that used to segfault pass; the harness reports
+**310 tests**, up from 251. §2.30.
+
 **The Swift surface is finished.** The Cocoa value types carry the API a
 program actually calls (`Data` is a collection you can slice and mutate,
 `IndexSet`/`CharacterSet` are `SetAlgebra`, `Decimal` has arithmetic and
@@ -298,7 +311,7 @@ $ swiftc -O -o prog prog.swift && ./prog              # runs
 | **generic classes, layout 2** | runtime-instantiated metadata (`Box<T>`, `Pair<A,B>`, class-typed fields, generic subclasses), prespecialized metadata, `Array`/`Set`/`Dictionary`, casts between specializations, `AnyObject` boxing, `Mirror`, `deinit` of a generic instance |
 | **generic classes with an ObjC ancestor** | `class Box<T>: NSObject` is a registered GNUstep class object: unique mangled names, `-init` reaches the Swift initializer, `objc_getClass` round-trip, metaclass chain, `NSMutableArray` ownership, and `deinit` runs (S5) |
 | **resilient classes** (layout 2) | a library-evolution class with an ObjC ancestor is relocated at runtime, registered, and gets correct field offsets (including through a resilient superclass chain); a pure Swift resilient class stays a non-class-object; `class_getInstanceVariable`, sizes and `isKind(of:)` verified; its `deinit` runs (S5) |
-| **runtime-pattern classes without ObjC ancestry** | a non-generic class whose superclass is a generic Swift class (`class Sub: Base<Int>`) or a pure Swift generic class itself: metadata is instantiated at runtime, stays a plain Swift metadata object, and never claims a class-object `isa`; fields, inheritance and `deinit` work (§2.21) |
+| **runtime-pattern classes are class objects** | a non-generic class whose superclass is a generic Swift class (`class Sub: Base<Int>`) or a pure Swift generic class itself is a registered GNUstep class object with a metaclass, a unique per-instantiation name and a dispatch table, so `objc_retain`/`objc_release` reach it (that is what an array of class elements and `-[NSMutableArray addObject:]` do); its VWT follows `UsesSwiftRefcounting`; fields, inheritance and `deinit` work (§2.30) |
 | **zero-copy bridges** | `String`/`Array`/`Dictionary`/`Set` cross as `__StringStorage` / `__SwiftDeferredNSArray` / `_SwiftDeferredNSDictionary` / `_SwiftDeferredNSSet` views (the storage classes are registered GNUstep class objects), ObjC primitives (`-count`, `-objectAtIndex:`, `-substringFromIndex:`, `-allObjects`, `-objectForKey:`) reach the Swift overrides, and the inverse bridge adopts the storage back (§2.21) |
 | **the Cocoa value types** | `Data` is a `RandomAccessCollection`/`MutableCollection`, `IndexSet`/`CharacterSet` are `SetAlgebra`, `Decimal` has arithmetic + literals, `Calendar` has the date arithmetic and `DateFormatter`; `NSNotificationName` is a typed enum, `__getCharacters` is the refined door, and `NSNull`/`NSUUID` are `Sendable` (§2.22) |
 | **library evolution, resiliently sized members** (layout 2) | a class with a stored property of a non-frozen struct from another module: `Update` for a pure Swift class, `Singleton` for one libobjc2 allocates from; a client compiled against v1 runs against a v2 library whose struct grew, `-Onone` and `-O` |
@@ -2319,6 +2332,86 @@ longer symbol archaeology: it is a scratch `-O0 -g` build of the stdlib (same tr
 separate build dir), where the emitting IR and the runtime slots can be read together.
 Adding more diagnostics to the release runtime is explicitly not the plan.
 
+That is not where the answer was. The instrumentation that settled it was already in
+place — `SWIFT_LAYOUT2_DIAG` and a breakpoint — read once more against the *addresses*
+rather than the values: see §2.30, which found the destroy arriving from the array
+storage's `<AnyObject>` witnesses (the stdlib's design for class elements) and fixed the
+two ABI defects behind it.
+
+---
+
+### 2.30 The pattern class is a class object, so `objc_release` reaches it
+
+**The generic-release crash is fixed**, with the suite that found it: the three
+FoundationEssentials suites that used to segfault (`UUIDTests`,
+`DateIntervalTests`, `IndexPathTests`) now pass, and the harness reports **310
+tests** instead of 251. The reduction is still five lines:
+
+```swift
+final class Box<T> { var value: T; init(_ v: T) { value = v } }
+var a: [Box<Int>] = []
+for n in 0..<8 { a.append(Box(n)) }
+a.removeAll()                       // used to be SIGSEGV
+```
+
+The previous round's archaeology ("the storage's argument slot holds a VWT, so
+generic arguments are one word off") was reading the right memory and drawing
+the wrong conclusion. Two independent facts explain it, and neither is a
+generic-argument bug.
+
+**1. The standard library stores class elements in `_ContiguousArrayStorage<AnyObject>`.**
+`getContiguousArrayStorageType(for:)` returns `_ContiguousArrayStorage<AnyObject>`
+whenever the element type is a class (a bridging optimization since SwiftStdlib
+5.7; `$Embedded` and pre-5.7 use the element's own storage). So `[Box<Int>]`'s
+buffer is an `_ContiguousArrayStorage<AnyObject>` — the one prespecialized
+storage metadata in the binary — the diagnostic's `self` *was* the element type
+it was handed (`AnyObject`), and its destroy is `objc_release` by design. What
+was wrong was on the other side: a runtime-instantiated pure-Swift class had a
+null `isa`, no dispatch table and no `-release` to inherit, so the send faulted
+in libobjc2's slow path. The same send arrives from ordinary Cocoa code:
+`NSMutableArray().add(Box(1))` retains through libobjc2.
+
+The fix is the layout's own premise, applied uniformly: at layout 2 **every**
+class instantiated from a metadata pattern is a GNUstep class object, whether or
+not it has Objective-C ancestry (IRGen `isGNUstepPatternClassObject`, used by the
+generic and the resilient pattern builders). The metaclass, the unique per-
+instantiation name, the method/ivar lists and the registration were already
+there for the ObjC-ancestry case (S4b/S4c); they now cover the pure-Swift case
+too. A non-generic class with generic ancestry (`class Sub: Base<Int>`) keeps its
+statically emitted metadata and metaclass, so the §2.21 predicate that refused it
+one is gone: `Base<Int>` is a class object, so registering `Sub` resolves.
+
+**2. A pattern class with Objective-C ancestry was given Swift's value witnesses.**
+`initializeClassMetadataFromPattern` chose the class's VWT with "does the pattern
+carry a metaclass", read as `pattern->MetaclassObjectOffset != 0` — which is
+**zero** in the GNUstep layout for the normal case, because the metaclass is the
+*first* object in the extra-data pattern. A `Box<Int>: NSObject` therefore got
+Swift's `Bo` witnesses with `Flags == 0` (no `UsesSwiftRefcounting`), so retaining
+it ran Swift's native refcount increment over the word that holds its first
+stored property: `Box(42)` read back its `value` as `0x4_0000002a` after two
+retains. The choice now follows the flag, as every other layout and the resilient
+path already did. This was a real pre-existing failure the S4b gate pins
+("nested generic instance"); it is green now.
+
+Notes for the next reader:
+
+- **The diagnostics were not lying; the interpretation was.** `swift_arrayDestroy`
+  printing `self`'s first word as `0x303` was the honest answer that the element
+  metadata was `AnyObject` (a `MetadataKind::Optional`-range value metadata with
+  its VWT in the word before it), not one word of drift in a generic-argument
+  slot. `installGenericArguments`' `offset=22` print was correct all along.
+- **`MetaclassObjectOffset` is not a presence test.** It is 0 for the common case.
+  Anything that needs "is this pattern a class object" should ask the predicate
+  that produced the pattern, not read an offset.
+- **The rollback story is unchanged**: layout 0 is still the documented escape
+  hatch, and it has no class objects at all, so neither defect can arise there.
+
+`swift-toolchain/scripts/verify-generic-release.sh` is the gate and it is green:
+array destroy (direct and through `[AnyHashable]`), `NSMutableArray` retain and
+release of a generic instance, and the nested `Box<Box<Int>>` retain, at `-Onone`
+and `-O`. The S4 gate gained the shape assertion (a pattern class's metadata word
+0 is a metaclass, not the `MetadataKind::Class` placeholder).
+
 ---
 
 ## 3. Change inventory
@@ -2339,6 +2432,15 @@ door), `0010-libagora-base-swift-bridge-attributes.patch`,
 `0013-libagora-base-nscalendar-retain-timezone.patch`. `0009` now also carries
 the `NS_SWIFT_NAME`/`NS_REFINED_FOR_SWIFT` lines that land in `NSIndexSet.h`
 and `NSString.h`.
+
+This round (§2.30) is two predicates and one witness-table choice:
+
+| File (pattern class objects) | Change |
+|---|---|
+| `lib/IRGen/GenMeta.cpp` | `isGNUstepPatternClassObject()`: every pattern class is a class object at layout 2, with interop. `GenericClassMetadataBuilder` and `ResilientClassMetadataBuilder` use it, so the pattern carries a metaclass, the method/ivar lists and the class-side fields for a pure Swift class too. `addMetadataFlags()`'s placeholder is now `isGenericContext()` only: a non-generic class with generic ancestry emits its static metadata *and* its static metaclass and is registered, which the §2.21 predicate had to refuse while its superclass was not a class object |
+| `stdlib/public/runtime/Metadata.cpp` | `initializeClassMetadataFromPattern` picks the class's value-witness table from `ClassFlags::UsesSwiftRefcounting` alone. The old `MetaclassObjectOffset != 0` prefix was false for the GNUstep layout's normal case (the metaclass *is* extra-data object 0), so a class with Objective-C ancestry got `Bo` with `Flags == 0` and refcounted over its first stored property |
+| `swift-toolchain/scripts/verify-generic-release.sh` | the gate, rewritten: green, three failure modes (array destroy, `NSMutableArray`, nested instantiation) at `-Onone` and `-O`, `GATE_SWIFTC=` override |
+| `swift-toolchain/scripts/verify-generic-abi.sh` | the class-object shape assertion (metadata word 0 is a metaclass, not the placeholder) |
 
 | File (bridging) | Change |
 |---|---|
@@ -2444,6 +2546,9 @@ Not in the patch, but part of the port:
 | `swift-toolchain/scripts/verify-class-abi.sh` | the S1 gate: C-side registration/dispatch/`+load` checks against a Swift class |
 | `swift-toolchain/scripts/verify-generic-abi.sh` | the S4 gate: generic classes against the layout-2 stdlib, and a check that the binary linked that stdlib |
 | `swift-toolchain/scripts/verify-generic-objc-abi.sh` | the S4b gate: generic ObjC-ancestry classes as class objects (Swift side + C-side alloc/init shape check) |
+| `swift-toolchain/scripts/verify-refcount-abi.sh` | the S5 gate: typed selector records (deinit, typed init/method dispatch, retain/release balance) |
+| `swift-toolchain/scripts/verify-update-abi.sh` | the library-evolution gate (`Update` + `Singleton`, an evolved v2 layout) |
+| `swift-toolchain/scripts/verify-generic-release.sh` | the release gate: array destroy of a generic class (direct and through `[AnyHashable]`), `NSMutableArray` retain/release, nested instantiation; `GATE_SWIFTC=` selects the compiler (§2.30) |
 | `swift-toolchain/patches/0006-libagora-objc-loadClass-np.patch` | the libobjc2 working-tree changes the toolchain depends on: `objc_loadClass_np`, the runtime lock, and the `libobjc.so.4` SONAME |
 | `swift-toolchain/scripts/verify-swift-port.sh` | `VERIFY_SWIFTC` override, so the language/runtime gate can also run against a test compiler |
 | `swift-toolchain/scripts/native-env.sh` | `AGORA_SWIFT_CLASS_LAYOUT` (empty = platform default) |
@@ -2493,6 +2598,10 @@ swift-toolchain/scripts/verify-generic-objc-abi.sh
 # the S5 gate (same build tree; typed selector records: deinit, typed init and
 # method dispatch from Clang-compiled Objective-C, retain/release, no leak)
 swift-toolchain/scripts/verify-refcount-abi.sh
+
+# the generic-release gate (installed toolchain): array release of a generic
+# class, NSMutableArray retain/release, nested instantiation (§2.30)
+swift-toolchain/scripts/verify-generic-release.sh
 
 # the library-evolution gate (same build tree; a class with a resiliently sized
 # member: Update and Singleton, and a client run against an evolved v2 library)
@@ -2602,8 +2711,14 @@ done
   library-evolution gate green (`Update` + `Singleton`, evolved v2 layout at
   `-Onone` and `-O`), and with
   `SWIFTC_LAYOUT2=$T/bin/swiftc STDLIB_DIR=$T/lib/swift`: `S1 gate: ok`,
-  `S4 gate: ok`, `S4b/S4c gate: ok`, `S5 gate: ok`. `import Dispatch` (the
-  no-interop layout-2 overlay) builds and runs.
+  `S4 gate: ok`, `S4b/S4c gate: ok`, `S5 gate: ok`, and the library-evolution
+  gate; `verify-generic-release.sh` is green (array destroy, `NSMutableArray`
+  retain/release, nested instantiation). `import Dispatch` (the no-interop
+  layout-2 overlay) builds and runs. The FoundationEssentials harness
+  (`run-foundation-tests.sh`, against the rebuilt `p2-foundation-testing`)
+  reports **310 passing tests in 8 suites**, the three former crashes included;
+  the remaining three files do not build as single files (cross-file test
+  helpers), which is the P2 spike's harness limitation, not an API gap.
   `build-prefix/lib/libobjc.so.4` is the rebuilt runtime with
   `objc_loadClass_np` and the lock (unchanged this round).
 
@@ -2734,10 +2849,11 @@ Debugging techniques that produced the findings above:
    bridging, `swift_bridge` and (this round) zero-copy sections.
    `verify-class-abi.sh` is the C-side S1/S3 gate; `verify-generic-abi.sh`
    (S4, including the fixed-class-with-generic-superclass regression from
-   §2.21), `verify-generic-objc-abi.sh` (S4b/S4c) and `verify-refcount-abi.sh`
-   (S5) check the stdlib too (`STDLIB_DIR`); `run-native-probe.sh` is the
-   native probe harness and passes every check against the installed
-   toolchain. The published-container `run-probe.sh` and
+   §2.21 and the class-object shape assertion from §2.30),
+   `verify-generic-objc-abi.sh` (S4b/S4c) and `verify-refcount-abi.sh`
+   (S5) check the stdlib too (`STDLIB_DIR`); `verify-generic-release.sh`
+   is the release gate (§2.30); `run-native-probe.sh` is the native probe
+   harness and passes every check against the installed toolchain. The published-container `run-probe.sh` and
    `compat/ObjCInteropShim.c` were deleted in S6 (§2.13).
 11. **The surface is finished** (§2.22): the value types' long tails, the four
    header annotations, the `NSUInteger`-encoded *parameter* selectors
@@ -2761,6 +2877,23 @@ Debugging techniques that produced the findings above:
    (the next `-startOfDayForDate:` read freed memory), and `IndexSet`'s Swift
    iterator started at `-1` against an `NSUInteger` API, so iteration yielded
    nothing.
+13. **The generic-release crash is fixed, and the class ABI is uniform now**
+   (§2.30). Every class instantiated from a metadata pattern is a GNUstep class
+   object, so `objc_retain`/`objc_release` work on any Swift class instance, and
+   a pattern class's VWT follows `UsesSwiftRefcounting` instead of a
+   `MetaclassObjectOffset != 0` test that is false for the normal case. The
+   FoundationEssentials harness went from 251 passing tests with three crashes
+   to **310 passing tests with none**. What is left from the spike's list is the
+   *harness*, not the runtime: `DataIOTests`, `JSONEncoderTests` and `URLTests`
+   do not build as single files because they use helpers from sibling test
+   files. That is the P3 work — compile the suite as one module (the way SwiftPM
+   does), then run the FoundationInternationalization suites, then the bridging
+   layer between FoundationEssentials' types and Agora's classes. The
+   prespecialized-metadata case noted in item 11 is unaffected: it is still
+   unreachable, and static prespecialized metadata keeps its
+   `MetadataKind::Class` placeholder, which is harmless because a prespecialized
+   class is emitted only by the module that declares it, and the stdlib's own
+   storages have Objective-C ancestry and are class objects either way.
 
 ---
 
@@ -2960,7 +3093,15 @@ at `-1` against an `NSUInteger` API (empty iteration); both are fixed. The
 bridging *semantics* were then checked against swift-corelibs-foundation and
 brought into line: a conditional collection/number cast is a check that fails
 (nil), not a conversion that truncates or drops - a data-loss bug the earlier
-"parity" claim had missed. The only
+"parity" claim had missed. The last class-ABI carve-out is gone as well (§2.30): a class instantiated from
+a metadata pattern is a GNUstep class object whether or not it has Objective-C
+ancestry, so `objc_release` - which the standard library sends for every class
+element of an array, and which `-[NSMutableArray addObject:]` sends for anything
+it is given - reaches it; and a pattern class's value witnesses now follow its
+`UsesSwiftRefcounting` flag instead of a metaclass-offset test that is false in
+the normal case (that one had a class with Objective-C ancestry refcounting over
+its first stored property). With it the FoundationEssentials suites went from
+251 passing tests and three crashes to 310 passing and none. The only
 item left is the *unreachable* prespecialized-generic-with-ObjC-ancestor
 compiler case, recorded with what it would take. The installed toolchain no longer borrows the bootstrap's runtime either:
 it ships the host Swift runtime and clang it needs and resolves them relative to

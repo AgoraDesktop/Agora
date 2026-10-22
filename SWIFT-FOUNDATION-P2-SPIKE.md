@@ -192,20 +192,24 @@ Result on the default set:
 | `DecimalTests` | **32 passed** |
 | `GregorianCalendarTests` | **20 passed** |
 | `StringTests` | **35 passed** |
-| `DateIntervalTests`, `IndexPathTests`, `UUIDTests` | **crash** — see below |
+| `DateIntervalTests` | **7 passed** (was a crash — fixed, §2.30 of the handoff) |
+| `IndexPathTests` | **42 passed** (was a crash — fixed) |
+| `UUIDTests` | **10 passed** (was a crash — fixed) |
 | `DataIOTests`, `JSONEncoderTests`, `URLTests` | do not build *as single files*: they reference types from other test files (`LargeDataTests`, `testData`, `FilePlayground`), which is a harness limitation, not an API gap |
 
-**251 upstream tests pass.** The three crashes share one stack, in a hashing test:
+**310 upstream tests pass** (251 before the generic-release fix, 59 in the three suites that used to
+crash). The three crashes shared one stack, in a hashing test:
 
 ```
-swift_arrayDestroy → objc_msgSend_fpret (selector `release`) → SIGSEGV
+swift_arrayDestroy → objc_release → objc_msgSend_fpret (selector `release`) → SIGSEGV
 ```
 
-i.e. a `-release` send is dispatched through the floating-point-return stub while tearing down an array of
-bridged elements. That is the class-object/selector-record area the port has fought before
-(`objc_msgSend_fpret` has shown up in two earlier bugs), and it is now the top of the pile rather than a
-mystery: `UUIDTests.checkHashable`, `DateIntervalTests.anyHashableContainingDateInterval` and
-`IndexPathTests.manyIndexes` all reach it.
+The diagnosis is in the handoff's §2.30 and it was not where the first five hypotheses looked: the array
+being destroyed was a `_ContiguousArrayStorage<AnyObject>` (the stdlib stores *class* elements with that
+type, a bridging optimization), so the element destroy is `objc_release` by design — and a
+runtime-instantiated pure-Swift class was not an Objective-C class object, so it had no dispatch table to
+inherit `-release` from. Every runtime-pattern class is one now, which is also what makes
+`-[NSMutableArray addObject:]` work on a generic class instance.
 
 Two toolchain findings from the attempt, both recorded because they will recur:
 
@@ -223,20 +227,25 @@ Two toolchain findings from the attempt, both recorded because they will recur:
 **Verdict: GO for strategy B** (port swift-foundation and bridge it). The registered conditions:
 
 - sources unmodified — **yes** (no patch to swift-foundation, swift-collections or swift-foundation-icu);
-- core value-type tests largely green — **yes**, with a caveat: 251 tests across Data, Date, Decimal,
-  Calendar and String pass, and the remaining suites crash on one shared runtime defect rather than on
-  missing API;
-- failures attributable to Agora rather than the Swift layer — **yes**: the crash is in libobjc2's typed
-  dispatch (`-release` through `objc_msgSend_fpret`), not in FoundationEssentials.
+- core value-type tests largely green — **yes**: 310 tests across Data, Date, Decimal, Calendar, String,
+  IndexPath, DateInterval and UUID pass, and no suite crashes any more (the shared runtime defect behind
+  the three crashes was fixed — handoff §2.30);
+- failures attributable to Agora rather than the Swift layer — **yes**: the crash was in the class-ABI
+  layer (a runtime-pattern Swift class was not a class object, so `objc_release` could not reach it), not
+  in FoundationEssentials.
 
-That places the spike at **GO / partial GO**: B is right, and the first P3 milestone is to fix the
-`-release` dispatch defect, then widen the harness to whole-directory test compiles (the three
-single-file build failures are test coupling) and run the FI suites (Locale/formatting), which need the
-same harness plus ICU already in place.
+That places the spike at **GO**: B is right, and the first P3 step is to widen the harness to
+whole-directory test compiles (the three single-file build failures are test coupling, not API gaps) and
+run the FI suites (Locale/formatting), which need the same harness plus ICU already in place.
 
 Open items, in order:
 
-1. **Fix the generic-class release crash — diagnosed, minimal, and gated.** It is not
+1. **Fix the generic-class release crash — fixed (handoff §2.30), and the gate is green.**
+   The diagnosis below was the first half of the story: the destroy really does arrive as
+   `objc_release`, but from the *array storage's* `<AnyObject>` value witnesses, not the
+   element class's, and a runtime-pattern class had no `isa` for the send to land on.  Every
+   pattern class is a class object now, and `verify-generic-release.sh` checks all three
+   shapes (array destroy, `NSMutableArray` retain/release, nested instantiation). It is not
    Foundation-specific at all:
 
    ```swift
@@ -253,9 +262,9 @@ Open items, in order:
    `destroy` is `objc_release`), while §2.21 deliberately makes such a pattern class **not a class object**
    (null `isa`, no dtable). Releasing it therefore messages nothing. Two further measurements pin the fix:
    a generic class **with** Objective-C ancestry (`Box<T>: NSObject`) releases correctly, and the compiled
-   IR contains **no** `objc_release` — so the Objective-C destroy comes from the element type's **value
-   witnesses**, not the call site. Acceptance test:
-   `swift-toolchain/scripts/verify-generic-release.sh` — RED today, on purpose.
+   IR contains **no** `objc_release` — so the Objective-C destroy comes from a **value witness
+   table**, not the call site. Acceptance test: `swift-toolchain/scripts/verify-generic-release.sh`
+   (green since the fix).
 2. **Whole-directory test builds** — compile `Tests/FoundationEssentialsTests` as one module (as SwiftPM
    does) so the cross-file helpers resolve; the re-export `Foundation` then needs `-enable-testing` too.
 3. **FI suites** (`FoundationInternationalizationTests`) — Locale/formatting, with ICU already built.

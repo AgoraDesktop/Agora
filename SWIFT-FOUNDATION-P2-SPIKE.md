@@ -236,8 +236,23 @@ same harness plus ICU already in place.
 
 Open items, in order:
 
-1. **Fix the `-release` dispatch crash** — the only thing between "251 tests pass" and the value-type
-   suites being green. Start from `swift_arrayDestroy`'s release path and libobjc2's selector records.
+1. **Fix the generic-class release crash — diagnosed, minimal, and gated.** It is not
+   Foundation-specific at all:
+
+   ```swift
+   final class Box<T> { var value: T; init(_ v: T) { value = v } }
+   var a: [Box<Int>] = []
+   for n in 0..<8 { a.append(Box(n)) }
+   a.removeAll()                     // SIGSEGV
+   ```
+
+   A **non-generic** pure-Swift class releases correctly. The chain is `swift_arrayDestroy` → the element
+   metadata's value witnesses → `objc_release` → `objc_msgSend_fpret` on a class with no dispatch table.
+   The two facts that collide are in `SWIFT-GNUSTEP-CLASS-ABI.md`: a generically-instantiated pure-Swift
+   class is a runtime **pattern** class, emitted at layout 2 with the Objective-C class witnesses (whose
+   `destroy` is `objc_release`), while §2.21 deliberately makes such a pattern class **not a class object**
+   (null `isa`, no dtable). Releasing it therefore messages nothing. Acceptance test:
+   `swift-toolchain/scripts/verify-generic-release.sh` — RED today, on purpose.
 2. **Whole-directory test builds** — compile `Tests/FoundationEssentialsTests` as one module (as SwiftPM
    does) so the cross-file helpers resolve; the re-export `Foundation` then needs `-enable-testing` too.
 3. **FI suites** (`FoundationInternationalizationTests`) — Locale/formatting, with ICU already built.

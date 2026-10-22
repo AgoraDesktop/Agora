@@ -2309,10 +2309,15 @@ argument slot correctly (`offset=22`, `arg0` = the element metadata). The array'
 at all**, yet its element slot holds a value witness table. So the storage's metadata
 is emitted **statically** (a prespecialized/static generic class), and the argument
 IRGen bakes into it at layout 2 is the element's VWT instead of the element's metadata.
-The next step is to read that statically emitted metadata in the binary and fix the
-prespecialized class emission in `GenMeta.cpp` (`addGenericArguments` /
-`IsStaticSpecialization`) for layout 2 — not the runtime, which fills its own slots
-correctly.
+The binary then showed the only prespecialized storage metadata present is
+`_ContiguousArrayStorage<AnyObject>` (`$ss23_ContiguousArrayStorageCyypGMD`), while the
+storage the program uses still never reaches the runtime path. Five hypotheses have now
+been tested and retired — class-pattern flags, layout-string destroys, existential
+release, VWT selection, runtime argument installation — and the remaining suspect is the
+compiler's static/prespecialized class metadata emission. The honest next step is no
+longer symbol archaeology: it is a scratch `-O0 -g` build of the stdlib (same tree,
+separate build dir), where the emitting IR and the runtime slots can be read together.
+Adding more diagnostics to the release runtime is explicitly not the plan.
 
 ---
 

@@ -82,6 +82,22 @@ still needs the runtime slide; Agora's own AppKit declares its ivars in headers.
 §2.23, `SWIFT-GNUSTEP-CLASS-ABI.md` S3, and
 [`swift-interop-probe/conformance/FINDINGS.md`](swift-interop-probe/conformance/FINDINGS.md).
 
+**A `Protocol` object can be messaged now, and `CGFloat` imports (2026-10-22).**
+A protocol object aborted the process on any message (`NSLog(@"%@", proto)`),
+which predates this work and is unrelated to Swift: its class roots at the legacy
+`Object`, whose dispatch table nothing builds; the runtime class carries no
+methods; and Foundation's forwarding hook asked the receiver
+`-respondsToSelector:` to decide whether to forward, which re-entered itself.
+Fixed in three places — libobjc2 builds a superclass's dtable on demand (and
+treats a self-super metaclass as a root), Foundation supplies `-name`,
+`-description`, `-hash` and `-isEqual:` as a `Protocol` category (the runtime
+must not depend on `NSString`), and `fn_proxy_lookup`/`fn_forward_handler` ask
+the runtime instead of messaging. `CGFloat` now imports: the Clang importer maps
+the C typedef to a Swift type of that name looked up in the Foundation overlay,
+which did not declare one. `NSWindow`'s common accessors are `@property`
+declarations now, so the demo is written `window.title = …` rather than
+`window.setTitle(…)`. §2.28.
+
 **A superclass with no layout in its header is laid out at load time
 (2026-10-22).** The last gap in the class layout: a Swift subclass of an
 Objective-C class whose ivars exist only in the `@implementation` (declared as
@@ -1901,6 +1917,54 @@ Found on the way, and unrelated: this runtime cannot answer a message sent to a
 `create_dtable_for_class`). The harness walks the list through a C helper for
 that reason; the defect predates this work and is recorded in
 [`swift-interop-probe/conformance/FINDINGS.md`](swift-interop-probe/conformance/FINDINGS.md) §5.
+
+### 2.28 Messaging a `Protocol` object, and two surface gaps
+
+A `Protocol` object could not be messaged: `NSLog(@"%@", proto)` aborted. Three
+separate defects:
+
+1. **The dispatch table.** `create_dtable_for_class(Protocol)` found its
+   superclass's table uninstalled and aborted. `Protocol` roots at the legacy
+   `Object` class, which nothing messages, so nothing ever built it.
+   `dtable.c` now builds a superclass's table on demand (the runtime lock is
+   recursive; the walk ends at a root) and treats `super == class` as a root,
+   which is what a metaclass whose parent was never resolved looks like.
+2. **The methods.** The runtime's `Protocol` class is a C data structure with an
+   isa and no methods, so `-name`, `-description`, `-hash` and `-isEqual:` all
+   missed — and a miss on an object with no NSObject ancestry re-entered
+   Foundation's forwarding hook forever. Foundation now supplies them as a
+   category (`FNProtocolMethods.m`), because `-name`/`-description` answer an
+   `NSString` and libobjc2 must not depend on Foundation; the interface is in
+   `Foundation/NSObjCRuntime.h`. Darwin's contract: `name` is an `NSString`,
+   `description` is the name, equal protocols hash equally.
+3. **The forwarding hook.** `fn_proxy_lookup` asked the receiver
+   `-respondsToSelector:` to decide whether to forward, and `fn_forward_handler`
+   asked `-methodSignatureForSelector:`; both are messages, so both re-entered.
+   Both now use `class_respondsToSelector` on the receiver's class, and the
+   handler reports "does not respond" rather than recursing.
+
+Verified: `-name`, `-description`, `-hash`, `-isEqual:` from Objective-C and from
+Swift, and `[Protocol]` arrays in Swift; the conformance suite is 55/55.
+
+Two surface gaps closed with it:
+
+- **`CGFloat` imports.** The importer maps the C typedef to a Swift type of that
+  name looked up in the imported module (then `CoreFoundation`); the Foundation
+  overlay declared none, so the type was dropped and `let w: CGFloat` was
+  "cannot find type". The overlay now declares `public typealias CGFloat =
+  Double`.
+- **`NSWindow`'s accessors are properties.** `title`, `contentView`, `delegate`,
+  `minSize`, `maxSize`, `contentMinSize`, `contentMaxSize`, `frame`, `styleMask`,
+  `windowNumber`, `visible`/`keyWindow`/`mainWindow` are `@property`
+  declarations with the ownership the implementations already have (`copy` for
+  the title, `assign` for the delegate, `strong` for the content view; the ones
+  with no setter are `readonly` — this tree has `-setFrame:display:` and no
+  `-setFrame:`). The AppKit demo is written `window.title = …` and still draws.
+
+`libagora-core`'s CF-bridged class tables also carried hand-written `C` type
+encodings for `BOOL`-returning methods; under the `BOOL` fix they no longer
+matched the compiler's selectors, and `-[__NSCFURL isFileURL]` fell through to
+the base class. They now carry the compiler's exact encodings.
 
 ---
 

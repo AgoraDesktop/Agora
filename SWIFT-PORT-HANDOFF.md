@@ -2059,7 +2059,7 @@ conformance pass:
 
 The measurement after three slices: **8,010 missing symbols, 224 missing
 conformance edges, 360 allowlist entries** — from 8,259 / 322 / 372 at the
-baseline. Two gate behaviours were learned on the way and are now part of the
+baseline. (A fourth slice follows.) Two gate behaviours were learned on the way and are now part of the
 tooling:
 
 - a rename *exposes* gaps: a type's conformances are unmeasurable until it exists
@@ -2073,6 +2073,31 @@ tooling:
 The call-site cost of the shape pass was one line each in the overlay
 (`description()` → `description`, three places) and one in
 `verify-swift-port.sh`.
+
+**The irregulars, and a prerequisite the enum half was hiding.** The fourth
+slice took the four names that are not a mechanical `NS`-strip — `NSTask` →
+`Process`, `NSFileManager` → `FileManager`, `NSNotificationCenter` →
+`NotificationCenter`, `NSProcessInfo` → `ProcessInfo` — and the struct
+`NSOperatingSystemVersion` → `OperatingSystemVersion` (its struct fields import as
+properties, so 6 of 8 symbols closed). Total after four slices: **7,958 missing
+symbols, 228 conformance edges, 361 allowlist entries**.
+
+Renaming the enum *types* (`NSAlignmentOptions` → `AlignmentOptions`,
+`NSQualityOfService` → `QualityOfService`) moves the type and nothing else: the
+constants stay globals. They become members only when the importer is told the
+enum is extensible/an option set, and that is what `NS_ENUM`/`NS_OPTIONS` mean on
+Darwin —
+
+```c
+enum __attribute__((enum_extensibility(open))) _name : _type          /* NS_ENUM  */
+enum __attribute__((flag_enum, enum_extensibility(open))) _name : _type  /* NS_OPTIONS */
+```
+
+— while this tree's macros emit only the fixed-underlying-type enum. Measured
+with a throwaway module: `typedef NS_OPTIONS(NSUInteger, NSFooOptions) {
+NSFooMinXInward = … }` imports as a plain struct with no `.minXInward`. So the
+enum pass starts with the macros, not with the headers; that is recorded in
+§3.1 of the plan and is the next slice.
 
 ---
 
@@ -2507,7 +2532,7 @@ Debugging techniques that produced the findings above:
    **Foundation *overlay* parity** is a different, larger project and has its
    own plan: [`SWIFT-FOUNDATION-PARITY-PLAN.md`](SWIFT-FOUNDATION-PARITY-PLAN.md).
    Its P0 (measurement) landed this round (§2.29): the harness, the gate and a
-   measured baseline (8,010 missing symbols, 224 missing conformance edges
+   measured baseline (7,958 missing symbols, 228 missing conformance edges
    against a 10,455-symbol three-module reference, after the rename layer and the `NSObject` pass). P1 (the rename/annotation
    pass) is next; P2 (the `swift-foundation` spike) decides whether the T3 work
    is "port and bridge" or "port the sources".
@@ -2762,7 +2787,7 @@ before the default flips.
 The Foundation *overlay* is now measured rather than estimated (§2.29): a
 three-module reference (Foundation + FoundationEssentials +
 FoundationInternationalization, 10,455 symbols) against Agora's 11,314, with
-8,010 symbols and 224 conformance edges still missing, recorded in a 360-entry
+7,958 symbols and 228 conformance edges still missing, recorded in a 361-entry
 allowlist that `verify-foundation-parity.sh --check` ratchets in both directions
 (a gap may not grow, and a count that is now too large must shrink). The
 measurement needed one compiler fix: `swift-symbolgraph-extract` is a direct

@@ -108,7 +108,7 @@ What the harness measures:
   a count that is now too large, so every landing has to shrink the list.
 
 The allowlist is *prefix*-based (`Foundation:NSData` covers `NSData` and everything under it), so the
-baseline is 360 reviewable entries rather than 8,452 lines. `--update-allowlist` rewrites the counts,
+baseline is 361 reviewable entries rather than 8,399 lines. `--update-allowlist` rewrites the counts,
 *appends* an entry for a gap nothing accepts (a rename can expose one — see §3.1), and keeps the reasons.
 
 ---
@@ -121,14 +121,14 @@ baseline is 360 reviewable entries rather than 8,452 lines. `--update-allowlist`
 |---|---|
 | reference symbols | 10,455 |
 | our symbols | 11,314 |
-| **missing** | **8,010 distinct `(path, kind)` — 8,452 declarations in 300 containers** |
+| **missing** | **7,958 distinct `(path, kind)` — 8,399 declarations in 300 containers** |
 | … of those, containers absent entirely | 189 |
 | … members that exist here only in the other shape | 20 |
-| **missing conformances** | **224 edges over 60 types** |
-| extra symbols (ours only) | 9,380 — 223 CoreFoundation type containers plus Agora's own additions |
+| **missing conformances** | **228 edges over 61 types** |
+| extra symbols (ours only) | 9,328 — 223 CoreFoundation type containers plus Agora's own additions |
 
-(The rename layer of §3.1 has largely landed — 28 classes plus the `NSObject` shape and conformance
-pass — hence 8,010 rather than the 8,259 first measured.)
+(The rename layer of §3.1 has landed — 32 classes and one struct, plus the `NSObject` shape and
+conformance pass — hence 7,958 rather than the 8,259 first measured.)
 
 By the allowlist's stage reasons, the missing symbols split roughly: **T3 ≈ 3,000**, **P1 ≈ 2,800**,
 **T3/P1 ≈ 1,340** (the value types' long tails), **P4 ≈ 400**, out-of-scope/capped subsystems ≈ 225, and
@@ -145,35 +145,47 @@ the measurement, in order:
 Every one of those is either T3 (Apple's own Swift code) or a P1 rename/member pass — which is why the
 strategy below matters more than any single container.
 
-### 3.1 Swift names Darwin gives the imported classes — **landed (28 + `NSObject`)**
+### 3.1 Swift names Darwin gives the imported classes — **landed**
 
 Darwin exposes `NSFoo` as `Foo`. The importer takes a class's Swift name from `NS_SWIFT_NAME` on the
 `@interface`, so each rename is a one-line header annotation, and because the annotation moves the symbol
-graph the gate measures it. All 28 names in this group are annotated in `libagora-base`:
+graph the gate measures it. All 32 names in this group are annotated in `libagora-base`:
 
 ```
-BlockOperation Bundle DateIntervalFormatter EnergyFormatter FileHandle Formatter Host
-ISO8601DateFormatter InputStream JSONSerialization LengthFormatter MassFormatter
-NotificationQueue NumberFormatter Operation OperationQueue OutputStream Pipe Port
-PortMessage PropertyListSerialization RunLoop Scanner SocketPort Stream Thread Timer
-UserDefaults
+BlockOperation Bundle DateIntervalFormatter EnergyFormatter FileHandle FileManager
+Formatter Host ISO8601DateFormatter InputStream JSONSerialization LengthFormatter
+MassFormatter NotificationCenter NotificationQueue NumberFormatter Operation
+OperationQueue OutputStream Pipe Port PortMessage Process ProcessInfo
+PropertyListSerialization RunLoop Scanner SocketPort Stream Thread Timer UserDefaults
 ```
 
-Those 28 closed 246 symbols (`Host` entirely). What remains under each name is its member surface, the
-members that exist in our headers in the method shape where Darwin has a property (`bundleIdentifier`,
-`resourceURL`, …), and — because a type's conformances only become measurable once it exists under its
-Swift name — a handful of `X -> *` conformance entries.
+plus the struct `NSOperatingSystemVersion` → `OperatingSystemVersion` (6 of its 8 symbols closed; the
+remaining two are `Decodable`/`Encodable`.) The 32 classes together closed 292 symbols, `Host` entirely.
 
-Still on the list, in order of leverage:
+What remains under each name is its member surface and the members that exist in our headers in the
+method shape where Darwin has a property (`bundleIdentifier`, `resourceURL`, …).
 
-- the irregular names: `NSTask` → `Process`, `NSFileManager` → `FileManager`, `NSNotificationCenter` →
-  `NotificationCenter`, `NSProcessInfo` → `ProcessInfo`, `NSError`-family types, and
-  `NSComparisonPredicate` → the `Predicate` API (the last is T3, not a rename);
-- the enum-shaped half: `NSAlignmentOptions` → `AlignmentOptions`, `NSQualityOfService` →
-  `QualityOfService`, `NSOperatingSystemVersion` → `OperatingSystemVersion`, and the
-  `NS_ERROR_ENUM`/`NS_TYPED_ENUM` members that Darwin imports as enum cases (≈ 80 containers of one or
-  two symbols each). A type rename does not move the *members*, so these need the constants annotated
-  (or imported under the enum), which is why they are separate.
+**The enum-shaped half needs a prerequisite the plan had not priced.** Renaming an enum's *type*
+(`NSAlignmentOptions` → `AlignmentOptions`, `NSQualityOfService` → `QualityOfService`) moves one symbol
+and leaves every constant behind as a global, because constants become members of the imported type only
+when the importer is told the enum is an option set / extensible enum. That is what `NS_ENUM` and
+`NS_OPTIONS` mean on Darwin:
+
+```c
+#define NS_ENUM(_type, _name)  enum _name : _type _name; \
+                               enum __attribute__((enum_extensibility(open))) _name : _type
+#define NS_OPTIONS(_type, _name) enum _name : _type _name; \
+                               enum __attribute__((flag_enum, enum_extensibility(open))) _name : _type
+```
+
+This tree's macros emit only the fixed-underlying-type enum (`NSObjCRuntime.h:184`), so
+`NSAlignmentOptions` imports as `typealias AlignmentOptions = UInt` and its 47 members never appear.
+Measured directly: a throwaway `typedef NS_OPTIONS(NSUInteger, NSFooOptions) { NSFooMinXInward = … }`
+imports as a plain struct with no `.minXInward`. So the enum pass starts by making the two macros carry
+Darwin's attributes, then converting the enums that need members (`NSAlignmentOptions` and
+`NSQualityOfService` are the two types; ≈ 80 containers are their constants seen through
+`NS_ERROR_ENUM`/`NS_TYPED_ENUM`). That is a real prerequisite, not a rename, and it is why the enum group
+is the next item rather than part of this one.
 
 `DateFormatter` and `Notification.Name` were done earlier; they are the pattern.
 
@@ -304,11 +316,10 @@ Effort is rough and single-developer; gates are what matter.
 
 ### P1 — Names and annotations (≈1 week) — **in progress**
 
-- ~~Complete the rename layer with `NS_SWIFT_NAME` in the headers.~~ **28 class names landed** (§3.1),
-  closing 246 symbols. What is left of this bullet is the irregulars (`NSTask` → `Process`,
-  `NSFileManager` → `FileManager`, `NSNotificationCenter` → `NotificationCenter`, `NSProcessInfo` →
-  `ProcessInfo`) and the enum-shaped half (`NS_ENUM`/`NS_OPTIONS`/`NS_TYPED_ENUM`), where the type rename
-  does not move the members.
+- ~~Complete the rename layer with `NS_SWIFT_NAME` in the headers.~~ **32 class names and one struct
+  landed** (§3.1), closing 292 symbols. The enum-shaped half is a different job: it needs `NS_ENUM`/
+  `NS_OPTIONS` to carry Darwin's `enum_extensibility`/`flag_enum` attributes before the constants import
+  as members (see §3.1).
 - **Property shapes — the `NSObject` slice landed.** `description`/`debugDescription`/`hash` are
   properties on the class, and `NSObject` carries `CustomStringConvertible` +
   `CustomDebugStringConvertible`, which closed 156 conformance edges across the hierarchy. The
@@ -396,9 +407,10 @@ Effort is rough and single-developer; gates are what matter.
 
 ## 8. Immediate next actions
 
-1. **P1, the rest of the rename layer** (§3.1): the four irregulars, then the enum-shaped pass (≈ 80
-   containers, and the one place a type rename does not move the members). Land it in slices and run
-   `--update-allowlist` per slice; the counts in the diff are the progress metric.
+1. **P1, the enum attributes** (§3.1): make `NS_ENUM`/`NS_OPTIONS` emit `enum_extensibility(open)` and
+   `flag_enum` as Darwin's do, then convert `NSAlignmentOptions` and `NSQualityOfService` and watch their
+   constants become members. This also unlocks `OptionSet`/`SetAlgebra` for
+   `NSBinarySearchingOptions`, `NSEnumerationOptions` and `NSSortOptions` (3 conformance edges).
 2. **P1, the property-shape sweep**: members declared as methods where Darwin has a property (`dateStyle`
    and friends; 20 paths are already counted as shape-only gaps). `description`/`debugDescription`/`hash`
    on `NSObject` were the first.

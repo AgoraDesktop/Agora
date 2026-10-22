@@ -16,8 +16,11 @@ addObject:]` retains the same way — both faulted. Pattern classes are class
 objects now, and the VWT of a pattern class follows its `UsesSwiftRefcounting`
 flag (a second, independent defect: `Box<Int>: NSObject` was getting Swift's
 witnesses and refcounting over its first stored property). The three
-FoundationEssentials suites that used to segfault pass; the harness reports
-**310 tests**, up from 251. §2.30.
+FoundationEssentials suites that used to segfault pass. The harness itself was
+then fixed to compile the suites the way SwiftPM does (shared helpers, borrowed
+files, resources), which took it from 8 suites/251 tests to **19 suites/672
+tests, 670 passing** — and turned up one more load-time crash, in libobjc2's
+layout of a late-bound actor's ivars, also fixed and gated. §2.30, §2.31.
 
 **The Swift surface is finished.** The Cocoa value types carry the API a
 program actually calls (`Data` is a collection you can slice and mutate,
@@ -2414,6 +2417,82 @@ and `-O`. The S4 gate gained the shape assertion (a pattern class's metadata wor
 
 ---
 
+### 2.31 Every Foundation test suite that can build, builds
+
+The P2 harness compiled **one test file per binary**, which is not what SwiftPM
+does: it compiles the whole test directory as one module, so the files share
+helpers freely. Three suites therefore did not build (`DataIOTests`,
+`JSONEncoderTests`, `URLTests`) and three more did once asked (`PropertyListEncoderTests`,
+`NotificationCenterTests`, `NotificationCenterMessageTests`). This round made the
+per-file compile equivalent:
+
+- **the shared helpers are compiled in** — `Tests/TestSupport/Utilities.swift` and
+  `FoundationEssentialsTests/ResourceUtilities.swift`, which is where
+  `testData(forResource:)` lives;
+- **a suite that uses a type from another suite's *file* compiles that file too**,
+  and the run is filtered to the suite asked for. Swift-testing matches its
+  `--filter` against the test ID (`<module>.<SuiteType>/<test>`), and the module
+  is the binary's name, so `<name>.<name>` selects exactly one suite — a display
+  name like `URL` would also match the module `URLTests` and run everything;
+- **the test resources are linked next to the binaries** at the path `testData`
+  looks for on Linux (`swift-foundation_FoundationEssentialsTests-tool
+  .resources/Resources`), which is how SwiftPM's bundle is spelled there. Without
+  it `JSONEncoderTests` built and then crashed: it force-unwraps the data it
+  reads;
+- **"no tests found" is not a failure.** `PredicateCodableTests` and
+  `PredicateConversionTests` are entirely inside `#if FOUNDATION_FRAMEWORK`, so
+  they build to a binary with zero tests and swift-testing exits `EX_UNAVAILABLE`
+  (69). The harness reports that as *no tests on this platform*.
+
+`--all` now reports **19 suites, 672 tests run, 670 passing**, up from 8 suites
+and 251 tests two rounds ago. What is left is two single-assertion failures and
+one build gap, all recorded rather than papered over:
+
+| Suite | Result | Why |
+|---|---|---|
+| `PredicateTests` | does not build | needs the `FoundationMacros` macro plugin (`Predicate`/`Expression`), which this spike does not build — the P2 spike's documented prerequisite, and a P3 item |
+| `PredicateCodableTests`, `PredicateConversionTests` | no tests | `#if FOUNDATION_FRAMEWORK`, as above |
+| `NotificationCenterTests` | 9 tests, 1 fails | `internalPostNotificationForValue`: observing and posting a *non-object* subject (`5`), which does not match. `AnyHashable(5)` equality and hashing are correct on Agora, so this is in swift-foundation's subject bookkeeping — a real finding for P3, not a harness artefact |
+| `ProcessInfoTests` | 13 tests, 1 fails | `processName()` asserts the SwiftPM test executable's name (`swift-foundationPackageTests.xctest`); this harness names the binary after the file. A harness artefact |
+
+**The build fix found a load-time crash, which is fixed.** `NotificationCenterTests`
+declares an actor inside an async closure, holding a `Confirmation`:
+
+```swift
+actor OtherActor { var token: NotificationCenter.ObservationToken?; let confirmation: Confirmation }
+```
+
+`Confirmation` has no statically known size, so the class is emitted *late-bound*
+(`instance_size` 0, §2.26's mechanism) — and its synthesized `$defaultActor` ivar
+is emitted with a **null** offset pointer (`buildGNUstepIvarList` has no offset
+global to point at for `Field::DefaultActorStorage`). libobjc2 reads
+`instance_size <= 0` as "compute the layout from the ivar list" and dereferenced
+that null, so the binary SIGSEGV'd in `objc_compute_ivar_offsets()` **before
+`main`**. The reduction is a two-line library-evolution programme:
+
+```swift
+// LibEvolving, built with -enable-library-evolution
+public struct Payload { public var a: Int; public var b: Int }
+// client
+actor A { var p = Payload(a: 7, b: 8); var tail = 9 }
+```
+
+libobjc2 now treats a null `offset` as "this ivar has no offset variable": it
+reserves the ivar's space (the class's `instance_size` is what libobjc2 allocates
+from) and leaves the offset to the runtime that owns the layout, which sets it
+again when the class completes. Patch `0014`. The library-evolution gate gained
+the check (`late-bound actor (resilient member) loads and runs`), verified red
+without the fix and green with it; everything else stayed green (`S1`, `S4`,
+`S4b/S4c`, `S5`, library evolution, the release gate, the language gate, both
+probes).
+
+Unlike §2.30, this one is *not* caused by the class-object work: the class is a
+statically emitted class object either way (`actor` has no generic ancestry), and
+the null offset has been in the ivar list since the GNUstep emission was written.
+It was simply unreachable until a suite with an actor in it built.
+
+---
+
 ## 3. Change inventory
 
 `swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 63 files,
@@ -2441,6 +2520,14 @@ This round (§2.30) is two predicates and one witness-table choice:
 | `stdlib/public/runtime/Metadata.cpp` | `initializeClassMetadataFromPattern` picks the class's value-witness table from `ClassFlags::UsesSwiftRefcounting` alone. The old `MetaclassObjectOffset != 0` prefix was false for the GNUstep layout's normal case (the metaclass *is* extra-data object 0), so a class with Objective-C ancestry got `Bo` with `Flags == 0` and refcounted over its first stored property |
 | `swift-toolchain/scripts/verify-generic-release.sh` | the gate, rewritten: green, three failure modes (array destroy, `NSMutableArray`, nested instantiation) at `-Onone` and `-O`, `GATE_SWIFTC=` override |
 | `swift-toolchain/scripts/verify-generic-abi.sh` | the class-object shape assertion (metadata word 0 is a metaclass, not the placeholder) |
+
+And §2.31, the harness and the load-time layout it exposed:
+
+| File (harness / late-bound ivars) | Change |
+|---|---|
+| `libagora-objc/ivar.c` | `objc_compute_ivar_offsets()` reserves the space of an ivar whose `offset` is null (Swift's synthesized `$defaultActor` storage) instead of dereferencing it; the offset belongs to the runtime that owns a layout it cannot express as a global. Patch `0014` |
+| `swift-toolchain/scripts/verify-update-abi.sh` | a second programme: an actor with a resiliently sized stored property, built against the evolved library and run (the load-time check) |
+| `swift-toolchain/scripts/run-foundation-tests.sh` | the harness: shared helper sources, a cross-file dependency map with per-suite `--filter`, the resource bundle next to the binaries, `EX_UNAVAILABLE`/no-tests classified as *no tests on this platform*, and `--all` skipping the helper file |
 
 | File (bridging) | Change |
 |---|---|
@@ -2602,6 +2689,11 @@ swift-toolchain/scripts/verify-refcount-abi.sh
 # the generic-release gate (installed toolchain): array release of a generic
 # class, NSMutableArray retain/release, nested instantiation (§2.30)
 swift-toolchain/scripts/verify-generic-release.sh
+
+# the P2/P3 Foundation harness: builds and runs swift-foundation's own suites
+# against FoundationEssentials (needs the p2-foundation-testing and
+# p2-swift-testing spike builds; --all for every file, §2.31)
+swift-toolchain/scripts/run-foundation-tests.sh --all
 
 # the library-evolution gate (same build tree; a class with a resiliently sized
 # member: Update and Singleton, and a client run against an evolved v2 library)
@@ -2883,11 +2975,18 @@ Debugging techniques that produced the findings above:
    a pattern class's VWT follows `UsesSwiftRefcounting` instead of a
    `MetaclassObjectOffset != 0` test that is false for the normal case. The
    FoundationEssentials harness went from 251 passing tests with three crashes
-   to **310 passing tests with none**. What is left from the spike's list is the
-   *harness*, not the runtime: `DataIOTests`, `JSONEncoderTests` and `URLTests`
-   do not build as single files because they use helpers from sibling test
-   files. That is the P3 work — compile the suite as one module (the way SwiftPM
-   does), then run the FoundationInternationalization suites, then the bridging
+   to **310 passing tests with none**.
+14. **The Foundation harness compiles suites the way SwiftPM does** (§2.31):
+   shared helpers, borrowed cross-file sources with a run filter, and the test
+   resources next to the binaries. `--all` is now **19 suites, 672 tests, 670
+   passing** (from 8 suites and 251 tests). Doing it exposed a load-time SIGSEGV
+   in libobjc2 — a late-bound class (an actor with a resiliently sized stored
+   property) whose synthesized `$defaultActor` ivar has a null offset pointer was
+   walked by `objc_compute_ivar_offsets()` — now fixed (patch `0014`) and pinned
+   by a check in the library-evolution gate. What is left for P3, in order:
+   build the `FoundationMacros` plugin so `PredicateTests` compiles; chase the one
+   `NotificationCenter` subject-matching assertion (non-object subjects); teach
+   the harness `Tests/FoundationInternationalizationTests`; then the bridging
    layer between FoundationEssentials' types and Agora's classes. The
    prespecialized-metadata case noted in item 11 is unaffected: it is still
    unreachable, and static prespecialized metadata keeps its
@@ -2928,9 +3027,12 @@ swift-toolchain/
 │   ├── 0012-libagora-base-swift-annotations.patch 6 headers (the four
 │   │                                               annotations, NSNotificationName
 │   │                                               as a typed enum; §2.22)
-│   └── 0013-libagora-base-nscalendar-retain-timezone.patch 1 file (NSCalendar
-│                                                   keeps the zone it is given;
-│                                                   §2.22)
+│   ├── 0013-libagora-base-nscalendar-retain-timezone.patch 1 file (NSCalendar
+│   │                                               keeps the zone it is given;
+│   │                                               §2.22)
+│   └── 0014-libagora-objc-ivar-null-offset.patch  1 file (ivar.c: a late-bound
+│                                                   class's null-offset ivar;
+│                                                   §2.31)
 ├── objectivec-overlay/
 │   └── ObjectiveC.swift                       the `ObjectiveC` module the
 │                                              importer looks BOOL/SEL/NSZone

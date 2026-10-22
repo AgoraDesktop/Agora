@@ -195,10 +195,20 @@ Result on the default set:
 | `DateIntervalTests` | **7 passed** (was a crash — fixed, §2.30 of the handoff) |
 | `IndexPathTests` | **42 passed** (was a crash — fixed) |
 | `UUIDTests` | **10 passed** (was a crash — fixed) |
-| `DataIOTests`, `JSONEncoderTests`, `URLTests` | do not build *as single files*: they reference types from other test files (`LargeDataTests`, `testData`, `FilePlayground`), which is a harness limitation, not an API gap |
+| `DataIOTests` | **9 passed** (was a build failure — the harness now compiles `DataTests.swift` for `LargeDataTests`, §2.31 of the handoff) |
+| `URLTests` | **35 passed** (was a build failure — `FilePlayground` + `FileManagerTests.swift`) |
+| `PropertyListEncoderTests` | **79 passed** (was a build failure) |
+| `NotificationCenterTests`, `NotificationCenterMessageTests` | **35 run, 1 fails** (`internalPostNotificationForValue`: a non-object subject does not match) — was a build failure |
+| `BufferViewTests`, `BuiltInUnicodeScalarSetTests`, `ErrorTests`, `LockedStateTests`, `SortComparatorTests`, `GregorianCalendarRecurrenceRuleTests` | **70 passed** |
+| `PredicateCodableTests`, `PredicateConversionTests` | build, **no tests on this platform** (`#if FOUNDATION_FRAMEWORK`) |
+| `PredicateTests` | still does not build: needs the `FoundationMacros` plugin (`Predicate`/`Expression`) |
+| `ProcessInfoTests` | 13 run, 1 fails: `processName()` asserts the SwiftPM executable's name, which this harness does not use |
 
-**310 upstream tests pass** (251 before the generic-release fix, 59 in the three suites that used to
-crash). The three crashes shared one stack, in a hashing test:
+**670 of 672 upstream tests pass, in 19 suites** (672 run, from 8 suites/251 tests before the harness
+was fixed — see the handoff's §2.31). The harness compiles the shared helpers into every binary, borrows
+a sibling *file* when a suite uses a type from it (with a run filter so the borrowed suite does not run
+twice), and links `FoundationEssentialsTests/Resources` next to the binaries at the path
+`testData(forResource:)` looks for on Linux. The three crashes shared one stack, in a hashing test:
 
 ```
 swift_arrayDestroy → objc_release → objc_msgSend_fpret (selector `release`) → SIGSEGV
@@ -265,8 +275,10 @@ Open items, in order:
    IR contains **no** `objc_release` — so the Objective-C destroy comes from a **value witness
    table**, not the call site. Acceptance test: `swift-toolchain/scripts/verify-generic-release.sh`
    (green since the fix).
-2. **Whole-directory test builds** — compile `Tests/FoundationEssentialsTests` as one module (as SwiftPM
-   does) so the cross-file helpers resolve; the re-export `Foundation` then needs `-enable-testing` too.
+2. **Whole-directory test builds — done, per file** (handoff §2.31). Compiling the directory as one
+   module needs the `FoundationMacros` plugin (the predicate suites), which is the item below; the
+   per-file harness now resolves the cross-file helpers and resources without it, and every suite that
+   can build does. The one remaining build failure is `PredicateTests`.
 3. **FI suites** (`FoundationInternationalizationTests`) — Locale/formatting, with ICU already built.
 4. Then P3 proper: the bridging layer between FE/FI types and Agora's `NSData`/`NSDate`/`NSURL`/… and the
    `Foundation` module that ships it.

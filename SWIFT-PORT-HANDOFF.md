@@ -2153,6 +2153,36 @@ and `DateFormatter` are typealiases here, and `NSRectEdge` is an alias whose
 reference (corelibs) declares a separate enum -- the source is the tie-breaker and
 the allowlist says so.
 
+**The conformance slice, and a use-after-free it found.** The overlay's value types
+are now `CustomStringConvertible`/`CustomDebugStringConvertible`, `NSDate`,
+`NSDateInterval`, `NSIndexPath`, `NSNumber`, `NSString`, `DateInterval` and `UUID`
+are `Comparable`, the C structs (`CGPoint`, `CGSize`, `CGRect`,
+`OperatingSystemVersion`) and `Notification` are `Equatable`/`Hashable`, and
+`NSComparisonResult` is a real `NS_ENUM` named `ComparisonResult` for Swift.
+Conformance edges: 222 -> 179. What remains is a list of *implementations*, not
+declarations: archiving (44 edges, the classes have no coder methods at all),
+`CustomReflectable` (21, `customMirror` unwritten), `Codable` and the collection
+conformances (P3), `ReferenceConvertible` (T3), `NSMutableCopying` (8).
+
+The slice also produced the round's best bug. With `extension NSDate: Comparable`
+in place, the language gate's value-types program started to segfault in
+`objc_msgSend_fpret`, dispatching `-UTF8String` from `-[NSDateFormatter
+fnRebuild]`; removing the conformance made it disappear, and a plain method
+category on `NSDate` did *not* reproduce it. It was not the conformance at all:
+`libagora-base` is **manual reference counting**, and `NSDateFormatter`'s setters
+assigned their arguments without retaining them, `-copy` shared them without
+retaining, and `-dealloc` never released them. One more record in the binary
+changed the heap layout and turned the latent dangling `_pattern` into a crash,
+which is why it surfaced only under the conformance. The setters retain and
+release now, `-copy` retains what it shares, and `-dealloc` releases all six
+settings.
+
+The rule is the one the `NSCalendar` time zone fix (§2.22) already stated, in a
+sharper form: **in this tier a setter that assigns an object ivar must retain
+it**, and the Swift overlay is exactly the client that exposes the setters which
+do not. Auditing the rest of `libagora-base` for the same pattern is open work
+(the setters that take objects are few, and grep finds them).
+
 ---
 
 ## 3. Change inventory
@@ -2586,8 +2616,8 @@ Debugging techniques that produced the findings above:
    **Foundation *overlay* parity** is a different, larger project and has its
    own plan: [`SWIFT-FOUNDATION-PARITY-PLAN.md`](SWIFT-FOUNDATION-PARITY-PLAN.md).
    Its P0 (measurement) landed this round (§2.29): the harness, the gate and a
-   measured baseline (7,794 missing symbols, 222 missing conformance edges
-   against a 10,455-symbol three-module reference, after the rename, enum and shape passes). P1 (the rename/annotation
+   measured baseline (7,691 missing symbols, 179 missing conformance edges
+   against a 10,455-symbol three-module reference, after the name, enum, shape and conformance passes). P1 (the rename/annotation
    pass) is next; P2 (the `swift-foundation` spike) decides whether the T3 work
    is "port and bridge" or "port the sources".
 12. **Two Agora-side bugs surfaced by the value-type gate and are fixed**
@@ -2841,7 +2871,7 @@ before the default flips.
 The Foundation *overlay* is now measured rather than estimated (§2.29): a
 three-module reference (Foundation + FoundationEssentials +
 FoundationInternationalization, 10,455 symbols) against Agora's 11,314, with
-7,794 symbols and 222 conformance edges still missing, recorded in a 359-entry
+7,691 symbols and 179 conformance edges still missing, recorded in a 360-entry
 allowlist that `verify-foundation-parity.sh --check` ratchets in both directions
 (a gap may not grow, and a count that is now too large must shrink). The
 measurement needed one compiler fix: `swift-symbolgraph-extract` is a direct

@@ -108,7 +108,7 @@ What the harness measures:
   a count that is now too large, so every landing has to shrink the list.
 
 The allowlist is *prefix*-based (`Foundation:NSData` covers `NSData` and everything under it), so the
-baseline is 359 reviewable entries rather than 8,231 lines. `--update-allowlist` rewrites the counts,
+baseline is 360 reviewable entries rather than 8,121 lines. `--update-allowlist` rewrites the counts,
 *appends* an entry for a gap nothing accepts (a rename can expose one — see §3.1), and keeps the reasons.
 
 ---
@@ -121,7 +121,7 @@ baseline is 359 reviewable entries rather than 8,231 lines. `--update-allowlist`
 |---|---|
 | reference symbols | 10,455 |
 | our symbols | 11,314 |
-| **missing** | **7,794 distinct `(path, kind)` — 8,231 declarations in 300 containers** |
+| **missing** | **7,691 distinct `(path, kind)` — 8,121 declarations in 300 containers** |
 | … of those, containers absent entirely | 185 |
 | … members that exist here only in the other shape | 3 |
 | **missing conformances** | **222 edges over 61 types** |
@@ -204,31 +204,37 @@ measurement and is allowlisted as such.
 
 ### 3.2 Conformances the value types do not carry
 
-224 edges over 60 types, down from 380 after the `NSObject` pass. The shape of it:
+179 edges over 60 types, down from 380 before the two conformance slices. What is left is blocked on
+something other than a declaration:
 
-| Protocol | Missing edges | On |
+| Protocol | Edges | Why it is still there |
 |---|---|---|
-| `NSSecureCoding` / `NSCoding` | 32 / 12 | the Objective-C classes (the archiving suite) |
-| `CustomReflectable` | 21 | collections, value types |
-| `Decodable` / `Encodable` | 18 / 18 | `Data`, `Date`, `URL`, `UUID`, `Decimal`, `IndexPath`, `DateComponents`, `Notification`, `PersonNameComponents`, … |
-| `CustomDebugStringConvertible` / `CustomStringConvertible` | 14 / 12 | the overlay's value types (`Data`, `Date`, `IndexSet`, `Calendar`, …) |
-| `ReferenceConvertible` | 10 | the `NS`↔Swift value-type pairs |
-| `Sequence` / `Collection` / `DataProtocol` | 5 / 3 / 2 | `NSData`, `IndexPath`, `IndexSet` |
+| `NSSecureCoding` / `NSCoding` | 32 / 12 | the classes have no `-encodeWithCoder:`/`-initWithCoder:` at all (checked per class), so the conformance would be a claim without an implementation; secure coding additionally needs `+supportsSecureCoding` and the `decodeObjectOfClass:` doors |
+| `CustomReflectable` | 21 | `customMirror` is unwritten. A mirror that delegates to the backing Objective-C object is one line, but it is a P1/P3 judgement rather than a mechanical fix |
+| `Decodable` / `Encodable` | 20 / 20 | P3: these belong to FoundationEssentials, which replaces the hand-written types |
+| `ReferenceConvertible` | 10 | the protocol itself arrives with FoundationEssentials (T3) |
+| `NSMutableCopying` | 8 | no `-mutableCopy` on those classes |
+| `Sequence`/`Collection`/`DataProtocol`/… | 20 | P3: the collection surface of `Data`/`NSData`/`IndexPath`/`IndexSet` |
+| literal conformances | 7 | `ExpressibleBy*Literal` on `NSNumber`/`NSDecimalNumber`/`NSString`/collections |
 
-Two things worth keeping:
+Landed in this pass: `CustomStringConvertible` + `CustomDebugStringConvertible` on the overlay's value
+types (the debug form is the description form, documented), `Comparable` on `NSDate`,
+`NSDateInterval`, `NSIndexPath`, `NSNumber`, `NSString`, `DateInterval` and `UUID`, and
+`Equatable`/`Hashable` on `CGPoint`, `CGSize`, `CGRect`, `OperatingSystemVersion` and `Notification`.
+`NSComparisonResult` became a real `NS_ENUM` renamed to `ComparisonResult`, which is Darwin's imported
+type and the spelling those comparisons use.
 
-- **`NSObject` carries the class hierarchy.** Darwin gets `CustomStringConvertible` from `NSObject`'s own
-  extension, and the symbol graph records inherited conformances on the subclasses, so one
-  `extension NSObject: CustomStringConvertible, CustomDebugStringConvertible {}` closed 156 edges. It
-  needed a header fix first: `NSObject.h` declared `description` and `debugDescription` twice, as
-  protocol properties and as class methods, and the class's method declaration wins the import — a
-  method-shaped `description` cannot satisfy the requirement. They are properties on the class now, and
-  so is `hash` (which the overlay's `Hashable` conformance previously had to call as `hash()`).
-- **The rest is the value types' own work** (`Data`, `IndexSet`, `Calendar`, …): these are the
-  hand-written overlay types, and they are where T3/P3 will replace the overlay anyway.
-
-There is no `JSONEncoder`/`JSONDecoder` or `PropertyListEncoder`/`PropertyListDecoder` at all, so the
-`Codable` conformances have nothing to talk to yet.
+**A use-after-free fell out of it, and the story is worth keeping.** With the `Comparable` conformance
+on `NSDate` in place, the language gate's value-types program began to segfault inside
+`objc_msgSend_fpret` dispatching `-UTF8String` from `-[NSDateFormatter fnRebuild]` — and bisecting the
+conformance away made it disappear. It was not the conformance: `libagora-base` is **manual reference
+counting** (its CMake says so), and `NSDateFormatter`'s setters assigned their arguments without
+retaining them, `-copy` shared them without retaining, and `-dealloc` never released them. Adding one
+more record to the binary changed the heap layout and turned a latent dangling `_pattern` into a crash.
+The setters retain and release now, `-copy` retains what it shares, and `-dealloc` releases all six
+settings. This is the same family as the `NSCalendar` time zone bug (§2.22 of the handoff): **in this
+tier, a setter that assigns an object ivar must retain it**, and the port's Swift bridging is what
+exposes the ones that do not.
 
 ### 3.3 Swift-native subsystems that are absent
 
@@ -334,7 +340,7 @@ Effort is rough and single-developer; gates are what matter.
 - **Gate:** `verify-foundation-parity.sh --check` is green against the baseline, and fails on an
   unallowlisted gap, a grown gap, or a stale count. Measured cost: ~10 s end to end.
 
-### P1 — Names and annotations (≈1 week) — **mostly landed**
+### P1 — Names, annotations and conformances (≈1 week) — **landed apart from what needs implementation**
 
 - ~~Complete the rename layer with `NS_SWIFT_NAME` in the headers.~~ **32 class names, one struct and
   four option sets landed** (§3.1), closing 440 symbols. The enum half needed `NS_ENUM`/`NS_OPTIONS` to
@@ -427,13 +433,13 @@ Effort is rough and single-developer; gates are what matter.
 
 ## 8. Immediate next actions
 
-1. **P1, value-type conformances** (§3.2): the remaining 222 edges are mostly the overlay's own value
-   types (`Data`, `IndexSet`, `Calendar`, …) — close the cheap ones, leave the `Codable` family to P3,
-   which replaces those types anyway.
-2. **P2, the strategy spike**: build `FoundationEssentials` from `~/.agora-swift/src/swift-foundation`
-   against Agora's CoreFoundation/libdispatch/ICU and run its tests. Do this before writing more value
-   type members — it decides whether the remaining work is "port and bridge" (B) or "port the sources"
-   (A), and either way it is not "re-implement".
-3. Wire `verify-foundation-parity.sh --check` into the gate suite (§6). The ratchet has been exercised
-   by five landings (the rename layer, the `NSObject` pass, the irregulars, the enum pass, the shape
-   pass); it is ready to be a required gate.
+1. **P2, the strategy spike**: build `FoundationEssentials` from `~/.agora-swift/src/swift-foundation`
+   against Agora's CoreFoundation/libdispatch/ICU and run its tests. It decides whether the remaining
+   work is "port and bridge" (B) or "port the sources" (A), and both the `Codable` family and the
+   collection conformances above wait on that answer rather than on more hand-written members.
+2. **P1, `CustomReflectable`**: 21 edges, and the only remaining conformance cluster that is
+   mechanical. A `customMirror` per value type, delegating to the backing object.
+3. **P5, archiving**: 44 `NSCoding`/`NSSecureCoding` edges need `-encodeWithCoder:`/`-initWithCoder:`
+   (and secure decoding) on the classes that have none. That is a subsystem, not a conformance edit.
+4. Wire `verify-foundation-parity.sh --check` into the gate suite (§6). The ratchet has been exercised
+   by six landings; it is ready to be a required gate.

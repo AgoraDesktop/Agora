@@ -13,7 +13,7 @@ does not affect.
 | `libagora-objc`, `-core`, `-dispatch`, `-lcms2`, Frost, fonts | unchanged | **unchanged** — see `THIRD-PARTY.md` |
 
 Every first-party source file now carries `SPDX-FileCopyrightText` and
-`SPDX-License-Identifier`, plus the derivation notice described in `THIRD-PARTY.md`.
+`SPDX-License-Identifier`.
 
 ## What did not change
 
@@ -29,9 +29,17 @@ Two reasons, in order of weight:
 1. **Compatibility with GNUstep.** The project intends to import GNUstep library and
    application code where it is useful. Adopting GNUstep's own scheme — LGPL for
    libraries, GPL for programs — removes all licence friction from doing that.
-2. **A forward-looking hedge** against the possibility that model-assisted code in the
-   tree reproduces a span of GNUstep source. With the project already under compatible
-   terms, no portion is distributed under a licence that could not cover it.
+2. **A hedge against model-assisted code reproducing a GNUstep span.** A portion of
+   this tree was written with model assistance, and language models can reproduce
+   training data verbatim. With the project already under compatible terms, no portion
+   would be distributed under a licence that could not cover it.
+
+   **That hedge has since been retired, on evidence.** The tree was audited on
+   2026-10-22 against GNUstep Base, GNUstep GUI and Apple's swift-corelibs, on both
+   code tokens and comment prose, and no copied code or prose was found — see `audit/`.
+   The blanket per-file derivation notice was therefore removed: a claim that every
+   file may derive from GNUstep is false for all of them, and an unfounded notice is
+   worse than none.
 
 ## Why version 3, specifically
 

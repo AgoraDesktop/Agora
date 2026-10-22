@@ -181,6 +181,48 @@ The component repositories named below exist and build. This list will grow; fur
 - **Apple's names are descriptive.** Names like "Cocoa", "Core Graphics" and "AppKit" describe the
   surface being duplicated. They are not Agora's product names, and no Apple marks or assets ship.
 
+## Provenance: auditing for copied code
+
+Agora reimplements an API that GNUstep also reimplements, so the two trees converge in places without
+anyone copying anything. Telling those cases apart is a measurement, not an opinion, and it is kept
+runnable in `audit/`.
+
+**Run it** whenever code is added that was produced with model assistance, and whenever a new upstream
+is proposed as a source:
+
+```sh
+cd audit && ./audit.py setup          # clone the pinned comparison trees
+./audit.py prose --control            # comment prose - the probative channel
+./audit.py code  --control            # code tokens - produces candidates
+./audit.py explain LIBAGORA-FILE CORPUS-FILE   # inspect one candidate
+```
+
+The corpus is `gnustep/libs-base`, `gnustep/libs-gui` and Apple's
+`swift-corelibs-foundation`/`-libdispatch`, pinned in `audit/audit.py`. **`--control` is not optional:**
+it runs the same comparison against `libagora-core` and `libagora-dispatch`, which are known verbatim
+extractions, so the control must light up — if it does not, the tool is broken and a clean result means
+nothing.
+
+The two channels answer different questions. **Comment prose is the probative one**: code can coincide
+because the specification forces it, but a shared 12-word run of comment text cannot be explained that
+way. A code collision is a candidate to inspect, not a finding; the expected benign shape is a
+declaration or a thin delegating body, which any implementation of that API must produce. The recorded
+run, its numbers and the tool's own failure modes are in `audit/README.md`.
+
+**If a file is found to contain copied code or prose**, in this order:
+
+1. **Rewrite the span.** Cheap, always preferred, and the only outcome that leaves the file's
+   provenance clean.
+2. **If it cannot be rewritten**, keep it and mark it honestly — reproduce the upstream copyright
+   notice on that file, leave it under GNUstep's own terms (LGPL-2.1-or-later upgrades cleanly into
+   this tree's LGPL-3.0-or-later), and add a row to `THIRD-PARTY.md`.
+3. **Record it** in `release/debian/copyright` and in `audit/README.md`, so the next run sees a known
+   file rather than a surprise.
+
+What must not happen is a blanket per-file "may derive from" notice returning. One was carried on every
+file until the 2026-10-22 audit; it covered nothing, was false for all ~1,100 files, and made a real
+match harder to spot.
+
 ## Assumptions to confirm
 
 These are taken as given for now, but are not yet ratified:

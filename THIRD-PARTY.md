@@ -58,20 +58,41 @@ every Agora binary links them, version 3 is the only copyleft the combined work 
 resolve as. This is why the tree is LGPL-3.0-or-later / GPL-3.0-or-later and not
 LGPL-2.1 / GPL-2.0, which is what GNUstep itself uses.
 
-## The GNUstep derivation notice
+## GNUstep
 
-Every first-party source file carries the line:
+**libobjc2 is the only GNUstep code in the tree, and it is MIT, not LGPL.** GNUstep
+Base and the Application Kit are LGPL-2.1-or-later; **no part of either is present**.
+Where Agora's sources name GNUstep — in `NSObject.h`, `NSObjCRuntime.h`,
+`NSFileManager.h` and others — they cite GNUstep's *published reference
+documentation* as a specification. Reading a specification is not copying source.
 
-```
-Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
-```
+That claim was **tested rather than asserted** on 2026-10-22: the first-party tree was
+fingerprinted against `gnustep/libs-base`, `gnustep/libs-gui`,
+`swift-corelibs-foundation` and `swift-corelibs-libdispatch`, on both code tokens and
+comment prose. **No copied code and no copied prose were found.** The procedure and
+the recorded result are in [`audit/`](audit/).
 
-This is a **hedge, stated in advance**, not a claim that each file contains GNUstep
-code. It exists because language models can reproduce training data, and a portion of
-this tree was written with model assistance; the notice ensures that if any span is
-found to match GNUstep source, the licensing position is already correct and nothing
-has been distributed under terms that could not cover it.
+Until that audit was run, every first-party file carried the line *"Portions of this
+file may derive from GNUstep"*. It was a hedge stated in advance, and it is now gone:
+with the audit in hand the sentence asserted something untrue of ~1,100 files, and an
+unfounded notice is worse than none — it makes a real match harder to spot later and
+dilutes the record it points at.
 
-If an audit identifies an actual match, the correct remedy is unchanged and still the
-preferred one: rewrite the span, or mark that file with the real upstream notice, and
-record it in the table above.
+## If copied code is ever found
+
+The audit is a control against a specific mistake, not a one-time ritual. Re-run it
+whenever code is added that was produced with model assistance, and when a new
+upstream is proposed as a source. If a file is found to contain code or prose taken
+from GNUstep or any other project:
+
+1. **Rewrite the span.** This is almost always cheap, it is always preferred, and it
+   is the only outcome that keeps the file's provenance clean.
+2. **If it cannot be rewritten**, keep it and mark it honestly: reproduce the upstream
+   copyright notice on that file, leave the file under the upstream terms GNUstep
+   already uses (LGPL-2.1-or-later upgrades cleanly into this tree's
+   LGPL-3.0-or-later), and add a row to the table above.
+3. **Record it.** `release/debian/copyright` gains a stanza for the path, and the next
+   audit run should show the file as known — not as a surprise.
+
+What must *not* happen is the blanket notice returning. A permission-shaped sentence on
+every file covers nothing and hides everything.

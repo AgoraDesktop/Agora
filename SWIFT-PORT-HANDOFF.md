@@ -2255,9 +2255,14 @@ A non-generic pure-Swift class releases correctly. The chain is `swift_arrayDest
 class with no dispatch table: a generically-instantiated pure-Swift class is a
 runtime **pattern** class, emitted at layout 2 with the Objective-C class witnesses,
 while §2.21 deliberately makes such a pattern class **not a class object** (null isa).
-Closing it is a compiler/runtime decision (give those metadata Swift value witnesses,
-or make them class objects), and `swift-toolchain/scripts/verify-generic-release.sh`
-is its gate — RED today, on purpose.
+Narrowed the next day: the discriminator is Objective-C ancestry — `Box<T>: NSObject`
+releases correctly (it *is* a class object), the pure-Swift one does not — and the
+compiled IR contains no `objc_release` at all, so the Objective-C destroy is arriving
+from the element type's **value witnesses**, not from the call site. That puts the fix
+in the compiler's class value-witness/metadata-kind decision for generic pattern
+classes (Swift witnesses for a Swift class, or make the pattern a class object), with
+`swift-toolchain/scripts/verify-generic-release.sh` as its gate — RED today, on
+purpose.
 
 ---
 

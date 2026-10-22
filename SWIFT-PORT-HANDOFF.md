@@ -82,6 +82,33 @@ still needs the runtime slide; Agora's own AppKit declares its ivars in headers.
 §2.23, `SWIFT-GNUSTEP-CLASS-ABI.md` S3, and
 [`swift-interop-probe/conformance/FINDINGS.md`](swift-interop-probe/conformance/FINDINGS.md).
 
+**A superclass with no layout in its header is laid out at load time
+(2026-10-22).** The last gap in the class layout: a Swift subclass of an
+Objective-C class whose ivars exist only in the `@implementation` (declared as
+`@property`, synthesized, no ivar block in the header) cannot know that class's
+size at compile time, so it was laid out from offset 8 and aliased the
+superclass's storage (`OpaqueHost` 24 bytes, the Swift subclass 9 with its field
+at 8). IRGen now treats an imported superclass with *no ivars in its
+`@interface`* as unknown (`ClassHasOpaqueObjCSuperclass`) and emits the class
+late-bound: `instance_size` 0, which libobjc2's `objc_compute_ivar_offsets()`
+already reads as "compute from the runtime superclass and the ivar list" — the
+path clang's non-fragile emission uses. libobjc2 then calls a weak
+`swift_objcClassLayoutDidChange()`, which the Swift runtime implements to mirror
+the computed size into Swift's own `InstanceSize` word (which the GNUstep
+`instance_size` hides), so a Swift subclass below it lays out correctly too.
+Measured: the subclass is 25 bytes with its field at 24 and the superclass's
+ivars intact. §2.26.
+
+**Protocols declared in Swift are registered now (2026-10-22).** They were
+emitted as Apple's `protocol_t` in the Apple `objc_protolist`/`objc_protorefs`
+sections, which libobjc2 never reads, so `objc_getProtocol()` found none and a
+class's GNUstep protocol list could not name one. IRGen now emits GNUstep's
+`struct objc_protocol` — name, inherited list, required/optional instance/class
+method-description lists — into `__objc_protocols`, with clang's
+`._OBJC_PROTOCOL_<name>` weak symbol so a declaring and a referencing module
+share one object. `class_conformsToProtocol:` and `class_copyProtocolList` now
+answer for a Swift-declared protocol, by pointer. §2.27.
+
 **`BOOL` is Apple's now, so a `BOOL` override is reached by a typed send
 (2026-10-22).** `libagora-objc` defaulted to GNUstep's `unsigned char`, which
 encodes as `C`; Swift's `Bool` encodes as Apple's `c` on x86_64. libobjc2 keys
@@ -1800,6 +1827,80 @@ three `bridges` cases failed until every component was rebuilt together.
 
 Verified: the encoding matrix is 31/31 (was 30/31), the conformance suite 46/46
 (was 44/46), and every component's ctest suite passes.
+
+### 2.26 An opaque superclass is laid out at load time
+
+The last layout gap.  A Swift subclass of an Objective-C class whose ivars exist
+only in its `@implementation` — declared as `@property`, synthesized, no ivar
+block in the `@interface` — cannot know the superclass's size at compile time,
+so the class was laid out from offset 8 and its fields aliased the superclass's
+storage (`OpaqueHost` is 24 bytes; the Swift subclass was 9 with its field at
+offset 8, so writing the Swift property turned the superclass's `counter` from 7
+into 1 and eventually corrupted the heap).
+
+IRGen now detects the case — an imported superclass with no ivars in its
+`@interface`, since the importer can never see the `@implementation` — and sets
+`ClassMetadataFlags::ClassHasOpaqueObjCSuperclass`. `addGNUstepInstanceSize()`
+then emits `instance_size` 0, which is libobjc2's existing **late-bound**
+encoding: `objc_compute_ivar_offsets()` reads a size `<= 0` as "compute this
+class's layout", starts at the runtime superclass's size, walks the ivar list,
+and writes the absolute offsets back through the ivar-offset globals (the same
+path clang's non-fragile emission uses, and the reason the globals exist even for
+statically laid-out classes).
+
+One thing libobjc2 could not fix alone: a Swift class object carries the size
+twice — the GNUstep `instance_size` it allocates from, and Swift's own
+`InstanceSize`, which the first one hides. libobjc2 now calls a weak
+`swift_objcClassLayoutDidChange(Class)` after computing the offsets, and the
+Swift runtime mirrors the GNUstep word into Swift's word. That matters for
+`MemoryLayout`/reflection and, more importantly, for a Swift class *below* this
+one: `initClassFieldOffsetVector` starts from `super->getInstanceSize()`.
+
+Verified: `OpaqueHost` 24 bytes, the Swift subclass 25 with its field at 24,
+`-counter` intact after writing the Swift property; the suite is **51/51**; all
+S1–S6 and library-evolution gates pass (a direct `NSObject` subclass is
+late-bound too now, and the S1 gate still measures its ivar at offset 8).
+
+### 2.27 Protocols declared in Swift are emitted in GNUstep's shape
+
+A Swift `@objc protocol` was emitted as Apple's `protocol_t` into the Apple
+`objc_protolist`/`objc_protorefs` sections, which libobjc2 does not read: so
+`objc_getProtocol()` never found one, and a class's GNUstep protocol list had to
+filter them out rather than hand the runtime a record it would misread.
+
+`ClassDataBuilder::emitGNUstepProtocol()` now emits GNUstep's own record into
+`__objc_protocols`, where the loader registers it:
+
+```
+struct objc_protocol {
+  id isa;                    // protocol_version_gsv2 (4) until load
+  char *name;
+  struct objc_protocol_list *protocol_list;
+  struct objc_protocol_method_description_list *instance_methods;
+  ... required/optional, class/instance ...
+  struct objc_property_list *properties;  // x4 (null: Swift's protocol
+                                          // properties have no GNUstep emission yet)
+};
+```
+
+Method descriptions are `{ SEL record, type encoding }` — the same selector
+records a method list uses, so `-conformsToSelector:`-style lookups compare
+correctly. The symbol is clang's `._OBJC_PROTOCOL_<name>` with **weak** linkage,
+so a module that declares the protocol and one that only references it share a
+single object, exactly as two clang translation units do. The class's protocol
+list no longer filters: both kinds point at a record libobjc2 registered, so a
+pointer-compare conformance check succeeds.
+
+Verified: `objc_getProtocol("SwiftConformanceSide")` finds it,
+`class_conformsToProtocol` and `class_copyProtocolList` see it, the suite is
+**51/51**, and a plain `@objc protocol` (without the explicit name) works too —
+its Objective-C name is just the mangled `_TtP...`.
+
+Found on the way, and unrelated: this runtime cannot answer a message sent to a
+`Protocol` object (`NSLog(@"%@", @protocol(P))` aborts in
+`create_dtable_for_class`). The harness walks the list through a C helper for
+that reason; the defect predates this work and is recorded in
+[`swift-interop-probe/conformance/FINDINGS.md`](swift-interop-probe/conformance/FINDINGS.md) §5.
 
 ---
 

@@ -394,17 +394,16 @@ Verified: `NSView` + 1 stored property is now 504 bytes with the field at offset
 and the library-evolution gate pass unchanged; the conformance suite's layout
 checks pass and its crash probe is now a regression probe that exits 0.
 
-**The remaining case is a superclass whose ivars exist only in its
-`@implementation`** (declared as `@property` and `@synthesize`d, no ivar block in
-the header). A Swift module importer sees only the header, so it cannot know that
-class's size and falls back to the old layout (8 + fields). 204 of Agora's 288
-Foundation/AppKit headers declare their ivars in the `@interface`, including
-`NSView`, `NSWindow`, `NSResponder`, `NSApplication`, `NSControl`, `NSTextView`,
-`NSViewController`, `NSWindowController` and `NSCell`, so this does not affect
-Agora's own AppKit; it does affect a third-party class written that way. Closing
-it needs the runtime slide that libobjc2 lacks (an `instanceStart` the runtime
-can use to compute the delta), and is measured as a `[gap]` by the conformance
-suite.
+**The opaque-superclass case is fixed too (2026-10-22).** A superclass whose
+ivars exist only in its `@implementation` (declared as `@property` and
+`@synthesize`d, no ivar block in the header) is invisible to a Swift module
+importer. Such a class is now detected (`ClassHasOpaqueObjCSuperclass`) and
+emitted *late-bound*: `instance_size` 0, which libobjc2's
+`objc_compute_ivar_offsets()` already reads as "compute this class's layout" and
+which clang's non-fragile emission uses. libobjc2 calls a weak
+`swift_objcClassLayoutDidChange()` afterwards so the Swift runtime mirrors the
+computed size into its own `InstanceSize` word. Measured: a 24-byte superclass
+gives a 25-byte Swift subclass with its field at offset 24.
 
 **The `protocols` field is emitted now too (fixed 2026-10-22).** It was `null`,
 so `class_copyProtocolList`/`class_conformsToProtocol` did not see a Swift
@@ -416,13 +415,14 @@ defining image (`._OBJC_PROTOCOL_X`), because a conformance check compares
 pointers and Swift's own record was Apple-shaped and unregistered.  The
 referenced symbols are added to the TBD; `init_protocols()` in libobjc2 now
 initialises a `protocol_version_gsv2` record unconditionally, which a class list
-naming a protocol in another image requires.  A protocol *declared in Swift* is
-still Apple-shaped and is therefore left out of the list rather than handed to
-the runtime in the wrong shape; emitting a GNUstep protocol record for those is
-the remaining piece.
+naming a protocol in another image requires.
 
-Measured by `swift-interop-probe/conformance/` (five protocol checks, all
-green).
+A protocol **declared in Swift** is now emitted in GNUstep's shape too — a
+`struct objc_protocol` in `__objc_protocols` with clang's weak
+`._OBJC_PROTOCOL_<name>` symbol — so `objc_getProtocol()` finds it and the class
+list can name it like any imported one.  Protocol properties are still null.
+
+Measured by `swift-interop-probe/conformance/`: all protocol checks green.
 
 Every stage is independently testable, and S0 needs no compiler rebuild.
 

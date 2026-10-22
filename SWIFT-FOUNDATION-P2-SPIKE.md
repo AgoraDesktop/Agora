@@ -251,7 +251,10 @@ Open items, in order:
    The two facts that collide are in `SWIFT-GNUSTEP-CLASS-ABI.md`: a generically-instantiated pure-Swift
    class is a runtime **pattern** class, emitted at layout 2 with the Objective-C class witnesses (whose
    `destroy` is `objc_release`), while §2.21 deliberately makes such a pattern class **not a class object**
-   (null `isa`, no dtable). Releasing it therefore messages nothing. Acceptance test:
+   (null `isa`, no dtable). Releasing it therefore messages nothing. Two further measurements pin the fix:
+   a generic class **with** Objective-C ancestry (`Box<T>: NSObject`) releases correctly, and the compiled
+   IR contains **no** `objc_release` — so the Objective-C destroy comes from the element type's **value
+   witnesses**, not the call site. Acceptance test:
    `swift-toolchain/scripts/verify-generic-release.sh` — RED today, on purpose.
 2. **Whole-directory test builds** — compile `Tests/FoundationEssentialsTests` as one module (as SwiftPM
    does) so the cross-file helpers resolve; the re-export `Foundation` then needs `-enable-testing` too.

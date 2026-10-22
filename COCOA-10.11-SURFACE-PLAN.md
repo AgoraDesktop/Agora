@@ -386,7 +386,7 @@ an absent declaration.** The census is a file-level count in both directions (al
 | `NSOpenPanel`/`NSSavePanel` | the system panel | AppKit panels over the file system and the Workspace model | no sandbox powerbox; no iCloud; no tags column unless the metadata provider exists |
 | `NSUserNotification` | notification center | the shell/notification service (a window-server client) | delivery depends on the shell; the in-process center keeps its state even when delivery is refused |
 | `NSSpellChecker` | system spell service | the tree's `NSSpellServer`/`FNSpellServerDispatch` and a dictionary | language coverage is the dictionary's, not Apple's |
-| `NSPrintOperation` | CUPS/print system | render to PDF via `CGPDFContext`; physical printers refused | "print to PDF" works; "print to printer" refuses by name |
+| `NSPrintOperation` | CUPS/print system | render to PDF via `CGPDFContext`; submit through `libcups` (`platform/AGPrintService.h`) when it is configured, a file or a preview when it is not | "print to PDF" always works; "print to printer" needs a queue, and says so |
 | `NSTypesetter`/`NSATSTypesetter` | ATSUI/Core Text | facade over `NSLayoutManager`/Core Text | the facade must not become a second layout engine |
 | `NSAppearance`/`NSVisualEffectView` | Core Animation materials | server-side blur if the compositor supports it, flat fallback otherwise | material names round-trip; pixels may differ |
 | `NSAccessibility` | the macOS accessibility API | AT-SPI bridge (later) | the protocol surface is complete; the bridge is a separate deliverable |
@@ -399,7 +399,9 @@ an absent declaration.** The census is a file-level count in both directions (al
   descriptor data type (it is useful and testable); `NSAppleScript`, script commands and coercion refuse.
 - **OpenGL / CGL**: no GL dependency is introduced for a deprecated API. `NSOpenGL*` refuses; if a client
   needs GL, that is a separate component decision (Mesa/EGL), not an AppKit stub.
-- **Physical printing**: PDF output is implemented; `NSPrinter`/CUPS is refused.
+- **Physical printing**: IMPLEMENTED. A job is a PDF (`CGPDFContext`), and its transport is a seam: libcups when
+  `pkg-config` finds it, nothing when it does not. The decision is recorded here because it moved: the tree refuses no
+  part of printing; what it cannot do is print where there is no queue.
 - **PostScript interpretation**: `CGPSConverter` (PostScript to PDF) and `NSEPSImageRep` need a PostScript
   interpreter and stay absent, while EPS **production** is implemented in `libagora-drawing`'s `CGEPSContext` (an
   Agora extension) and reaches AppKit through `-dataWithEPSInsideRect:` and `-writeEPSInsideRect:toPasteboard:`.

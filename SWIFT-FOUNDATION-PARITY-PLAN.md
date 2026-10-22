@@ -108,7 +108,7 @@ What the harness measures:
   a count that is now too large, so every landing has to shrink the list.
 
 The allowlist is *prefix*-based (`Foundation:NSData` covers `NSData` and everything under it), so the
-baseline is 373 reviewable entries rather than 8,680 lines. `--update-allowlist` rewrites the counts,
+baseline is 360 reviewable entries rather than 8,452 lines. `--update-allowlist` rewrites the counts,
 *appends* an entry for a gap nothing accepts (a rename can expose one — see §3.1), and keeps the reasons.
 
 ---
@@ -121,33 +121,35 @@ baseline is 373 reviewable entries rather than 8,680 lines. `--update-allowlist`
 |---|---|
 | reference symbols | 10,455 |
 | our symbols | 11,314 |
-| **missing** | **8,235 distinct `(path, kind)` — 8,680 declarations in 301 containers** |
-| … of those, containers absent entirely | 217 |
+| **missing** | **8,010 distinct `(path, kind)` — 8,452 declarations in 300 containers** |
+| … of those, containers absent entirely | 189 |
 | … members that exist here only in the other shape | 20 |
-| **missing conformances** | **322 edges over 72 types** |
-| extra symbols (ours only) | 9,632 — 223 CoreFoundation type containers plus Agora's own additions |
+| **missing conformances** | **224 edges over 60 types** |
+| extra symbols (ours only) | 9,380 — 223 CoreFoundation type containers plus Agora's own additions |
 
-(The `Bundle` slice of §3.1 already landed, hence 8,235 rather than the 8,259 first measured.)
+(The rename layer of §3.1 has largely landed — 28 classes plus the `NSObject` shape and conformance
+pass — hence 8,010 rather than the 8,259 first measured.)
 
-By the allowlist's stage reasons, the missing symbols split roughly: **T3 ≈ 4,400**, **P1 ≈ 3,000**,
-**P4 ≈ 420**, out-of-scope/capped subsystems ≈ 270, and 144 geometry symbols that Darwin's Foundation
-re-exports from CoreGraphics. The largest containers are the measurement, in order:
+By the allowlist's stage reasons, the missing symbols split roughly: **T3 ≈ 3,000**, **P1 ≈ 2,800**,
+**T3/P1 ≈ 1,340** (the value types' long tails), **P4 ≈ 400**, out-of-scope/capped subsystems ≈ 225, and
+144 geometry symbols that Darwin's Foundation re-exports from CoreGraphics. The largest containers are
+the measurement, in order:
 
 ```
-933 AttributedString      402 PredicateExpressions   238 AttributeScopes
-195 Data                  194 FileManager            162 Calendar
-154 NSCalendar            151 IndexSet               120 NSString
-115 URLError              112 IndexPath              108 NSData
-106 URLResourceKey        106 Date                   104 NumberFormatter
+933 AttributedString      647 Locale                 402 PredicateExpressions
+238 AttributeScopes       195 Data                   194 FileManager
+162 Calendar              154 NSCalendar             151 IndexSet
+120 NSString              115 URLError               112 IndexPath
 ```
 
 Every one of those is either T3 (Apple's own Swift code) or a P1 rename/member pass — which is why the
 strategy below matters more than any single container.
 
-### 3.1 Swift names Darwin gives the imported classes (28 still missing)
+### 3.1 Swift names Darwin gives the imported classes — **landed (28 + `NSObject`)**
 
-Darwin exposes `NSFoo` as `Foo`. Our importer does not rename classes, so each needs a Swift-side alias
-(and, where Darwin nests types, a wrapper rather than a plain typealias):
+Darwin exposes `NSFoo` as `Foo`. The importer takes a class's Swift name from `NS_SWIFT_NAME` on the
+`@interface`, so each rename is a one-line header annotation, and because the annotation moves the symbol
+graph the gate measures it. All 28 names in this group are annotated in `libagora-base`:
 
 ```
 BlockOperation Bundle DateIntervalFormatter EnergyFormatter FileHandle Formatter Host
@@ -157,40 +159,51 @@ PortMessage PropertyListSerialization RunLoop Scanner SocketPort Stream Thread T
 UserDefaults
 ```
 
-plus irregular names (`NSTask` → `Process`, `NSFileManager` → `FileManager`, `NSNotificationCenter` →
-`NotificationCenter`, `NSError`-family types, `NSComparisonPredicate` → the `Predicate` API). The measured
-allowlist also shows the enum-shaped half of this pass: `NSAlignmentOptions` → `AlignmentOptions`,
-`NSQualityOfService` → `QualityOfService`, `NSOperatingSystemVersion` → `OperatingSystemVersion`, and the
-`NS_ERROR_ENUM`/`NS_TYPED_ENUM` members that Darwin imports as enum cases (≈ 80 containers of one or two
-symbols each). `DateFormatter` and `Notification.Name` are already done; they are the pattern.
+Those 28 closed 246 symbols (`Host` entirely). What remains under each name is its member surface, the
+members that exist in our headers in the method shape where Darwin has a property (`bundleIdentifier`,
+`resourceURL`, …), and — because a type's conformances only become measurable once it exists under its
+Swift name — a handful of `X -> *` conformance entries.
 
-**The mechanism is verified, and the first rename landed.** A class-level
-`NS_SWIFT_NAME(Bundle)` on `@interface NSBundle` is honoured by this importer (checked first with a
-throwaway module, then in `libagora-base/NSBundle.h`), so the layer is header annotations rather than
-Swift-side typealiases — and the symbol graph moves with it, which is what makes the gate measure the
-work. `Bundle` went from 60 missing symbols to 36: the rename closed 24 outright, and the rest are
-members this class does not have yet or imports in the method shape where Darwin has a property
-(`bundleIdentifier`, `resourceURL`, …). One side effect worth knowing: a rename also makes that type's
-*conformances* measurable (they were unmeasurable while the type did not exist under its Swift name), so
-the allowlist grew a `Bundle -> *` conformance entry — the ratchet's "an unallowlisted gap fails" working
-as intended.
+Still on the list, in order of leverage:
+
+- the irregular names: `NSTask` → `Process`, `NSFileManager` → `FileManager`, `NSNotificationCenter` →
+  `NotificationCenter`, `NSProcessInfo` → `ProcessInfo`, `NSError`-family types, and
+  `NSComparisonPredicate` → the `Predicate` API (the last is T3, not a rename);
+- the enum-shaped half: `NSAlignmentOptions` → `AlignmentOptions`, `NSQualityOfService` →
+  `QualityOfService`, `NSOperatingSystemVersion` → `OperatingSystemVersion`, and the
+  `NS_ERROR_ENUM`/`NS_TYPED_ENUM` members that Darwin imports as enum cases (≈ 80 containers of one or
+  two symbols each). A type rename does not move the *members*, so these need the constants annotated
+  (or imported under the enum), which is why they are separate.
+
+`DateFormatter` and `Notification.Name` were done earlier; they are the pattern.
 
 ### 3.2 Conformances the value types do not carry
 
-320 edges over 71 types. The shape of it:
+224 edges over 60 types, down from 380 after the `NSObject` pass. The shape of it:
 
 | Protocol | Missing edges | On |
 |---|---|---|
-| `CustomStringConvertible` / `CustomDebugStringConvertible` | 64 / 65 | almost every class and value type |
-| `NSSecureCoding` / `NSCoding` | 32 / 13 | the Objective-C classes (the archiving suite) |
-| `CustomReflectable` | 22 | collections, value types |
-| `Decodable` / `Encodable` | 19 / 19 | `Data`, `Date`, `URL`, `UUID`, `Decimal`, `IndexPath`, `DateComponents`, `Notification`, `PersonNameComponents`, … |
+| `NSSecureCoding` / `NSCoding` | 32 / 12 | the Objective-C classes (the archiving suite) |
+| `CustomReflectable` | 21 | collections, value types |
+| `Decodable` / `Encodable` | 18 / 18 | `Data`, `Date`, `URL`, `UUID`, `Decimal`, `IndexPath`, `DateComponents`, `Notification`, `PersonNameComponents`, … |
+| `CustomDebugStringConvertible` / `CustomStringConvertible` | 14 / 12 | the overlay's value types (`Data`, `Date`, `IndexSet`, `Calendar`, …) |
 | `ReferenceConvertible` | 10 | the `NS`↔Swift value-type pairs |
 | `Sequence` / `Collection` / `DataProtocol` | 5 / 3 / 2 | `NSData`, `IndexPath`, `IndexSet` |
 
+Two things worth keeping:
+
+- **`NSObject` carries the class hierarchy.** Darwin gets `CustomStringConvertible` from `NSObject`'s own
+  extension, and the symbol graph records inherited conformances on the subclasses, so one
+  `extension NSObject: CustomStringConvertible, CustomDebugStringConvertible {}` closed 156 edges. It
+  needed a header fix first: `NSObject.h` declared `description` and `debugDescription` twice, as
+  protocol properties and as class methods, and the class's method declaration wins the import — a
+  method-shaped `description` cannot satisfy the requirement. They are properties on the class now, and
+  so is `hash` (which the overlay's `Hashable` conformance previously had to call as `hash()`).
+- **The rest is the value types' own work** (`Data`, `IndexSet`, `Calendar`, …): these are the
+  hand-written overlay types, and they are where T3/P3 will replace the overlay anyway.
+
 There is no `JSONEncoder`/`JSONDecoder` or `PropertyListEncoder`/`PropertyListDecoder` at all, so the
-`Codable` conformances have nothing to talk to yet. `CustomStringConvertible` looks trivial and is not:
-Darwin gets it from `NSObject`'s own extension, so every one of those edges closes the same way.
+`Codable` conformances have nothing to talk to yet.
 
 ### 3.3 Swift-native subsystems that are absent
 
@@ -289,16 +302,21 @@ Effort is rough and single-developer; gates are what matter.
 - **Gate:** `verify-foundation-parity.sh --check` is green against the baseline, and fails on an
   unallowlisted gap, a grown gap, or a stale count. Measured cost: ~10 s end to end.
 
-### P1 — Names and annotations (≈1 week)
+### P1 — Names and annotations (≈1 week) — **in progress**
 
-- Complete the rename layer with `NS_SWIFT_NAME` in the headers (the mechanism is verified; `Bundle`
-  has landed). 27 names plus the irregulars remain. A Swift alias is only the fallback where the
-  importer cannot do it — an alias would not move the symbol graph, and so would not move the gate.
-- Finish property-shaped accessors across Foundation's headers (the `dateStyle` class of gap).
-- `NS_ENUM`/`NS_OPTIONS` for the remaining C enums; `NS_TYPED_ENUM` for the remaining string typedefs;
-  `NS_REFINED_FOR_SWIFT` where the overlay wants the un-renamed door; `NS_SWIFT_SENDABLE` for the
+- ~~Complete the rename layer with `NS_SWIFT_NAME` in the headers.~~ **28 class names landed** (§3.1),
+  closing 246 symbols. What is left of this bullet is the irregulars (`NSTask` → `Process`,
+  `NSFileManager` → `FileManager`, `NSNotificationCenter` → `NotificationCenter`, `NSProcessInfo` →
+  `ProcessInfo`) and the enum-shaped half (`NS_ENUM`/`NS_OPTIONS`/`NS_TYPED_ENUM`), where the type rename
+  does not move the members.
+- **Property shapes — the `NSObject` slice landed.** `description`/`debugDescription`/`hash` are
+  properties on the class, and `NSObject` carries `CustomStringConvertible` +
+  `CustomDebugStringConvertible`, which closed 156 conformance edges across the hierarchy. The
+  `dateStyle` class of gap (members declared as methods where Darwin has properties) remains.
+- `NS_REFINED_FOR_SWIFT` where the overlay wants the un-renamed door; `NS_SWIFT_SENDABLE` for the
   immutable classes.
-- Update call sites (the same source migration the property pass already required).
+- Update call sites (the same source migration the property pass already required): `description()` →
+  `description` was the first one, in the overlay and in `verify-swift-port.sh`.
 - **Gate:** the diff's "name/annotation" group is empty or allowlisted; all existing gates green.
 
 ### P2 — Strategy spike (2–4 days)
@@ -378,15 +396,18 @@ Effort is rough and single-developer; gates are what matter.
 
 ## 8. Immediate next actions
 
-1. **P1, the rename layer** (§3.1): 27 names plus the irregulars and the `NS_ENUM`/`NS_TYPED_ENUM`
-   members. Mechanical, and it removes ~3,000 symbols from the measured gap before any strategic work.
-   Land it in slices (one header each) and run `--update-allowlist` per slice; the counts in the diff are
-   the progress metric. `Bundle` is the worked example.
-2. **P1, property shapes**: the `dateStyle` class of gap, plus `CustomStringConvertible` on `NSObject`
-   (64 edges close with one extension).
-3. **P2, the strategy spike**: build `FoundationEssentials` from `~/.agora-swift/src/swift-foundation`
+1. **P1, the rest of the rename layer** (§3.1): the four irregulars, then the enum-shaped pass (≈ 80
+   containers, and the one place a type rename does not move the members). Land it in slices and run
+   `--update-allowlist` per slice; the counts in the diff are the progress metric.
+2. **P1, the property-shape sweep**: members declared as methods where Darwin has a property (`dateStyle`
+   and friends; 20 paths are already counted as shape-only gaps). `description`/`debugDescription`/`hash`
+   on `NSObject` were the first.
+3. **P1, value-type conformances** (§3.2): the remaining 224 edges are mostly the overlay's own value
+   types (`Data`, `IndexSet`, `Calendar`, …) — close the cheap ones, leave the `Codable` family to P3,
+   which replaces those types anyway.
+4. **P2, the strategy spike**: build `FoundationEssentials` from `~/.agora-swift/src/swift-foundation`
    against Agora's CoreFoundation/libdispatch/ICU and run its tests. Do this before writing more value
    type members — it decides whether the remaining work is "port and bridge" (B) or "port the sources"
    (A), and either way it is not "re-implement".
-4. Wire `verify-foundation-parity.sh --check` into the gate suite (§6) once P1 has moved the baseline
-   once, so the ratchet is exercised before it becomes a blocker.
+5. Wire `verify-foundation-parity.sh --check` into the gate suite (§6). The ratchet has now been
+   exercised by two landings (28 renames, the `NSObject` pass); it is ready to be a required gate.

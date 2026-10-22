@@ -2293,10 +2293,18 @@ flags, the bounds and the VWT word it installs, and `swift_arrayDestroy` prints 
 It settled two things at once. The class's own witnesses are correct (`flags=2`, a `Bo`
 table), and the `self` that `_ContiguousArrayStorage.deinit` hands to
 `swift_arrayDestroy` is **not the element class's metadata** — its first word is `0x303`,
-which is a witness-table flags word, not a metadata kind. So the defect is in how the
-generic array storage passes (or destroys) its element metadata at layout 2, not in the
-class pattern or the VWT choice. The next probe prints that `self`'s first words and the
-element metadata the storage holds; the fix follows from which pointer it is.
+which is a witness-table flags word, not a metadata kind. Its words are
+`{0x303, 0x80000000, <fnptr>, …}` — a value-witness-table header — and it sits in the
+stdlib's static data, ~1.2 MB from the pattern class metadata. So `Element.self` inside
+`_ContiguousArrayStorage.deinit` is reading the element's **value witness table**, not
+its metadata: the generic-argument slot of a layout-2 class is off by one word on the
+read or write side, and the word it lands on is the VWT that precedes a metadata object.
+That is the bug — **generic-argument access for a runtime-instantiated class at layout
+2** — and it is not the class pattern, the VWT choice, the layout string, or array
+storage. The next probe prints the descriptor's `getGenericArgumentOffset()` in
+`installGenericArguments` (write side) beside the offset IRGen uses when a class method
+reads `Element.self` (read side); whichever differs by a word is the fix, in
+`Metadata.h`'s `getNonResilientImmediateMembersOffset()` or in IRGen's class layout.
 
 ---
 

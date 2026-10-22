@@ -400,6 +400,9 @@ an absent declaration.** The census is a file-level count in both directions (al
 - **OpenGL / CGL**: no GL dependency is introduced for a deprecated API. `NSOpenGL*` refuses; if a client
   needs GL, that is a separate component decision (Mesa/EGL), not an AppKit stub.
 - **Physical printing**: PDF output is implemented; `NSPrinter`/CUPS is refused.
+- **PostScript interpretation**: `CGPSConverter` (PostScript to PDF) and `NSEPSImageRep` need a PostScript
+  interpreter and stay absent, while EPS **production** is implemented in `libagora-drawing`'s `CGEPSContext` (an
+  Agora extension) and reaches AppKit through `-dataWithEPSInsideRect:` and `-writeEPSInsideRect:toPasteboard:`.
 - **QuickDraw**: `NSQuickDrawView`, `CTFontCreateWithQuickdrawInstance`, `NSPICTImageRep`'s QuickDraw
   decoder, and the QuickDraw-era packed-glyph function either refuse or are reimplemented over CG where the
   format is still readable.

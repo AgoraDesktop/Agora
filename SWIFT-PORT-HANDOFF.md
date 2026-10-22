@@ -2301,10 +2301,18 @@ its metadata: the generic-argument slot of a layout-2 class is off by one word o
 read or write side, and the word it lands on is the VWT that precedes a metadata object.
 That is the bug — **generic-argument access for a runtime-instantiated class at layout
 2** — and it is not the class pattern, the VWT choice, the layout string, or array
-storage. The next probe prints the descriptor's `getGenericArgumentOffset()` in
-`installGenericArguments` (write side) beside the offset IRGen uses when a class method
-reads `Element.self` (read side); whichever differs by a word is the fix, in
-`Metadata.h`'s `getNonResilientImmediateMembersOffset()` or in IRGen's class layout.
+storage. The offset probe then localised the *storage* side. With the diagnostic in both
+`swift_allocateGenericClassMetadata` and `installGenericArguments`, the five-line
+program instantiates exactly one generic class — the user's `Box` — and fills its
+argument slot correctly (`offset=22`, `arg0` = the element metadata). The array's
+`_ContiguousArrayStorage<Box<…>>` **never goes through the runtime instantiation path
+at all**, yet its element slot holds a value witness table. So the storage's metadata
+is emitted **statically** (a prespecialized/static generic class), and the argument
+IRGen bakes into it at layout 2 is the element's VWT instead of the element's metadata.
+The next step is to read that statically emitted metadata in the binary and fix the
+prespecialized class emission in `GenMeta.cpp` (`addGenericArguments` /
+`IsStaticSpecialization`) for layout 2 — not the runtime, which fills its own slots
+correctly.
 
 ---
 

@@ -23,7 +23,11 @@ tests, 670 passing** — and turned up one more load-time crash, in libobjc2's
 layout of a late-bound actor's ivars, also fixed and gated. Then the macro plugin
 (the last build failure) and the **FoundationInternationalization** suites came
 in: 30 suites, 329 tests passing over Locale, Calendar, TimeZone and the
-FormatStyle family. §2.30, §2.31, §2.32.
+FormatStyle family. Then P3 started for real: `import Foundation` is now one
+module that re-exports FoundationEssentials and FoundationInternationalization
+and bridges their eleven value types to Agora's Objective-C classes, with a probe
+that round-trips every one of them (and an Agora `-setLocale:` retain bug found
+and fixed on the way). §2.30, §2.31, §2.32, §2.33.
 
 **The Swift surface is finished.** The Cocoa value types carry the API a
 program actually calls (`Data` is a collection you can slice and mutate,
@@ -2565,6 +2569,83 @@ no tests on this platform).
 
 ---
 
+### 2.33 P3's first slice: one `Foundation` module, and the value bridges
+
+P3's shape, in place and measured: `import Foundation` becomes Darwin's
+arrangement — one Swift module that **re-exports** `FoundationEssentials` and
+`FoundationInternationalization` and adds what a platform Foundation adds: the
+value bridges to the Objective-C classes, the standard-library bridges, the error
+machinery. The module lives in [`swift-toolchain/foundation-p3/`](swift-toolchain/foundation-p3):
+
+| File | What it is |
+|---|---|
+| `Foundation.swift` | `@_exported import FoundationEssentials` + `FoundationInternationalization` |
+| `FoundationShim.swift` | the old overlay's `FoundationOverlay.swift`, **unchanged** — everything in it is a bridge the stdlib deliberately leaves to Foundation (`String`/`Array`/`Dictionary`/`Set`/numbers/`AnyHashable`, `Error` <-> `NSError`), not a value type |
+| `FoundationValueBridges.swift` | eleven `_ObjectiveCBridgeable` conformances: `Data`, `Date`, `URL`, `UUID`, `IndexPath`, `Decimal`, `TimeZone`, `Locale`, `Calendar`, `DateComponents`, `DateInterval` → Agora's `NSData`, `NSDate`, `NSURL`, `NSUUID`, `NSIndexPath`, `NSDecimalNumber`, `NSTimeZone`, `NSLocale`, `NSCalendar`, `NSDateComponents`, `NSDateInterval` |
+| `Probe.swift` | the client the gate builds and runs: 40+ assertions, every bridge round-tripped in both directions |
+
+The hand-written value types (`foundation-overlay/FoundationValueTypes.swift`,
+1,866 lines and ten types) are what P3 retires: FoundationEssentials supplies
+those types now. The overlay file stays in the tree because the *installed*
+toolchain still ships it; replacing it is the install step below.
+
+**Why the bridges are ours.** FoundationEssentials declares the bridge points and
+the conformance bodies, but every one of them is inside
+`#if FOUNDATION_FRAMEWORK` (Apple's framework build owns both halves). On this
+target the conformance does not exist, so `data as NSData` does not compile. The
+shim adopts the protocols retroactively — which is exactly what the old overlay
+did for its own types — and call sites do not change.
+
+**Two bridges needed a decision, and one needed an Agora fix.**
+
+- **`Decimal` cannot be a bitcast.** Apple's `NSDecimal` is a binary mantissa
+  (`int32 exponent`, length/flags, `uint16 reserved`, `uint16 mantissa[8]`), and
+  FoundationEssentials' `Decimal` is *that struct* — so Apple's bridge is a
+  bitcast. Agora's `NSDecimal` is a different layout entirely: a decimal-digit
+  representation (`int8 exponent`, flags, 39 digits least-significant first),
+  chosen so `NSDecimalAdd`-style arithmetic is digit arithmetic. Neither side
+  exposes its components to Swift. The first draft asserted equal layouts and the
+  assertion fired — no silent corruption — so the bridge is a **decimal string**
+  (`description`/`init(string:)`), which is lossless for every value either type
+  can hold (both keep Apple's 38-significant-digit budget) and costs one string
+  per conversion.
+- **`Calendar` needs the CoreFoundation identifier table.** `Calendar.Identifier`
+  is an enum with no public `rawValue`; FoundationEssentials' conversion is
+  `package`-internal and its SPI accessor covers one direction only. The shim
+  carries the table (`gregorian`, `islamic-civil`, `roc`, `islamic-tbla`, ...),
+  which is the same table CoreFoundation has.
+- **`-[NSCalendar setLocale:]` did not retain its argument** (fixed, patch
+  `0015`). The bridge stores `calendar.locale = Locale(identifier:)`, so the
+  calendar kept a dangling pointer and the *retain of the answer* faulted two
+  frames away. This is the same defect §2.22 fixed for `-setTimeZone:` and §2.29
+  for `NSDateFormatter`; the rule stands — **in this tier a setter that assigns
+  an object ivar retains it**. An audit of the rest of `libagora-base` for the
+  same pattern found these, still open: `NSRunLoop -setFireDate:`,
+  `NSTask -setExecutableURL:`/`-setArguments:`/`-setEnvironment:`/
+  `-setCurrentDirectoryURL:`, `NSOperation`/`NSThread -setName:`,
+  `NSUserUnixTask -setStandardInput:`/`-setStandardOutput:`/`-setStandardError:`,
+  `NSXMLDocument -setDTD:`. Each needs a retain *and* a release in `-dealloc`,
+  so they are a Foundation round of their own rather than a sed.
+
+**What is measured.** `build-foundation-p3.sh` builds the module into a staging
+tree (`~/.agora-swift/build/p3-foundation`, nothing installed) against the
+FoundationEssentials/FoundationInternationalization spike build, then builds and
+runs the probe against it. Green: all eleven bridges round-trip, the
+stdlib bridges still come with the same import, `Locale`/`TimeZone` (FI) are in
+scope, and an `NSObject` still behaves like one. The language gate and both
+harnesses were re-run after the `NSCalendar` fix and are unchanged
+(FoundationEssentials 11 suites, FoundationInternationalization 30 suites).
+
+**What P3 still needs**, in order: install the module beside the target stdlib
+and retire `FoundationValueTypes.swift` from the shipped overlay (the probe moves
+from a staging `-I` to the plain `import Foundation` path); make `Data`/`String`
+bridges **views** rather than copies (Darwin's `__NSSwiftData`/`__StringStorage`
+shape, which needs holders on the CoreFoundation side); the setter-retain audit
+above; then the T2 symbol diff for the value types, which only makes sense once
+the overlay is out of the way.
+
+---
+
 ## 3. Change inventory
 
 `swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 63 files,
@@ -2601,6 +2682,18 @@ And §2.31, the harness and the load-time layout it exposed:
 | `swift-toolchain/scripts/verify-update-abi.sh` | a second programme: an actor with a resiliently sized stored property, built against the evolved library and run (the load-time check) |
 | `swift-toolchain/scripts/run-foundation-tests.sh` | the harness: shared helper sources, a cross-file dependency map with per-suite `--filter`, the resource bundle next to the binaries, `EX_UNAVAILABLE`/no-tests classified as *no tests on this platform*, and `--all` skipping the helper file; and §2.32's `--fi` selector with FI's support files and the macro plugin |
 | `swift-toolchain/scripts/build-foundation-macros.sh` | builds `FoundationMacros` as a *library* plugin with the bootstrap compiler against the host SwiftSyntax (§2.32), and self-checks `#Predicate`/`#Expression` through it |
+| `swift-toolchain/scripts/build-foundation-p3.sh` | builds P3's `Foundation` module into a staging tree (nothing installed) and runs its probe (§2.33) |
+
+P3's first slice (§2.33):
+
+| File (P3) | Change |
+|---|---|
+| `swift-toolchain/foundation-p3/Foundation.swift` | the module's re-exports: FoundationEssentials + FoundationInternationalization |
+| `swift-toolchain/foundation-p3/FoundationShim.swift` | the old `FoundationOverlay.swift`, unchanged: the stdlib-type bridges, `AnyHashable`, `Error` <-> `NSError`, `CGFloat` |
+| `swift-toolchain/foundation-p3/FoundationValueBridges.swift` | eleven retroactive `_ObjectiveCBridgeable` conformances on FoundationEssentials' value types, with the `Decimal` string bridge and the CoreFoundation calendar-identifier table |
+| `swift-toolchain/foundation-p3/Probe.swift` | the gate's client: every bridge round-tripped, the stdlib bridges, FI types, `NSObject` interop |
+| `swift-toolchain/scripts/build-foundation-p3.sh` | builds the module into a staging tree and runs the probe |
+| `libagora-base/NSCalendar.m` | `-setLocale:` retains its argument instead of borrowing it (patch `0015`) |
 
 | File (bridging) | Change |
 |---|---|
@@ -2769,6 +2862,10 @@ swift-toolchain/scripts/verify-generic-release.sh
 swift-toolchain/scripts/build-foundation-macros.sh     # #Predicate/#Expression
 swift-toolchain/scripts/run-foundation-tests.sh --all
 swift-toolchain/scripts/run-foundation-tests.sh --fi --all   # Locale/Formatting, §2.32
+
+# P3's first slice (§2.33): build the re-export `Foundation` module into a
+# staging tree and round-trip every value bridge through Agora's classes
+swift-toolchain/scripts/build-foundation-p3.sh
 
 # the library-evolution gate (same build tree; a class with a resiliently sized
 # member: Update and Singleton, and a client run against an evolved v2 library)
@@ -3059,7 +3156,22 @@ Debugging techniques that produced the findings above:
    property) whose synthesized `$defaultActor` ivar has a null offset pointer was
    walked by `objc_compute_ivar_offsets()` — now fixed (patch `0014`) and pinned
    by a check in the library-evolution gate.
-15. **The macro plugin and the internationalization suites are in** (§2.32):
+15. **P3's first slice is in** (§2.33): `import Foundation` is one module that
+   re-exports FoundationEssentials + FoundationInternationalization, and the
+   eleven value types bridge to Agora's classes (`Data`/`Date`/`URL`/`UUID`/
+   `IndexPath`/`Decimal`/`TimeZone`/`Locale`/`Calendar`/`DateComponents`/
+   `DateInterval`), with `build-foundation-p3.sh`'s probe round-tripping every
+   one. Two decisions are recorded there (Decimal crosses as a decimal string
+   because Agora's `NSDecimal` is a digit representation; `Calendar` needs the
+   CoreFoundation identifier table), and one Agora bug was found and fixed
+   (`-[NSCalendar setLocale:]` did not retain). What P3 still needs: install the
+   module beside the target stdlib and retire the overlay's
+   `FoundationValueTypes.swift`; make the `Data`/`String` bridges views instead
+   of copies; the setter-retain audit the `NSCalendar` bug opened
+   (`NSRunLoop -setFireDate:`, `NSTask`'s four, `NSOperation`/`NSThread
+   -setName:`, `NSUserUnixTask`'s three, `NSXMLDocument -setDTD:`); then the T2
+   value-type diff once the overlay is gone.
+16. **The macro plugin and the internationalization suites are in** (§2.32):
    `build-foundation-macros.sh` builds `FoundationMacros` as a library plugin
    (host build, `-load-plugin-library`), so `PredicateTests` passes, and the
    harness's `--fi` selector runs 30 FoundationInternationalization suites / 329
@@ -3068,11 +3180,7 @@ Debugging techniques that produced the findings above:
    build decision), `Duration(seconds:milliseconds:)` is newer than the fork's
    stdlib (version skew — a fork rebase), and the `NotificationCenter` assertion
    needs **tagged `NSNumber`s** (Darwin's `5 as AnyObject` has stable identity;
-   Agora's does not). What is left for P3 is the phase's real content: install
-   FoundationEssentials/FoundationInternationalization beside the target stdlib,
-   make `import Foundation` re-export them, and write the bridge to Agora's
-   classes. The
-   prespecialized-metadata case noted in item 11 is unaffected: it is still
+   Agora's does not). The prespecialized-metadata case noted in item 11 is unaffected: it is still
    unreachable, and static prespecialized metadata keeps its
    `MetadataKind::Class` placeholder, which is harmless because a prespecialized
    class is emitted only by the module that declares it, and the stdlib's own
@@ -3114,14 +3222,21 @@ swift-toolchain/
 │   ├── 0013-libagora-base-nscalendar-retain-timezone.patch 1 file (NSCalendar
 │   │                                               keeps the zone it is given;
 │   │                                               §2.22)
-│   └── 0014-libagora-objc-ivar-null-offset.patch  1 file (ivar.c: a late-bound
-│                                                   class's null-offset ivar;
-│                                                   §2.31)
+│   ├── 0014-libagora-objc-ivar-null-offset.patch  1 file (ivar.c: a late-bound
+│   │                                               class's null-offset ivar;
+│   │                                               §2.31)
+│   └── 0015-libagora-base-nscalendar-retain-locale.patch 1 file (NSCalendar
+│                                                   -setLocale: retains; §2.33)
 ├── objectivec-overlay/
 │   └── ObjectiveC.swift                       the `ObjectiveC` module the
 │                                              importer looks BOOL/SEL/NSZone
 │                                              up in: ObjCBool, Selector,
 │                                              NSZone (§2.20)
+├── foundation-p3/                             the P3 `Foundation` module (§2.33)
+│   ├── Foundation.swift                       re-exports FE + FI
+│   ├── FoundationShim.swift                   the overlay's stdlib bridges, unchanged
+│   ├── FoundationValueBridges.swift           the eleven value bridges
+│   └── Probe.swift                            the gate's client
 ├── foundation-overlay/
 │   ├── FoundationOverlay.swift                bridges (String, collections,
 │   │                                          every number, AnyHashable),

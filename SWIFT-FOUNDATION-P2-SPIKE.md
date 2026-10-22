@@ -280,8 +280,12 @@ Open items, in order:
    per-file harness now resolves the cross-file helpers and resources without it, and every suite that
    can build does. The one remaining build failure is `PredicateTests`.
 3. **FI suites** (`FoundationInternationalizationTests`) — Locale/formatting, with ICU already built.
-4. Then P3 proper: the bridging layer between FE/FI types and Agora's `NSData`/`NSDate`/`NSURL`/… and the
-   `Foundation` module that ships it.
+4. **P3's first slice — in** (handoff §2.33): the `Foundation` module now re-exports FE + FI and bridges
+   eleven value types to Agora's classes (`Data`, `Date`, `URL`, `UUID`, `IndexPath`, `Decimal`, `TimeZone`,
+   `Locale`, `Calendar`, `DateComponents`, `DateInterval`), with `build-foundation-p3.sh` rounding every one
+   through a probe. Still to do: install it beside the target stdlib, retire the overlay's value types, make
+   the `Data`/`String` bridges views instead of copies, and the setter-retain audit the `NSCalendar`
+   `-setLocale:` fix opened.
 
 ## 9. Reproduction
 

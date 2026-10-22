@@ -1,9 +1,9 @@
+#!/bin/bash
 # Copyright © 2026 Kyle J. Cardoza.
 # SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
 
-#!/bin/bash
 ### The Agora demo: one window server, Workspace's desktop and menu bar, and the AppKit controls window.
 #
 #   window-server          nested on the X11 desktop, and it GRABS NOTHING: no XGrabPointer, no XGrabKeyboard

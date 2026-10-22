@@ -361,11 +361,17 @@ Effort is rough and single-developer; gates are what matter.
 - ~~Build `FoundationEssentials` against Agora's CoreFoundation, libdispatch and ICU~~ — **done, unmodified
   and with no CF shim**: FE and FI both compile, link and run ([spike record](SWIFT-FOUNDATION-P2-SPIKE.md)).
   The predicted CF SPI list turned out to be Darwin-only; the link has zero unresolved CF symbols.
-- **Still to do:** build swift-testing for this toolchain, run the upstream FE/FI suites, and record the
-  per-subsystem numbers (Data, Date, Decimal, UUID, JSON, URL, Calendar/TimeZone, Locale, FileManager).
-- Two build-system findings for P3: the toolchain's `SwiftSyntaxConfig.cmake` does not export
-  `SwiftSyntax::SwiftCompilerPlugin` (FoundationMacros needs it), and clients of the built modules need the
-  `CoreFoundation`, `_FoundationCShims` and `_FoundationICU` module maps.
+- **The suite waits on P3's first deliverable, not on CF.** swift-testing's `Testing` imports `Foundation`
+  for file I/O; with today's `Foundation` (the overlay) it stops on the overlay's known T3 gaps
+  (`Data` is not `Codable`, `URL(fileURLWithPath:isDirectory:)` is absent). `Testing` needs a `Foundation`
+  that re-exports FoundationEssentials — exactly what P3 installs. Target swift-syntax and `TestingMacros`
+  are already built (scripts in place), so the suite becomes runnable once that module exists.
+- Build-system findings for P3: the toolchain's `SwiftSyntaxConfig.cmake` does not export
+  `SwiftSyntax::SwiftCompilerPlugin` (the target swift-syntax build fixes it), and clients of the built
+  modules need the `CoreFoundation`, `_FoundationCShims` and `_FoundationICU` module maps — but *not* both
+  the Foundation and CoreFoundation maps at once (module ownership; see the spike record).
+- Two toolchain bugs recorded: a throwing ObjC initializer in a Swift `init` crashes in the
+  class-constructor thunk, and the module-map ownership trap above.
 - **Gate:** a written go/no-go with the numbers; if go, P3 starts. Current standing: the two structural GO
   conditions are met (sources unmodified, core value types/JSON/URL/formatting/calendars work), so the
   suite is deciding between **GO** and **partial GO**, not between B and A.
@@ -439,10 +445,11 @@ Effort is rough and single-developer; gates are what matter.
 
 ## 8. Immediate next actions
 
-1. **P2, the rest of the spike**: build swift-testing for the toolchain, run the upstream
-   FoundationEssentials/FoundationInternationalization suites, and write the per-subsystem numbers into
-   the spike record and the decision in §4. The build half is done and unmodified
-   ([record](SWIFT-FOUNDATION-P2-SPIKE.md)); the suite is what separates **GO** from **partial GO**.
+1. **P3 step 1, the module arrangement** (now first, because the suite waits on it): a `Foundation`
+   Swift module that re-exports FoundationEssentials + FoundationInternationalization and keeps the
+   overlay's bridging, installed in a private prefix. Then build `Testing` and the upstream FE/FI suites
+   and record the per-subsystem numbers that close P2. The build half of P2 is done and unmodified
+   ([record](SWIFT-FOUNDATION-P2-SPIKE.md)).
 2. **P1, `CustomReflectable`**: 21 edges, and the only remaining conformance cluster that is
    mechanical. A `customMirror` per value type, delegating to the backing object.
 3. **P5, archiving**: 44 `NSCoding`/`NSSecureCoding` edges need `-encodeWithCoder:`/`-initWithCoder:`

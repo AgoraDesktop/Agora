@@ -149,17 +149,52 @@ resolves.)
 Two of the three GO conditions are already met: **the sources are unmodified**, and the core value types,
 JSON, URL, formatting and calendars all work. The third — the suite — is the remaining work.
 
-## 7. Next: the suite
+## 7. The suite, and why it waits on the *module arrangement*
 
-1. Build and install **swift-testing** (`Testing`) for the target from `~/.agora-swift/src/swift-testing`;
-   the FE/FI suites are `import Testing` (85 of 86 test files; one legacy file still uses XCTest).
-2. Build the `FoundationEssentialsTests` / `FoundationInternationalizationTests` targets (CMake, same
-   flags), run them directly, and record **per subsystem**: Data, Date, Decimal, UUID, JSON, URL,
-   Calendar/TimeZone, Locale/first-party formatting, file system.
-3. Write the memo: the numbers, any failing tests and their root cause, and the B / partial-B / A decision
-   in §5 of the plan.
+The upstream suites are `import Testing` (85 of 86 test files), and the installed toolchain ships no
+`Testing`, so the next step was to build swift-testing. That build found the boundary of this phase:
 
-## 8. Reproduction
+1. **swift-syntax for the target — built.** The compiler's own swift-syntax is a *host* build (made by the
+   bootstrap with a non-interop stdlib); compiling a macro against it makes the SIL verifier reject the
+   inlined `Array`/`TriviaPiece` code (measured: `MandatorySILLinker` + verifier crash). Building
+   swift-syntax with *this* toolchain works (script: `build-swift-testing.sh --syntax`), so **the target
+   swift-syntax is a P3 prerequisite that is now solved**.
+2. **`TestingMacros` — built** (library mode, `-load-plugin-library`), which also sidesteps the
+   `SwiftCompilerPlugin` export gap from §5.
+3. **`Testing` — blocked, and not on Agora's CoreFoundation.** `Testing` imports `Foundation` for file
+   I/O, which here is Agora's *overlay*. It stops on the overlay's known Swift-API gaps, all of them on
+   the parity plan's books: `Data` is not `Codable` (`ABI.EncodedAttachment` decodes itself from `Data`),
+   `URL`'s `init(fileURLWithPath:isDirectory:)` is absent, and a few optional-inference sites need the
+   Darwin spellings. Those are exactly the T3 gaps P3 deletes by taking FoundationEssentials' types.
+
+**The ordering conclusion:** the upstream suite cannot run against today's arrangement, because
+`Testing` needs a `Foundation` that *re-exports FoundationEssentials*. That is P3's first deliverable
+(`Foundation` = FE + FI + the bridging overlay), and the suite becomes runnable the moment it exists.
+Trying to close the overlay's `Data`/`URL` gaps by hand first would be P3 done backwards.
+
+Two toolchain findings from the attempt, both recorded because they will recur:
+
+- **a throwing Objective-C initializer called from a Swift `init` crashes the compiler** while lowering
+  the class-constructor thunk (`_convertNSErrorToError` is reported as "not of the correct type", then
+  `unable to set up the ObjC bridge`). The overlay's new `Data(contentsOf:options:)` avoids it by using
+  the non-throwing read; the bug itself is unfixed and belongs in the Swift-port handoff.
+- **passing both the Foundation and CoreFoundation module maps is a trap**: Foundation's umbrella includes
+  CoreFoundation's headers, so a standalone `CoreFoundation` module is built in *C* mode, and
+  `CFBridgingTypes.h`'s `#if defined(__OBJC__)` block is skipped — Foundation then sees the header through
+  that module and `NSInteger` never exists. Clients import one or the other, not both.
+
+## 8. Next: the suite, after P3's first deliverable
+
+1. P3 step 1: build the `Foundation` re-export module (FoundationEssentials + FoundationInternationalization
+   + the overlay's bridging), install it in a private prefix, and point `Testing` and the FE/FI test targets
+   at it.
+2. Build `Testing` (script in place) and the `FoundationEssentialsTests` /
+   `FoundationInternationalizationTests` targets; run them directly and record **per subsystem**: Data,
+   Date, Decimal, UUID, JSON, URL, Calendar/TimeZone, Locale/first-party formatting, file system.
+3. Write the memo: the numbers, failing tests with root causes, and the B / partial-B / A decision in §5 of
+   the plan.
+
+## 9. Reproduction
 
 ```sh
 swift-toolchain/scripts/build-swift-foundation.sh --configure

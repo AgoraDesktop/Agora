@@ -2200,6 +2200,20 @@ symbols. The remaining half is the upstream test suite, which needs swift-testin
 built for this toolchain; that is what separates a full **GO** from a partial one.
 Full record: [`SWIFT-FOUNDATION-P2-SPIKE.md`](SWIFT-FOUNDATION-P2-SPIKE.md).
 
+The suite half found the next boundary rather than a failure in Agora: swift-testing
+needs swift-syntax **for the target** (the compiler's copy is a host build, and
+compiling a macro against it makes the SIL verifier reject the inlined
+`Array`/`TriviaPiece` code — building it with this toolchain works and is now
+scripted), `TestingMacros` then builds, and `Testing` itself stops on the *overlay's*
+T3 gaps (`Data` is not `Codable`, `URL(fileURLWithPath:isDirectory:)` is absent)
+because on this target `Foundation` is still the overlay. So the suite needs P3's
+first deliverable — a `Foundation` that re-exports FoundationEssentials — before it
+can run; the ordering is a finding, not a setback. Two toolchain bugs came out of
+the attempt and are recorded in the spike: a throwing ObjC initializer called from a
+Swift `init` crashes while lowering the class-constructor thunk, and passing both the
+Foundation and CoreFoundation module maps makes `CFBridgingTypes.h`'s `__OBJC__`
+block disappear (module ownership, not a compiler bug).
+
 ---
 
 ## 3. Change inventory

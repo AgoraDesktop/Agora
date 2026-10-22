@@ -93,9 +93,13 @@ rest) into a shared prefix, and run `demo/agora-demo.sh` — it needs `window-se
 
 ## Before the first push
 
-- **Licence:** the root `LICENSE` is MIT (matching every component). Components that ship third-party
-  code keep their upstream notices (`libagora-dispatch`, `libagora-lcms2`, `libagora-objc`,
-  widget-zoo's fixtures); `release/debian/copyright` records the distribution view.
+- **Licence:** the root `LICENSE` is **GPL-3.0-or-later with per-tree carve-outs** — LGPL-3.0-or-later
+  for the seven libraries, GPL-3.0-or-later for `window-server`, `workspace`, the `tests/` targets and
+  `demo/*.sh`. `COPYING` and `COPYING.LESSER` carry the verbatim texts (LGPL-3.0 is additional
+  permissions on top of GPL-3.0, so both are required). Components that ship third-party code keep
+  their upstream notices (`libagora-objc`, `libagora-core`, `libagora-dispatch`, `libagora-lcms2`, the
+  Frost theme, the font set) and must not be relabelled; `THIRD-PARTY.md` is the register and
+  `release/debian/copyright` records the distribution view.
 - **Secrets:** no credentials or private keys are tracked. Build output (`build/`, `build-prefix/`),
   the supplied Greybird theme and agent state (`.reasonix/`) are ignored.
 - **Author identity:** the commits are by the project author; `git config user.name`/`user.email` are

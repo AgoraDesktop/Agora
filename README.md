@@ -166,14 +166,18 @@ The component repositories named below exist and build. This list will grow; fur
 - **No systemd.** No component depends on any systemd component — `libsystemd`, `sd-bus`, logind or its fork
   `elogind`, the `systemd` daemon, or `libudev`/`udev` — because the desktop targets **Linux, FreeBSD, NetBSD
   and OpenBSD** alike. The bar holds even where a systemd component's licence would be permissive.
-- **Permissive licences first; linking-safe copyleft only by dynamic link, where unavoidable.** The
-  shipped desktop is permissively licensed and takes permissive third-party code — MIT, BSD, Apache-2.0,
-  zlib, public domain — wherever it can. Where no permissive option exists, an **LGPL-2.1/3.0** library, or
-  a linking-safe equivalent such as **MPL-2.0**, may be used **dynamically linked only — never static,
-  never vendored** (the *Every library is shared* rule above already builds our own libraries this way), so
-  that the library's terms stay on the library and never reach Agora's code; its notice, source and
-  replaceability conditions are the library's to meet. **GPL and AGPL are excluded** — they have no linking
-  exception. *(Agora's own licence is MIT — see `LICENSE`.)*
+- **Agora's own licence is copyleft; third-party code is taken permissively where it costs nothing.**
+  The libraries are **LGPL-3.0-or-later** and the programs **GPL-3.0-or-later** (`LICENSE`,
+  `LICENSE-CHANGE.md`). That is not a preference: `libagora-core` and `libagora-dispatch` are
+  Apache-2.0 and every binary links them, and Apache-2.0 is compatible with GPL-3.0/LGPL-3.0 only — it
+  is incompatible with GPL-2.0 and LGPL-2.1. Version 3 is the only copyleft the combination resolves as.
+  Beyond that, third-party code is still taken **permissively wherever a permissive option exists** —
+  MIT, BSD, Apache-2.0, zlib, public domain — because that keeps the widest room to move; **LGPL-2.1/3.0**
+  and **MPL-2.0** are accepted. **GPL-2.0 is excluded** (incompatible with the Apache-2.0 foundation) and
+  **AGPL-3.0 is excluded** (it would make every component AGPL). **GPL-3.0-or-later is accepted**, since
+  Agora already is. Third-party trees keep their own terms and their own notices — `THIRD-PARTY.md` is
+  the register — and a library taken from elsewhere becomes a pinned component of its own rather than
+  being vendored inside a consumer.
 - **Apple's names are descriptive.** Names like "Cocoa", "Core Graphics" and "AppKit" describe the
   surface being duplicated. They are not Agora's product names, and no Apple marks or assets ship.
 
@@ -183,8 +187,9 @@ These are taken as given for now, but are not yet ratified:
 
 - **Display target: Wayland.** Agora's window server is a Wayland compositor; X clients arrive via
   Xwayland. There is no X11-native target.
-- **Licence: MIT, permissive-first** (stated above; `LICENSE`) — with a dynamic-link fallback for linking-safe
-  copyleft where no permissive option exists.
+- **Licence: LGPL-3.0-or-later** for libraries and **GPL-3.0-or-later** for programs (`LICENSE`) —
+  version 3 rather than 2.1 because Apache-2.0 is incompatible with GPL-2.0/LGPL-2.1; see
+  `LICENSE-CHANGE.md` for the reasoning and for what is deliberately not relicensed.
 - **Objective-C runtime: libobjc2** (portable, ARC, blocks) rather than Apple's runtime.
 
 ## Open questions

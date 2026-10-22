@@ -1,21 +1,50 @@
-MIT License
+# Agora — licensing
 
-Copyright © 2026 Kyle J. Cardoza
+Agora is free software, licensed **per artifact**. This file is the umbrella; each
+component repository carries the same arrangement plus the full licence texts.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+## The split
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+| Artifact | Licence |
+|---|---|
+| **Libraries** — `libagora-base`, `libagora-app`, `libagora-drawing`, `libagora-text`, `libagora-iconservices`, `libagora-launchservices`, `libagora-watch` | **GNU Lesser General Public License, version 3 or later** |
+| **Programs** — `window-server`, `workspace`, `tests/` within the library repositories, `demo/*.sh` | **GNU General Public License, version 3 or later** |
+| **Umbrella** — this superproject's own text, `release/` packaging | **GNU General Public License, version 3 or later** |
+| **Third-party trees and assets** — see `THIRD-PARTY.md` | **their own upstream licences, unchanged** |
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Every first-party source file states the identifier that applies to it:
+
+```
+SPDX-License-Identifier: LGPL-3.0-or-later   # libraries
+SPDX-License-Identifier: GPL-3.0-or-later    # programs
+```
+
+## Licence texts
+
+- `COPYING` — GNU General Public License, version 3.
+- `COPYING.LESSER` — GNU Lesser General Public License, version 3. This is the
+  *additional permissions* text that sits on top of `COPYING`. LGPL-3.0 is not a
+  standalone document, which is why both files are present.
+
+Both are verbatim copies of the canonical texts published by the Free Software
+Foundation at <https://www.gnu.org/licenses/>. Do not edit them.
+
+## Why version 3 and not 2.1
+
+`libagora-core` and `libagora-dispatch` are Apache-2.0 extractions of Apple's
+swift-corelibs, and every Agora binary links them. Apache-2.0 is compatible with
+GPL-3.0/LGPL-3.0 only — it is incompatible with GPL-2.0 and LGPL-2.1. Version 3 is
+therefore the only copyleft the combined work can resolve as.
+
+## Third-party components
+
+`libagora-objc` (MIT), `libagora-core` and `libagora-dispatch` (Apache-2.0),
+`libagora-lcms2` (MIT), the Frost icon theme (MIT) and the default font set
+(SIL OFL 1.1 / Apache-2.0) keep their upstream licences and notices. They are **not**
+covered by Agora's licence and must not be relabelled. `THIRD-PARTY.md` is the register.
+
+## History
+
+Before 2026-10-22 the project was MIT licensed. Commits from before that date remain
+available under MIT; the change is forward-only and no release was ever tagged. See
+`LICENSE-CHANGE.md`.

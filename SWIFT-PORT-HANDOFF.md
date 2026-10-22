@@ -2226,6 +2226,21 @@ the Darwin shape: `ObjectiveC` becomes an overlay over a Clang module of
 `objc/objc.h` + `objc/runtime.h`. That is the single remaining step before the
 suite builds.
 
+**P2 finished, with numbers.** `ObjectiveC` gained its runtime surface — not as a
+Clang module (that works for compilation but *cannot pass module-interface
+verification*, because the verifier re-parses the interface without the `-Xcc` flags
+that locate the map), but as a C shim of `agora_`-prefixed wrappers linked into
+`libObjectiveC.so`; `_silgen_name` may not name `objc_getClass` directly. With the
+re-export `Foundation`, `Testing` builds (target library, **host** macros: the plugin
+server runs on the host stdlib, so `TestingMacros` is built by the bootstrap
+compiler against the toolchain's swift-syntax), and
+`swift-toolchain/scripts/run-foundation-tests.sh` runs the upstream suites:
+**251 tests pass** (Data 152, Date 12, Decimal 32, GregorianCalendar 20, String 35).
+Three suites crash on one shared defect — `swift_arrayDestroy` sends `-release`
+through `objc_msgSend_fpret` (typed dispatch, libobjc2) — which is the first P3
+milestone, and the plan records **GO** for strategy B: sources unmodified, core
+value types green, failures in the runtime rather than in missing Foundation API.
+
 ---
 
 ## 3. Change inventory

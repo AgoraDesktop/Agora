@@ -165,28 +165,47 @@ The upstream suites are `import Testing` (85 of 86 test files), and the installe
    overlay's T3 gaps (`Data` not `Codable`, `URL(fileURLWithPath:isDirectory:)` absent); against the
    re-export `Foundation` below it gets past all of that and stops at `import ObjectiveC` (§ below).
 
-**P3 step 1 was then built, and the suite moved forward.** The re-export module is
+**P3 step 1 was then built, and the suite runs.** The re-export module is
 `swift-toolchain/spike/foundation-reexport/Foundation.swift` — two `@_exported import`s — built as a
-`Foundation` module in the spike prefix. A client that says `import Foundation` now gets
-FoundationEssentials' `Data`/`Date`/`URL`/`JSON` and runs:
+`Foundation` module in the spike prefix. A client that says `import Foundation` gets
+FoundationEssentials' `Data`/`Date`/`URL`/`JSON` and runs.
+
+Getting `Testing` to load macros in the *compiler's* process needed one more arrangement: the plugin server
+runs on the **host** stdlib, so `TestingMacros` is built with the **bootstrap** compiler against the
+toolchain's own swift-syntax (`SwiftTesting_MACRO_Swift_COMPILER`), while `Testing` itself is a target
+build. `ObjectiveC` then needed its runtime surface: `_silgen_name("objc_getClass")` is rejected as a
+reserved name, and making `ObjectiveC` a Clang module (Darwin's shape) works for compilation but **cannot
+pass module-interface verification** — the verifier re-parses the interface without the `-Xcc` flags that
+locate the map. The contained fix is a C shim (`objectivec-overlay/objc-runtime-shim.c`) with
+`agora_`-prefixed wrappers linked into `libObjectiveC.so`.
+
+## 7a. The suites: the first numbers
+
+`swift-toolchain/scripts/run-foundation-tests.sh` compiles one test file at a time with `Testing` (static)
+plus the testing-enabled FE/FI and the re-export `Foundation`, links the swift-testing runner, and runs it.
+Result on the default set:
+
+| Suite | Result |
+|---|---|
+| `DataTests` | **152 tests passed** (2 suites) |
+| `DateTests` | **12 passed** |
+| `DecimalTests` | **32 passed** |
+| `GregorianCalendarTests` | **20 passed** |
+| `StringTests` | **35 passed** |
+| `DateIntervalTests`, `IndexPathTests`, `UUIDTests` | **crash** — see below |
+| `DataIOTests`, `JSONEncoderTests`, `URLTests` | do not build *as single files*: they reference types from other test files (`LargeDataTests`, `testData`, `FilePlayground`), which is a harness limitation, not an API gap |
+
+**251 upstream tests pass.** The three crashes share one stack, in a hashing test:
 
 ```
-data: 4 AQIDBA==          json: {"x":1,"y":"z"}
-date: true                roundtrip: true
-url: example.com /a/b b
+swift_arrayDestroy → objc_msgSend_fpret (selector `release`) → SIGSEGV
 ```
 
-With that module first on the search path, `Testing` compiles *through* the Foundation import that used
-to stop it and reaches the next boundary: `public import ObjectiveC` (under `_runtime(_ObjC)`), which needs
-`objc_getClass`. **Agora's `ObjectiveC` module is Swift-only** — it provides `ObjCBool`, `Selector` and
-`NSZone`, but not the runtime functions Darwin's `ObjectiveC` Clang module re-exports. Two ways to patch
-the overlay were tried and rejected: `_silgen_name`/`@_extern(c,)` both draw "symbol name is reserved for
-the Swift runtime" (and `AnyClass?` is not C-representable for `@_extern`). The right fix is the Darwin
-arrangement — **`ObjectiveC` as an overlay over a real Clang module (`objc/objc.h` + `objc/runtime.h`)** —
-which is a scoped toolchain task, not a spike hack.
-
-So the chain to the suite is now three known steps, in order: (1) `ObjectiveC` gains its Clang half,
-(2) `Testing` builds, (3) the FE/FI test targets build and run.
+i.e. a `-release` send is dispatched through the floating-point-return stub while tearing down an array of
+bridged elements. That is the class-object/selector-record area the port has fought before
+(`objc_msgSend_fpret` has shown up in two earlier bugs), and it is now the top of the pile rather than a
+mystery: `UUIDTests.checkHashable`, `DateIntervalTests.anyHashableContainingDateInterval` and
+`IndexPathTests.manyIndexes` all reach it.
 
 Two toolchain findings from the attempt, both recorded because they will recur:
 
@@ -199,17 +218,31 @@ Two toolchain findings from the attempt, both recorded because they will recur:
   `CFBridgingTypes.h`'s `#if defined(__OBJC__)` block is skipped — Foundation then sees the header through
   that module and `NSInteger` never exists. Clients import one or the other, not both.
 
-## 8. Next: three known steps to the suite
+## 8. The decision, and what is left
 
-1. **`ObjectiveC` gains its Clang half**: a module map over `objc/objc.h` and `objc/runtime.h`, with
-   `ObjectiveC.swift` compiled as an overlay over it (`-import-underlying-module`), so `import ObjectiveC`
-   gives `objc_getClass` and friends the way Darwin's does. Keep `ObjCBool`/`Selector`/`NSZone` behaviour
-   unchanged (the language gate is the check).
-2. **`Testing` builds** (scripts in place; `SWT_NO_DYNAMIC_LINKING` and the re-export module are the two
-   spike settings it needs).
-3. **The FE/FI test targets build and run**; record **per subsystem**: Data, Date, Decimal, UUID, JSON,
-   URL, Calendar/TimeZone, Locale/first-party formatting, file system. Then write the memo: the numbers,
-   failing tests with root causes, and the B / partial-B / A decision in §5 of the plan.
+**Verdict: GO for strategy B** (port swift-foundation and bridge it). The registered conditions:
+
+- sources unmodified — **yes** (no patch to swift-foundation, swift-collections or swift-foundation-icu);
+- core value-type tests largely green — **yes**, with a caveat: 251 tests across Data, Date, Decimal,
+  Calendar and String pass, and the remaining suites crash on one shared runtime defect rather than on
+  missing API;
+- failures attributable to Agora rather than the Swift layer — **yes**: the crash is in libobjc2's typed
+  dispatch (`-release` through `objc_msgSend_fpret`), not in FoundationEssentials.
+
+That places the spike at **GO / partial GO**: B is right, and the first P3 milestone is to fix the
+`-release` dispatch defect, then widen the harness to whole-directory test compiles (the three
+single-file build failures are test coupling) and run the FI suites (Locale/formatting), which need the
+same harness plus ICU already in place.
+
+Open items, in order:
+
+1. **Fix the `-release` dispatch crash** — the only thing between "251 tests pass" and the value-type
+   suites being green. Start from `swift_arrayDestroy`'s release path and libobjc2's selector records.
+2. **Whole-directory test builds** — compile `Tests/FoundationEssentialsTests` as one module (as SwiftPM
+   does) so the cross-file helpers resolve; the re-export `Foundation` then needs `-enable-testing` too.
+3. **FI suites** (`FoundationInternationalizationTests`) — Locale/formatting, with ICU already built.
+4. Then P3 proper: the bridging layer between FE/FI types and Agora's `NSData`/`NSDate`/`NSURL`/… and the
+   `Foundation` module that ships it.
 
 ## 9. Reproduction
 

@@ -356,7 +356,7 @@ Effort is rough and single-developer; gates are what matter.
   `description` was the first one, in the overlay and in `verify-swift-port.sh`.
 - **Gate:** the diff's "name/annotation" group is empty or allowlisted; all existing gates green.
 
-### P2 — Strategy spike (2–4 days) — **build question answered; suite next**
+### P2 — Strategy spike (2–4 days) — **answered: GO**
 
 - ~~Build `FoundationEssentials` against Agora's CoreFoundation, libdispatch and ICU~~ — **done, unmodified
   and with no CF shim**: FE and FI both compile, link and run ([spike record](SWIFT-FOUNDATION-P2-SPIKE.md)).
@@ -372,9 +372,13 @@ Effort is rough and single-developer; gates are what matter.
   the Foundation and CoreFoundation maps at once (module ownership; see the spike record).
 - Two toolchain bugs recorded: a throwing ObjC initializer in a Swift `init` crashes in the
   class-constructor thunk, and the module-map ownership trap above.
-- **Gate:** a written go/no-go with the numbers; if go, P3 starts. Current standing: the two structural GO
-  conditions are met (sources unmodified, core value types/JSON/URL/formatting/calendars work), so the
-  suite is deciding between **GO** and **partial GO**, not between B and A.
+- **Gate: met — GO.** `Testing` builds (host macros, target library) and the upstream suites run:
+  **251 tests pass** across Data, Date, Decimal, GregorianCalendar and String; three suites
+  (`UUIDTests`, `DateIntervalTests`, `IndexPathTests`) crash on one shared defect, a `-release` send
+  dispatched through `objc_msgSend_fpret` during `swift_arrayDestroy`, which is a libobjc2 typed-dispatch
+  bug rather than missing Foundation API. Sources are unmodified, so the spike lands at **GO / partial
+  GO**: P3 starts, with the dispatch defect as its first milestone. Full numbers in the
+  [spike record](SWIFT-FOUNDATION-P2-SPIKE.md) §7a.
 
 ### P3 — Bridge to FoundationEssentials (1–2 weeks, if go)
 
@@ -445,10 +449,10 @@ Effort is rough and single-developer; gates are what matter.
 
 ## 8. Immediate next actions
 
-1. **The `ObjectiveC` Clang half**: a module map over `objc/objc.h` + `objc/runtime.h` with
-   `ObjectiveC.swift` as its overlay, so `import ObjectiveC` exposes the runtime functions. Then `Testing`
-   builds, the FE/FI suites run, and P2 closes with per-subsystem numbers. (The re-export `Foundation` is
-   built and works — `swift-toolchain/spike/foundation-reexport/`.)
+1. **Fix the `-release` dispatch crash**: `swift_arrayDestroy` sends `-release` through
+   `objc_msgSend_fpret` (typed-dispatch trouble in libobjc2) and takes `UUIDTests`,
+   `DateIntervalTests` and `IndexPathTests` with it. P3 starts here, because it is the last thing between
+   the spike and a green value-type suite.
 2. **P1, `CustomReflectable`**: 21 edges, and the only remaining conformance cluster that is
    mechanical. A `customMirror` per value type, delegating to the backing object.
 3. **P5, archiving**: 44 `NSCoding`/`NSSecureCoding` edges need `-encodeWithCoder:`/`-initWithCoder:`

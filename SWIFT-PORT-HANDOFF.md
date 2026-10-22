@@ -2097,7 +2097,35 @@ enum __attribute__((flag_enum, enum_extensibility(open))) _name : _type  /* NS_O
 with a throwaway module: `typedef NS_OPTIONS(NSUInteger, NSFooOptions) {
 NSFooMinXInward = … }` imports as a plain struct with no `.minXInward`. So the
 enum pass starts with the macros, not with the headers; that is recorded in
-§3.1 of the plan and is the next slice.
+§3.1 of the plan.
+
+**The enum slice.** The macros now carry the attributes, and the four option sets
+are real option sets: `NSAlignmentOptions` (47 -> 1), `NSSortOptions` (27 -> 1),
+`NSEnumerationOptions` (22 -> 1), `NSBinarySearchingOptions` (23 -> 1) and
+`NSQualityOfService` (10 -> 0), with three `OptionSet`/`SetAlgebra` conformance
+edges. Two rules decided where the annotations go, and both took a measurement to
+learn:
+
+- **constants strip against the enum name**, so the tag must start with the
+  constants' common prefix: `NSAlignmentOptions` plus `NSAlign...` strips to
+  `alignMinXInward`, while a tag named `AlignmentOptions` strips nothing. The
+  rename therefore goes on the tag as
+  `__attribute__((swift_name("AlignmentOptions")))` and the ObjC tag stays --
+  which is why `NSGeometry.h` spells the declaration out instead of calling
+  `NS_OPTIONS`.
+- **`NS_SWIFT_NAME` and the enum macros had to move above their first use** in
+  `NSObjCRuntime.h`; the file had the macro surface below the enums that wanted
+  it, which is the same ordering mistake as the symbol-graph tool's hard-coded
+  default.
+
+The last symbol under each option set is `rawValue` as a *property*: the imported
+Clang option set has it, but `swift-symbolgraph-extract` does not emit the stored
+property, so it is allowlisted as a measurement gap rather than papered over.
+
+A Swift program now writes `NSSortOptions.concurrent`, `NSEnumerationOptions.reverse`,
+`AlignmentOptions.alignMinXInward`, `NSBinarySearchingOptions.firstEqual` and
+`QualityOfService.background`, and `SetAlgebra` containment works -- checked by
+compiling and running one.
 
 ---
 
@@ -2532,8 +2560,9 @@ Debugging techniques that produced the findings above:
    **Foundation *overlay* parity** is a different, larger project and has its
    own plan: [`SWIFT-FOUNDATION-PARITY-PLAN.md`](SWIFT-FOUNDATION-PARITY-PLAN.md).
    Its P0 (measurement) landed this round (§2.29): the harness, the gate and a
-   measured baseline (7,958 missing symbols, 228 missing conformance edges
-   against a 10,455-symbol three-module reference, after the rename layer and the `NSObject` pass). P1 (the rename/annotation
+   measured baseline (7,819 missing symbols, 222 missing conformance edges
+   against a 10,455-symbol three-module reference, after the rename layer, the `NSObject` pass and the
+   enum pass). P1 (the rename/annotation
    pass) is next; P2 (the `swift-foundation` spike) decides whether the T3 work
    is "port and bridge" or "port the sources".
 12. **Two Agora-side bugs surfaced by the value-type gate and are fixed**
@@ -2787,7 +2816,7 @@ before the default flips.
 The Foundation *overlay* is now measured rather than estimated (§2.29): a
 three-module reference (Foundation + FoundationEssentials +
 FoundationInternationalization, 10,455 symbols) against Agora's 11,314, with
-7,958 symbols and 228 conformance edges still missing, recorded in a 361-entry
+7,819 symbols and 222 conformance edges still missing, recorded in a 361-entry
 allowlist that `verify-foundation-parity.sh --check` ratchets in both directions
 (a gap may not grow, and a count that is now too large must shrink). The
 measurement needed one compiler fix: `swift-symbolgraph-extract` is a direct

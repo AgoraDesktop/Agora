@@ -108,7 +108,7 @@ What the harness measures:
   a count that is now too large, so every landing has to shrink the list.
 
 The allowlist is *prefix*-based (`Foundation:NSData` covers `NSData` and everything under it), so the
-baseline is 361 reviewable entries rather than 8,399 lines. `--update-allowlist` rewrites the counts,
+baseline is 361 reviewable entries rather than 8,256 lines. `--update-allowlist` rewrites the counts,
 *appends* an entry for a gap nothing accepts (a rename can expose one — see §3.1), and keeps the reasons.
 
 ---
@@ -121,14 +121,14 @@ baseline is 361 reviewable entries rather than 8,399 lines. `--update-allowlist`
 |---|---|
 | reference symbols | 10,455 |
 | our symbols | 11,314 |
-| **missing** | **7,958 distinct `(path, kind)` — 8,399 declarations in 300 containers** |
-| … of those, containers absent entirely | 189 |
-| … members that exist here only in the other shape | 20 |
-| **missing conformances** | **228 edges over 61 types** |
-| extra symbols (ours only) | 9,328 — 223 CoreFoundation type containers plus Agora's own additions |
+| **missing** | **7,819 distinct `(path, kind)` — 8,256 declarations in 302 containers** |
+| … of those, containers absent entirely | 185 |
+| … members that exist here only in the other shape | 19 |
+| **missing conformances** | **222 edges over 61 types** |
+| extra symbols (ours only) | 9,303 — 223 CoreFoundation type containers plus Agora's own additions |
 
-(The rename layer of §3.1 has landed — 32 classes and one struct, plus the `NSObject` shape and
-conformance pass — hence 7,958 rather than the 8,259 first measured.)
+(The rename layer and the enum pass of §3.1 have landed — 32 classes, one struct, four option sets —
+plus the `NSObject` shape and conformance pass, hence 7,819 rather than the 8,259 first measured.)
 
 By the allowlist's stage reasons, the missing symbols split roughly: **T3 ≈ 3,000**, **P1 ≈ 2,800**,
 **T3/P1 ≈ 1,340** (the value types' long tails), **P4 ≈ 400**, out-of-scope/capped subsystems ≈ 225, and
@@ -165,27 +165,37 @@ remaining two are `Decodable`/`Encodable`.) The 32 classes together closed 292 s
 What remains under each name is its member surface and the members that exist in our headers in the
 method shape where Darwin has a property (`bundleIdentifier`, `resourceURL`, …).
 
-**The enum-shaped half needs a prerequisite the plan had not priced.** Renaming an enum's *type*
-(`NSAlignmentOptions` → `AlignmentOptions`, `NSQualityOfService` → `QualityOfService`) moves one symbol
-and leaves every constant behind as a global, because constants become members of the imported type only
-when the importer is told the enum is an option set / extensible enum. That is what `NS_ENUM` and
-`NS_OPTIONS` mean on Darwin:
+**The enum half landed too, and needed a prerequisite the plan had not priced.** Renaming an enum's
+*type* moves one symbol and leaves every constant behind as a global, because constants become members
+only when the importer is told what kind of enum it is. Darwin's `NS_ENUM`/`NS_OPTIONS` say it with
+attributes:
 
 ```c
-#define NS_ENUM(_type, _name)  enum _name : _type _name; \
-                               enum __attribute__((enum_extensibility(open))) _name : _type
-#define NS_OPTIONS(_type, _name) enum _name : _type _name; \
-                               enum __attribute__((flag_enum, enum_extensibility(open))) _name : _type
+enum __attribute__((enum_extensibility(open))) _name : _type              /* NS_ENUM */
+enum __attribute__((flag_enum, enum_extensibility(open))) _name : _type   /* NS_OPTIONS */
 ```
 
-This tree's macros emit only the fixed-underlying-type enum (`NSObjCRuntime.h:184`), so
-`NSAlignmentOptions` imports as `typealias AlignmentOptions = UInt` and its 47 members never appear.
-Measured directly: a throwaway `typedef NS_OPTIONS(NSUInteger, NSFooOptions) { NSFooMinXInward = … }`
-imports as a plain struct with no `.minXInward`. So the enum pass starts by making the two macros carry
-Darwin's attributes, then converting the enums that need members (`NSAlignmentOptions` and
-`NSQualityOfService` are the two types; ≈ 80 containers are their constants seen through
-`NS_ERROR_ENUM`/`NS_TYPED_ENUM`). That is a real prerequisite, not a rename, and it is why the enum group
-is the next item rather than part of this one.
+This tree's macros emitted only the fixed-underlying-type enum, so `NSAlignmentOptions` imported as
+`typealias AlignmentOptions = UInt` and its 47 members never appeared. The macros now carry the
+attributes, and the four option sets are real option sets: `NSAlignmentOptions` (47 → 1, the `rawValue`
+note below), `NSSortOptions` (27 → 1), `NSEnumerationOptions` (22 → 1), `NSBinarySearchingOptions`
+(23 → 1) and `NSQualityOfService` (10 → 0). Three `OptionSet`/`SetAlgebra` conformance edges closed with
+them.
+
+Two importer rules fell out of it, both now written down because they decide where the annotations go:
+
+- **the constants are stripped against the ENUM NAME**, so the tag has to start with the constants'
+  common prefix. `NSAlignmentOptions` with constants `NSAlign…` strips to `alignMinXInward`; naming the
+  tag `AlignmentOptions` strips nothing. A rename therefore goes on the tag as
+  `__attribute__((swift_name("AlignmentOptions")))`, keeping the ObjC tag — which is why
+  `NSGeometry.h` spells the declaration out instead of calling `NS_OPTIONS`, and why the macro surface
+  in `NSObjCRuntime.h` had to move above its first use.
+- **a direct frontend invocation is not the driver**: the same ordering lesson as the symbol-graph tool.
+  `NS_SWIFT_NAME` had to be defined before the enum that uses it, in the same header.
+
+The four option sets' last missing symbol is `rawValue` as a *property*: the imported Clang option set
+has it, but `swift-symbolgraph-extract` does not emit the stored property, so the gap is in the
+measurement and is allowlisted as such.
 
 `DateFormatter` and `Notification.Name` were done earlier; they are the pattern.
 
@@ -316,10 +326,9 @@ Effort is rough and single-developer; gates are what matter.
 
 ### P1 — Names and annotations (≈1 week) — **in progress**
 
-- ~~Complete the rename layer with `NS_SWIFT_NAME` in the headers.~~ **32 class names and one struct
-  landed** (§3.1), closing 292 symbols. The enum-shaped half is a different job: it needs `NS_ENUM`/
-  `NS_OPTIONS` to carry Darwin's `enum_extensibility`/`flag_enum` attributes before the constants import
-  as members (see §3.1).
+- ~~Complete the rename layer with `NS_SWIFT_NAME` in the headers.~~ **32 class names, one struct and
+  four option sets landed** (§3.1), closing 440 symbols. The enum half needed `NS_ENUM`/`NS_OPTIONS` to
+  carry Darwin's `enum_extensibility`/`flag_enum` attributes first; they do now.
 - **Property shapes — the `NSObject` slice landed.** `description`/`debugDescription`/`hash` are
   properties on the class, and `NSObject` carries `CustomStringConvertible` +
   `CustomDebugStringConvertible`, which closed 156 conformance edges across the hierarchy. The
@@ -407,19 +416,16 @@ Effort is rough and single-developer; gates are what matter.
 
 ## 8. Immediate next actions
 
-1. **P1, the enum attributes** (§3.1): make `NS_ENUM`/`NS_OPTIONS` emit `enum_extensibility(open)` and
-   `flag_enum` as Darwin's do, then convert `NSAlignmentOptions` and `NSQualityOfService` and watch their
-   constants become members. This also unlocks `OptionSet`/`SetAlgebra` for
-   `NSBinarySearchingOptions`, `NSEnumerationOptions` and `NSSortOptions` (3 conformance edges).
-2. **P1, the property-shape sweep**: members declared as methods where Darwin has a property (`dateStyle`
-   and friends; 20 paths are already counted as shape-only gaps). `description`/`debugDescription`/`hash`
-   on `NSObject` were the first.
-3. **P1, value-type conformances** (§3.2): the remaining 224 edges are mostly the overlay's own value
+1. **P1, the property-shape sweep** (§3.2's shape-gap counter): members declared as methods where
+   Darwin has a property (`dateStyle` and friends; 19 paths are shape-only gaps today).
+   `description`/`debugDescription`/`hash` on `NSObject` were the first.
+2. **P1, value-type conformances** (§3.2): the remaining 222 edges are mostly the overlay's own value
    types (`Data`, `IndexSet`, `Calendar`, …) — close the cheap ones, leave the `Codable` family to P3,
    which replaces those types anyway.
-4. **P2, the strategy spike**: build `FoundationEssentials` from `~/.agora-swift/src/swift-foundation`
+3. **P2, the strategy spike**: build `FoundationEssentials` from `~/.agora-swift/src/swift-foundation`
    against Agora's CoreFoundation/libdispatch/ICU and run its tests. Do this before writing more value
    type members — it decides whether the remaining work is "port and bridge" (B) or "port the sources"
    (A), and either way it is not "re-implement".
-5. Wire `verify-foundation-parity.sh --check` into the gate suite (§6). The ratchet has now been
-   exercised by two landings (28 renames, the `NSObject` pass); it is ready to be a required gate.
+4. Wire `verify-foundation-parity.sh --check` into the gate suite (§6). The ratchet has been exercised
+   by four landings (the rename layer, the `NSObject` pass, the irregulars, the enum pass); it is ready
+   to be a required gate.

@@ -2214,6 +2214,18 @@ Swift `init` crashes while lowering the class-constructor thunk, and passing bot
 Foundation and CoreFoundation module maps makes `CFBridgingTypes.h`'s `__OBJC__`
 block disappear (module ownership, not a compiler bug).
 
+P3's first deliverable exists: `swift-toolchain/spike/foundation-reexport/Foundation.swift`,
+a `Foundation` that re-exports FoundationEssentials and FoundationInternationalization
+(the first half of the P3 arrangement, no bridging yet). A client `import Foundation`
+gets FE's `Data`/`Date`/`URL`/`JSON` and runs, and `Testing` compiles past the
+overlay gaps that stopped it. It now stops one module later: `public import
+ObjectiveC` (under `_runtime(_ObjC)`) needs `objc_getClass`, and Agora's
+`ObjectiveC` is Swift-only. `_silgen_name` and `@_extern(c,)` were both tried and
+rejected (reserved-symbol warning; `AnyClass?` is not C-representable), so the fix is
+the Darwin shape: `ObjectiveC` becomes an overlay over a Clang module of
+`objc/objc.h` + `objc/runtime.h`. That is the single remaining step before the
+suite builds.
+
 ---
 
 ## 3. Change inventory

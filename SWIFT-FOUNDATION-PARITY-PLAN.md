@@ -361,11 +361,11 @@ Effort is rough and single-developer; gates are what matter.
 - ~~Build `FoundationEssentials` against Agora's CoreFoundation, libdispatch and ICU~~ — **done, unmodified
   and with no CF shim**: FE and FI both compile, link and run ([spike record](SWIFT-FOUNDATION-P2-SPIKE.md)).
   The predicted CF SPI list turned out to be Darwin-only; the link has zero unresolved CF symbols.
-- **The suite waits on P3's first deliverable, not on CF.** swift-testing's `Testing` imports `Foundation`
-  for file I/O; with today's `Foundation` (the overlay) it stops on the overlay's known T3 gaps
-  (`Data` is not `Codable`, `URL(fileURLWithPath:isDirectory:)` is absent). `Testing` needs a `Foundation`
-  that re-exports FoundationEssentials — exactly what P3 installs. Target swift-syntax and `TestingMacros`
-  are already built (scripts in place), so the suite becomes runnable once that module exists.
+- **The suite waits on the `ObjectiveC` module, not on CF.** A re-export `Foundation`
+  (`swift-toolchain/spike/foundation-reexport/`) was built and carries `Testing` past the overlay's T3
+  gaps; it now stops at `public import ObjectiveC`, because our `ObjectiveC` module is Swift-only and
+  Darwin's re-exports `objc/runtime.h`. The fix is the Darwin arrangement — `ObjectiveC` as an overlay
+  over a Clang module — and it is the single remaining blocker before `Testing` and the suites build.
 - Build-system findings for P3: the toolchain's `SwiftSyntaxConfig.cmake` does not export
   `SwiftSyntax::SwiftCompilerPlugin` (the target swift-syntax build fixes it), and clients of the built
   modules need the `CoreFoundation`, `_FoundationCShims` and `_FoundationICU` module maps — but *not* both
@@ -445,11 +445,10 @@ Effort is rough and single-developer; gates are what matter.
 
 ## 8. Immediate next actions
 
-1. **P3 step 1, the module arrangement** (now first, because the suite waits on it): a `Foundation`
-   Swift module that re-exports FoundationEssentials + FoundationInternationalization and keeps the
-   overlay's bridging, installed in a private prefix. Then build `Testing` and the upstream FE/FI suites
-   and record the per-subsystem numbers that close P2. The build half of P2 is done and unmodified
-   ([record](SWIFT-FOUNDATION-P2-SPIKE.md)).
+1. **The `ObjectiveC` Clang half**: a module map over `objc/objc.h` + `objc/runtime.h` with
+   `ObjectiveC.swift` as its overlay, so `import ObjectiveC` exposes the runtime functions. Then `Testing`
+   builds, the FE/FI suites run, and P2 closes with per-subsystem numbers. (The re-export `Foundation` is
+   built and works — `swift-toolchain/spike/foundation-reexport/`.)
 2. **P1, `CustomReflectable`**: 21 edges, and the only remaining conformance cluster that is
    mechanical. A `customMirror` per value type, delegating to the backing object.
 3. **P5, archiving**: 44 `NSCoding`/`NSSecureCoding` edges need `-encodeWithCoder:`/`-initWithCoder:`

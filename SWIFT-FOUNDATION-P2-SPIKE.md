@@ -161,16 +161,32 @@ The upstream suites are `import Testing` (85 of 86 test files), and the installe
    swift-syntax is a P3 prerequisite that is now solved**.
 2. **`TestingMacros` — built** (library mode, `-load-plugin-library`), which also sidesteps the
    `SwiftCompilerPlugin` export gap from §5.
-3. **`Testing` — blocked, and not on Agora's CoreFoundation.** `Testing` imports `Foundation` for file
-   I/O, which here is Agora's *overlay*. It stops on the overlay's known Swift-API gaps, all of them on
-   the parity plan's books: `Data` is not `Codable` (`ABI.EncodedAttachment` decodes itself from `Data`),
-   `URL`'s `init(fileURLWithPath:isDirectory:)` is absent, and a few optional-inference sites need the
-   Darwin spellings. Those are exactly the T3 gaps P3 deletes by taking FoundationEssentials' types.
+3. **`Testing` — first blocker solved, second one now precise.** Against Agora's overlay it stopped on the
+   overlay's T3 gaps (`Data` not `Codable`, `URL(fileURLWithPath:isDirectory:)` absent); against the
+   re-export `Foundation` below it gets past all of that and stops at `import ObjectiveC` (§ below).
 
-**The ordering conclusion:** the upstream suite cannot run against today's arrangement, because
-`Testing` needs a `Foundation` that *re-exports FoundationEssentials*. That is P3's first deliverable
-(`Foundation` = FE + FI + the bridging overlay), and the suite becomes runnable the moment it exists.
-Trying to close the overlay's `Data`/`URL` gaps by hand first would be P3 done backwards.
+**P3 step 1 was then built, and the suite moved forward.** The re-export module is
+`swift-toolchain/spike/foundation-reexport/Foundation.swift` — two `@_exported import`s — built as a
+`Foundation` module in the spike prefix. A client that says `import Foundation` now gets
+FoundationEssentials' `Data`/`Date`/`URL`/`JSON` and runs:
+
+```
+data: 4 AQIDBA==          json: {"x":1,"y":"z"}
+date: true                roundtrip: true
+url: example.com /a/b b
+```
+
+With that module first on the search path, `Testing` compiles *through* the Foundation import that used
+to stop it and reaches the next boundary: `public import ObjectiveC` (under `_runtime(_ObjC)`), which needs
+`objc_getClass`. **Agora's `ObjectiveC` module is Swift-only** — it provides `ObjCBool`, `Selector` and
+`NSZone`, but not the runtime functions Darwin's `ObjectiveC` Clang module re-exports. Two ways to patch
+the overlay were tried and rejected: `_silgen_name`/`@_extern(c,)` both draw "symbol name is reserved for
+the Swift runtime" (and `AnyClass?` is not C-representable for `@_extern`). The right fix is the Darwin
+arrangement — **`ObjectiveC` as an overlay over a real Clang module (`objc/objc.h` + `objc/runtime.h`)** —
+which is a scoped toolchain task, not a spike hack.
+
+So the chain to the suite is now three known steps, in order: (1) `ObjectiveC` gains its Clang half,
+(2) `Testing` builds, (3) the FE/FI test targets build and run.
 
 Two toolchain findings from the attempt, both recorded because they will recur:
 
@@ -183,16 +199,17 @@ Two toolchain findings from the attempt, both recorded because they will recur:
   `CFBridgingTypes.h`'s `#if defined(__OBJC__)` block is skipped — Foundation then sees the header through
   that module and `NSInteger` never exists. Clients import one or the other, not both.
 
-## 8. Next: the suite, after P3's first deliverable
+## 8. Next: three known steps to the suite
 
-1. P3 step 1: build the `Foundation` re-export module (FoundationEssentials + FoundationInternationalization
-   + the overlay's bridging), install it in a private prefix, and point `Testing` and the FE/FI test targets
-   at it.
-2. Build `Testing` (script in place) and the `FoundationEssentialsTests` /
-   `FoundationInternationalizationTests` targets; run them directly and record **per subsystem**: Data,
-   Date, Decimal, UUID, JSON, URL, Calendar/TimeZone, Locale/first-party formatting, file system.
-3. Write the memo: the numbers, failing tests with root causes, and the B / partial-B / A decision in §5 of
-   the plan.
+1. **`ObjectiveC` gains its Clang half**: a module map over `objc/objc.h` and `objc/runtime.h`, with
+   `ObjectiveC.swift` compiled as an overlay over it (`-import-underlying-module`), so `import ObjectiveC`
+   gives `objc_getClass` and friends the way Darwin's does. Keep `ObjCBool`/`Selector`/`NSZone` behaviour
+   unchanged (the language gate is the check).
+2. **`Testing` builds** (scripts in place; `SWT_NO_DYNAMIC_LINKING` and the re-export module are the two
+   spike settings it needs).
+3. **The FE/FI test targets build and run**; record **per subsystem**: Data, Date, Decimal, UUID, JSON,
+   URL, Calendar/TimeZone, Locale/first-party formatting, file system. Then write the memo: the numbers,
+   failing tests with root causes, and the B / partial-B / A decision in §5 of the plan.
 
 ## 9. Reproduction
 

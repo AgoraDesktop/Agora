@@ -356,13 +356,19 @@ Effort is rough and single-developer; gates are what matter.
   `description` was the first one, in the overlay and in `verify-swift-port.sh`.
 - **Gate:** the diff's "name/annotation" group is empty or allowlisted; all existing gates green.
 
-### P2 — Strategy spike (2–4 days)
+### P2 — Strategy spike (2–4 days) — **build question answered; suite next**
 
-- Build `FoundationEssentials` from `~/.agora-swift/src/swift-foundation` against Agora's CoreFoundation,
-  libdispatch and system ICU; run its tests.
-- Record: which CF SPI/behaviour is missing, which corelibs class-cluster hooks are expected, build-system
-  changes needed.
-- **Gate:** a written go/no-go with the numbers; if go, P3 starts.
+- ~~Build `FoundationEssentials` against Agora's CoreFoundation, libdispatch and ICU~~ — **done, unmodified
+  and with no CF shim**: FE and FI both compile, link and run ([spike record](SWIFT-FOUNDATION-P2-SPIKE.md)).
+  The predicted CF SPI list turned out to be Darwin-only; the link has zero unresolved CF symbols.
+- **Still to do:** build swift-testing for this toolchain, run the upstream FE/FI suites, and record the
+  per-subsystem numbers (Data, Date, Decimal, UUID, JSON, URL, Calendar/TimeZone, Locale, FileManager).
+- Two build-system findings for P3: the toolchain's `SwiftSyntaxConfig.cmake` does not export
+  `SwiftSyntax::SwiftCompilerPlugin` (FoundationMacros needs it), and clients of the built modules need the
+  `CoreFoundation`, `_FoundationCShims` and `_FoundationICU` module maps.
+- **Gate:** a written go/no-go with the numbers; if go, P3 starts. Current standing: the two structural GO
+  conditions are met (sources unmodified, core value types/JSON/URL/formatting/calendars work), so the
+  suite is deciding between **GO** and **partial GO**, not between B and A.
 
 ### P3 — Bridge to FoundationEssentials (1–2 weeks, if go)
 
@@ -433,10 +439,10 @@ Effort is rough and single-developer; gates are what matter.
 
 ## 8. Immediate next actions
 
-1. **P2, the strategy spike**: build `FoundationEssentials` from `~/.agora-swift/src/swift-foundation`
-   against Agora's CoreFoundation/libdispatch/ICU and run its tests. It decides whether the remaining
-   work is "port and bridge" (B) or "port the sources" (A), and both the `Codable` family and the
-   collection conformances above wait on that answer rather than on more hand-written members.
+1. **P2, the rest of the spike**: build swift-testing for the toolchain, run the upstream
+   FoundationEssentials/FoundationInternationalization suites, and write the per-subsystem numbers into
+   the spike record and the decision in §4. The build half is done and unmodified
+   ([record](SWIFT-FOUNDATION-P2-SPIKE.md)); the suite is what separates **GO** from **partial GO**.
 2. **P1, `CustomReflectable`**: 21 edges, and the only remaining conformance cluster that is
    mechanical. A `customMirror` per value type, delegating to the backing object.
 3. **P5, archiving**: 44 `NSCoding`/`NSSecureCoding` edges need `-encodeWithCoder:`/`-initWithCoder:`

@@ -2183,6 +2183,23 @@ it**, and the Swift overlay is exactly the client that exposes the setters which
 do not. Auditing the rest of `libagora-base` for the same pattern is open work
 (the setters that take objects are few, and grep finds them).
 
+**The P2 spike, first half.** The Foundation-overlay plan's strategy phase asks
+whether swift-foundation can be built against Agora instead of re-implemented.
+It can: `FoundationEssentials` and `FoundationInternationalization` **compile,
+link and run unmodified** — no source patch, and no CoreFoundation shim at all —
+against Agora's CoreFoundation and ICU 76. A Swift client prints correct results
+for `Data`, `Date`, `Decimal`, `UUID`, `URL`/`URLComponents`, a `Codable` JSON
+round trip, `IndexPath`, `Calendar`, `Locale`, `TimeZone`, `Date.FormatStyle`
+and `FloatingPointFormatStyle`. The build is CMake (no SwiftPM in this install),
+offline, and needs one new module map — `CoreFoundation.modulemap` — whose
+`link "agora-core"` is what makes the autolink resolve to Agora's library.
+
+The predicted CF SPI list dissolved on contact: the 18 textual misses are
+Darwin-only or not symbols, and the produced library has zero unresolved `CF`
+symbols. The remaining half is the upstream test suite, which needs swift-testing
+built for this toolchain; that is what separates a full **GO** from a partial one.
+Full record: [`SWIFT-FOUNDATION-P2-SPIKE.md`](SWIFT-FOUNDATION-P2-SPIKE.md).
+
 ---
 
 ## 3. Change inventory

@@ -108,7 +108,7 @@ What the harness measures:
   a count that is now too large, so every landing has to shrink the list.
 
 The allowlist is *prefix*-based (`Foundation:NSData` covers `NSData` and everything under it), so the
-baseline is 361 reviewable entries rather than 8,256 lines. `--update-allowlist` rewrites the counts,
+baseline is 359 reviewable entries rather than 8,231 lines. `--update-allowlist` rewrites the counts,
 *appends* an entry for a gap nothing accepts (a rename can expose one — see §3.1), and keeps the reasons.
 
 ---
@@ -121,14 +121,17 @@ baseline is 361 reviewable entries rather than 8,256 lines. `--update-allowlist`
 |---|---|
 | reference symbols | 10,455 |
 | our symbols | 11,314 |
-| **missing** | **7,819 distinct `(path, kind)` — 8,256 declarations in 302 containers** |
+| **missing** | **7,794 distinct `(path, kind)` — 8,231 declarations in 300 containers** |
 | … of those, containers absent entirely | 185 |
-| … members that exist here only in the other shape | 19 |
+| … members that exist here only in the other shape | 3 |
 | **missing conformances** | **222 edges over 61 types** |
-| extra symbols (ours only) | 9,303 — 223 CoreFoundation type containers plus Agora's own additions |
+| extra symbols (ours only) | 9,274 — 223 CoreFoundation type containers plus Agora's own additions |
 
-(The rename layer and the enum pass of §3.1 have landed — 32 classes, one struct, four option sets —
-plus the `NSObject` shape and conformance pass, hence 7,819 rather than the 8,259 first measured.)
+(The name, enum and shape passes of §3.1 have landed — 32 classes, one struct, four option sets, the
+`NSObject` description family, `Calendar.Component` as an enum, `CGRectEdge` — hence 7,794 rather than
+the 8,259 first measured. Three shape-only gaps remain and each is a recorded decision, not a task:
+`CGFloat` and `DateFormatter` are typealiases here, and `NSRectEdge` is Core Graphics' enum under
+Darwin's deprecated alias.)
 
 By the allowlist's stage reasons, the missing symbols split roughly: **T3 ≈ 3,000**, **P1 ≈ 2,800**,
 **T3/P1 ≈ 1,340** (the value types' long tails), **P4 ≈ 400**, out-of-scope/capped subsystems ≈ 225, and
@@ -272,6 +275,13 @@ symbols — small, which is the useful finding: the gap is not in Objective-C su
 - `CGFloat` is `Double` here and a struct in the reference (103 members), so the geometry containers are
   allowlisted as a deviation rather than a task. Darwin's `CGFloat` is a struct too; whether to match it
   is a decision for P1, not a bug.
+- **`NSRectEdge` is an alias of `CGRectEdge`** here, which is Darwin's arrangement (the pre-10.6
+  spelling is deprecated). The reference — Linux corelibs — declares a separate `NSRectEdge` enum with
+  `.minX`/`.minY`/`.maxX`/`.maxY`, so the diff reports our typealias as a shape gap; the source is the
+  tie-breaker, and the deviation is allowlisted with that reason rather than "averaged" into a second
+  enum.
+- **`DateFormatter` is a typealias of `NSDateFormatter`** (Darwin's imported name), so the type exists but
+  its members are counted under the alias; that is the P1/P4 member work, not a shape question.
 
 ---
 
@@ -324,15 +334,16 @@ Effort is rough and single-developer; gates are what matter.
 - **Gate:** `verify-foundation-parity.sh --check` is green against the baseline, and fails on an
   unallowlisted gap, a grown gap, or a stale count. Measured cost: ~10 s end to end.
 
-### P1 — Names and annotations (≈1 week) — **in progress**
+### P1 — Names and annotations (≈1 week) — **mostly landed**
 
 - ~~Complete the rename layer with `NS_SWIFT_NAME` in the headers.~~ **32 class names, one struct and
   four option sets landed** (§3.1), closing 440 symbols. The enum half needed `NS_ENUM`/`NS_OPTIONS` to
   carry Darwin's `enum_extensibility`/`flag_enum` attributes first; they do now.
-- **Property shapes — the `NSObject` slice landed.** `description`/`debugDescription`/`hash` are
-  properties on the class, and `NSObject` carries `CustomStringConvertible` +
-  `CustomDebugStringConvertible`, which closed 156 conformance edges across the hierarchy. The
-  `dateStyle` class of gap (members declared as methods where Darwin has properties) remains.
+- **Property shapes — landed.** `description`/`debugDescription`/`hash` are properties on `NSObject`
+  (with the two description conformances, 156 edges), `NSDate`'s reference interval is a class property,
+  `Date`'s is a static, `Calendar.Component` is an enum, and `NSExceptionName`/`NSTextCheckingKey` are
+  typed string enums. The shape-gap counter went 19 → 3; the three that remain are the recorded
+  deviations in §3.5.
 - `NS_REFINED_FOR_SWIFT` where the overlay wants the un-renamed door; `NS_SWIFT_SENDABLE` for the
   immutable classes.
 - Update call sites (the same source migration the property pass already required): `description()` →
@@ -416,16 +427,13 @@ Effort is rough and single-developer; gates are what matter.
 
 ## 8. Immediate next actions
 
-1. **P1, the property-shape sweep** (§3.2's shape-gap counter): members declared as methods where
-   Darwin has a property (`dateStyle` and friends; 19 paths are shape-only gaps today).
-   `description`/`debugDescription`/`hash` on `NSObject` were the first.
-2. **P1, value-type conformances** (§3.2): the remaining 222 edges are mostly the overlay's own value
+1. **P1, value-type conformances** (§3.2): the remaining 222 edges are mostly the overlay's own value
    types (`Data`, `IndexSet`, `Calendar`, …) — close the cheap ones, leave the `Codable` family to P3,
    which replaces those types anyway.
-3. **P2, the strategy spike**: build `FoundationEssentials` from `~/.agora-swift/src/swift-foundation`
+2. **P2, the strategy spike**: build `FoundationEssentials` from `~/.agora-swift/src/swift-foundation`
    against Agora's CoreFoundation/libdispatch/ICU and run its tests. Do this before writing more value
    type members — it decides whether the remaining work is "port and bridge" (B) or "port the sources"
    (A), and either way it is not "re-implement".
-4. Wire `verify-foundation-parity.sh --check` into the gate suite (§6). The ratchet has been exercised
-   by four landings (the rename layer, the `NSObject` pass, the irregulars, the enum pass); it is ready
-   to be a required gate.
+3. Wire `verify-foundation-parity.sh --check` into the gate suite (§6). The ratchet has been exercised
+   by five landings (the rename layer, the `NSObject` pass, the irregulars, the enum pass, the shape
+   pass); it is ready to be a required gate.

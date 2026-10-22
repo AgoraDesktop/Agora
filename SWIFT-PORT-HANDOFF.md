@@ -2127,6 +2127,32 @@ A Swift program now writes `NSSortOptions.concurrent`, `NSEnumerationOptions.rev
 `QualityOfService.background`, and `SetAlgebra` containment works -- checked by
 compiling and running one.
 
+**The shape pass.** The diff's "same path, other shape" counter went 19 -> 3, and
+each fix was a declaration whose *form* was wrong rather than missing:
+
+- `NSDate`'s `+timeIntervalSinceReferenceDate` was a class method; Darwin has a
+  class property, and the reference's `NSDate.timeIntervalSinceReferenceDate` is
+  a type property. Same for the overlay's `Date` (which now has both the instance
+  and the static, as Darwin does).
+- `Calendar.Component` was a struct of static values in the overlay; it is an enum
+  with cases now, so `.day` is an enum case and a `[Component]` is an honest
+  collection. Nine cases.
+- `NSExceptionName` and `NSTextCheckingKey` gained `NS_TYPED_ENUM`: they are
+  `NSString *` typedefs Darwin wraps in a struct, and without `swift_wrapper` the
+  importer handed back a bare typealias.
+- `NSRectEdge` was a second enum renamed to `CGRectEdge`, which collided with Core
+  Graphics' own `CGRectEdge` (two Swift types of that name). Darwin's arrangement
+  is that `NSRectEdge` is a deprecated *alias* of `CGRectEdge`, so it is one now,
+  with the pre-10.6 spellings kept as macros naming Core Graphics' cases
+  (`case NSMinXEdge:` still compiles in ObjC). `CGRectEdge` itself became an
+  attributed enum in `libagora-drawing`, so its four constants import as cases
+  (`CGRectEdge.minXEdge`).
+
+The three remaining shape gaps are recorded deviations rather than tasks: `CGFloat`
+and `DateFormatter` are typealiases here, and `NSRectEdge` is an alias whose
+reference (corelibs) declares a separate enum -- the source is the tie-breaker and
+the allowlist says so.
+
 ---
 
 ## 3. Change inventory
@@ -2560,9 +2586,8 @@ Debugging techniques that produced the findings above:
    **Foundation *overlay* parity** is a different, larger project and has its
    own plan: [`SWIFT-FOUNDATION-PARITY-PLAN.md`](SWIFT-FOUNDATION-PARITY-PLAN.md).
    Its P0 (measurement) landed this round (§2.29): the harness, the gate and a
-   measured baseline (7,819 missing symbols, 222 missing conformance edges
-   against a 10,455-symbol three-module reference, after the rename layer, the `NSObject` pass and the
-   enum pass). P1 (the rename/annotation
+   measured baseline (7,794 missing symbols, 222 missing conformance edges
+   against a 10,455-symbol three-module reference, after the rename, enum and shape passes). P1 (the rename/annotation
    pass) is next; P2 (the `swift-foundation` spike) decides whether the T3 work
    is "port and bridge" or "port the sources".
 12. **Two Agora-side bugs surfaced by the value-type gate and are fixed**
@@ -2816,7 +2841,7 @@ before the default flips.
 The Foundation *overlay* is now measured rather than estimated (§2.29): a
 three-module reference (Foundation + FoundationEssentials +
 FoundationInternationalization, 10,455 symbols) against Agora's 11,314, with
-7,819 symbols and 222 conformance edges still missing, recorded in a 361-entry
+7,794 symbols and 222 conformance edges still missing, recorded in a 359-entry
 allowlist that `verify-foundation-parity.sh --check` ratchets in both directions
 (a gap may not grow, and a count that is now too large must shrink). The
 measurement needed one compiler fix: `swift-symbolgraph-extract` is a direct

@@ -2278,10 +2278,19 @@ destroy symbols are never reached either. The crashing call is `swift_arrayDestr
 with a small count whose `self` metadata sits beside `Any`/`AnyObject`, i.e. the array
 being destroyed is an **existential** one; its element destroy is `objc_release` by
 design, and the element is an instance of a Swift class that is not a class object.
-The next probe is to read that element's type descriptor (and the caller of
-`swift_arrayDestroy`) to name the existential array responsible; the fix then lies
-either in making the runtime's existential release tolerate non-class-object Swift
-classes, or in making the generic pattern a class object.
+The next probe was to read that element's type descriptor, and it turned up the ABI
+fact that frames the fix: `asFullMetadata()` reaches the value-witness table at **one
+word before** the metadata pointer, and in the GNUstep layout a class object's first
+word is `isa` — so a class's VWT lives in the word *before* the class object. A
+statically emitted class gets that word from IRGen; a runtime-instantiated generic
+class gets it from `swift_allocateGenericClassMetadata`, and that allocation is where
+the two halves can disagree. The breakpoint readings that followed are not trustworthy,
+though: they were taken against the installed `-O` libswiftCore, where breakpoints land
+after the prologue and the argument registers have moved. The next step is a scratch
+`-O0 -g` build of the stdlib runtime (same tree, separate build dir), so `pattern`,
+`metadata` and `bounds` can be read as typed values and the VWT word before an
+instantiated class printed directly. That is a debugging-infrastructure step, not a
+guess, and it is what the gate's header now records.
 
 ---
 

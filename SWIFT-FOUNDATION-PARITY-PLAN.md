@@ -455,19 +455,22 @@ Effort is rough and single-developer; gates are what matter.
    `--all` runs 19 suites / 672 tests with 670 passing. Two further runtime bugs were fixed on the way
    (a pattern class's refcount word landing on its first stored property; libobjc2 walking a late-bound
    actor's null ivar offset).
-1. **Build the `FoundationMacros` plugin** (target `SwiftCompilerPlugin` + `FoundationMacros`): the one
-   remaining *build* failure, `PredicateTests`, and the prerequisite for compiling the test directory as
-   one module. Also what `#Predicate` needs in any ported client.
-2. **Then P3 proper** (below): install FoundationEssentials/FoundationInternationalization next to the
+1. **The `FoundationMacros` plugin — done** (handoff §2.32): built as a *library* plugin by
+   `swift-toolchain/scripts/build-foundation-macros.sh` (host build against the toolchain's own SwiftSyntax,
+   loaded with `-load-plugin-library`), so `PredicateTests` passes and `#Predicate` works in any client.
+2. **The FI suites — done** (handoff §2.32): `run-foundation-tests.sh --fi --all` runs 30
+   FoundationInternationalization suites / 329 tests green. What it found is recorded there: the spike's ICU
+   has no table-driven converters, `Duration(seconds:milliseconds:)` is newer than the fork's stdlib, and
+   the `NotificationCenter` assertion needs tagged `NSNumber`s.
+3. **Then P3 proper** (below): install FoundationEssentials/FoundationInternationalization next to the
    target stdlib, make `import Foundation` re-export them, and write the bridge to Agora's classes.
-   `run-foundation-tests.sh` is the regression harness for it, and the FI suites (item 3 of the spike's
-   list) are the next thing it should learn to run.
-3. **P1, `CustomReflectable`**: 21 edges, and the only remaining conformance cluster that is
+   `run-foundation-tests.sh` is the regression harness for it.
+4. **P1, `CustomReflectable`**: 21 edges, and the only remaining conformance cluster that is
    mechanical. A `customMirror` per value type, delegating to the backing object.
-4. **P5, archiving**: 44 `NSCoding`/`NSSecureCoding` edges need `-encodeWithCoder:`/`-initWithCoder:`
+5. **P5, archiving**: 44 `NSCoding`/`NSSecureCoding` edges need `-encodeWithCoder:`/`-initWithCoder:`
    (and secure decoding) on the classes that have none. That is a subsystem, not a conformance edit.
-5. Wire `verify-foundation-parity.sh --check` into the gate suite (§6). The ratchet has been exercised
+6. Wire `verify-foundation-parity.sh --check` into the gate suite (§6). The ratchet has been exercised
    by six landings; it is ready to be a required gate.
-6. Two single-assertion failures the widened harness reports: `NotificationCenter` subject matching for
+7. Two single-assertion failures the widened harness reports: `NotificationCenter` subject matching for
    non-object subjects (a real finding), and `ProcessInfo.processName` (a harness artefact — the test
    asserts SwiftPM's executable name).

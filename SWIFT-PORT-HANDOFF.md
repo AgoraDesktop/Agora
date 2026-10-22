@@ -20,7 +20,10 @@ FoundationEssentials suites that used to segfault pass. The harness itself was
 then fixed to compile the suites the way SwiftPM does (shared helpers, borrowed
 files, resources), which took it from 8 suites/251 tests to **19 suites/672
 tests, 670 passing** — and turned up one more load-time crash, in libobjc2's
-layout of a late-bound actor's ivars, also fixed and gated. §2.30, §2.31.
+layout of a late-bound actor's ivars, also fixed and gated. Then the macro plugin
+(the last build failure) and the **FoundationInternationalization** suites came
+in: 30 suites, 329 tests passing over Locale, Calendar, TimeZone and the
+FormatStyle family. §2.30, §2.31, §2.32.
 
 **The Swift surface is finished.** The Cocoa value types carry the API a
 program actually calls (`Data` is a collection you can slice and mutate,
@@ -2493,6 +2496,75 @@ It was simply unreachable until a suite with an actor in it built.
 
 ---
 
+### 2.32 The macro plugin, and the internationalization suites
+
+Two more entries came off the P3 list this round: the last build failure in the
+Foundation harness, and the suites the harness had never run.
+
+**The macro plugin (`FoundationMacros`).** `#Predicate`/`#Expression`/`#Bundle`
+are declared in FoundationEssentials with `#externalMacro(module:
+"FoundationMacros", …)`, so the predicate suites cannot build without the plugin.
+It is now built by `swift-toolchain/scripts/build-foundation-macros.sh`, as a
+**library** plugin (`-DFoundationMacros_BuildLocalExecutable=NO`, swift-foundation's
+own CMake supports the shape): a macro plugin runs *inside* the compiler process,
+and the compiler is a host tool, so the plugin is compiled by the **bootstrap**
+compiler against the **host** SwiftSyntax the toolchain build tree exports
+(`lib/swift/host/libSwiftSyntax*.so`), and loaded with
+`-load-plugin-library libFoundationMacros.so`. The executable shape is not
+available here anyway: it needs `SwiftSyntax::SwiftCompilerPlugin`, which the
+exported `SwiftSyntaxConfig.cmake` does not contain (the target is
+`EXCLUDE_FROM_ALL` upstream). The script self-checks by expanding `#Predicate` and
+`#Expression` through the plugin. `PredicateTests` — 28 tests — is green.
+
+**The FoundationInternationalization suites.** `run-foundation-tests.sh` grew a
+`--fi` selector (the same harness, per-suite support files: FI's
+`usingCurrentInternationalizationPreferences` and the discrete-format helpers).
+That immediately turned eight "build failures" into passes: they were cross-file
+helpers, exactly the §2.31 story. The result is **30 suites, 329 tests passing**
+over Locale, Calendar, TimeZone, DateComponents, FormatStyle (date, interval,
+relative, duration, number, list, byte count), parsing and sorting — with two
+findings worth keeping:
+
+- **`StringICUEncodingTests` fails, and it is ICU data, not Swift.** UTF-8,
+  ISO-8859-1 and macOS Roman convert both ways; `EUC-JP` and `Shift_JIS` return
+  nil. The spike's `swift-foundation-icu` build compiles only
+  `common`/`i18n`/`io` (no `data` target) and defines `USE_PACKAGE_DATA=1`, so
+  ICU has its *built-in* converters and no table-driven ones. The fix is a
+  dependency-build decision (build ICU's data, or link the system's ICU 76 with
+  its `/usr/share/icu/76.1` data), not a Foundation one.
+- **`DurationUnitsFormatStyleTests` does not build, and it is version skew.**
+  It calls `Duration(seconds:milliseconds:)`, which the fork's stdlib snapshot
+  does not have (this stdlib has `secondsComponent:attosecondsComponent:` and the
+  static factories). The swift-foundation checkout is newer than the Swift fork;
+  closing it means rebasing the fork's stdlib, which is its own round.
+
+**Also this round, the `NotificationCenter` assertion from §2.31 is explained.**
+Its subject bookkeeping keys observers by
+`ObjectIdentifier($0 as AnyObject)` (`NotificationCenter.swift`), so a non-object
+subject only matches if the *box* has a stable identity. On Darwin `5 as
+AnyObject` is a tagged `NSNumber` and so is stable; on this stack it is a fresh
+`AGNumberSigned` every time:
+
+```
+$ ... ; let a = 5 as AnyObject; let b = 5 as AnyObject
+same identity: false   class: AGNumberSigned
+```
+
+So the failing test is a **missing Foundation feature — tagged pointers** (Darwin
+boxes small numbers, and some strings, as tagged objects, which is what makes
+their identity stable), not a defect in the ported code. Implementing tagged
+`NSNumber` (with the runtime side: retain/release and `object_getClass` on a
+tagged pointer) belongs to the same tier as the other Foundation long-tail work;
+it is recorded, not attempted, because a value cache in `NSNumber` would be a
+different (and riskier) answer than what Darwin does.
+
+Totals now: **FoundationEssentials 20 suites / 672 tests (670 passing, two
+single-assertion failures), FoundationInternationalization 30 suites / 329 tests
+passing** (one failing suite, one file blocked on the stdlib snapshot, one with
+no tests on this platform).
+
+---
+
 ## 3. Change inventory
 
 `swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 63 files,
@@ -2527,7 +2599,8 @@ And §2.31, the harness and the load-time layout it exposed:
 |---|---|
 | `libagora-objc/ivar.c` | `objc_compute_ivar_offsets()` reserves the space of an ivar whose `offset` is null (Swift's synthesized `$defaultActor` storage) instead of dereferencing it; the offset belongs to the runtime that owns a layout it cannot express as a global. Patch `0014` |
 | `swift-toolchain/scripts/verify-update-abi.sh` | a second programme: an actor with a resiliently sized stored property, built against the evolved library and run (the load-time check) |
-| `swift-toolchain/scripts/run-foundation-tests.sh` | the harness: shared helper sources, a cross-file dependency map with per-suite `--filter`, the resource bundle next to the binaries, `EX_UNAVAILABLE`/no-tests classified as *no tests on this platform*, and `--all` skipping the helper file |
+| `swift-toolchain/scripts/run-foundation-tests.sh` | the harness: shared helper sources, a cross-file dependency map with per-suite `--filter`, the resource bundle next to the binaries, `EX_UNAVAILABLE`/no-tests classified as *no tests on this platform*, and `--all` skipping the helper file; and §2.32's `--fi` selector with FI's support files and the macro plugin |
+| `swift-toolchain/scripts/build-foundation-macros.sh` | builds `FoundationMacros` as a *library* plugin with the bootstrap compiler against the host SwiftSyntax (§2.32), and self-checks `#Predicate`/`#Expression` through it |
 
 | File (bridging) | Change |
 |---|---|
@@ -2693,7 +2766,9 @@ swift-toolchain/scripts/verify-generic-release.sh
 # the P2/P3 Foundation harness: builds and runs swift-foundation's own suites
 # against FoundationEssentials (needs the p2-foundation-testing and
 # p2-swift-testing spike builds; --all for every file, §2.31)
+swift-toolchain/scripts/build-foundation-macros.sh     # #Predicate/#Expression
 swift-toolchain/scripts/run-foundation-tests.sh --all
+swift-toolchain/scripts/run-foundation-tests.sh --fi --all   # Locale/Formatting, §2.32
 
 # the library-evolution gate (same build tree; a class with a resiliently sized
 # member: Update and Singleton, and a client run against an evolved v2 library)
@@ -2983,11 +3058,20 @@ Debugging techniques that produced the findings above:
    in libobjc2 — a late-bound class (an actor with a resiliently sized stored
    property) whose synthesized `$defaultActor` ivar has a null offset pointer was
    walked by `objc_compute_ivar_offsets()` — now fixed (patch `0014`) and pinned
-   by a check in the library-evolution gate. What is left for P3, in order:
-   build the `FoundationMacros` plugin so `PredicateTests` compiles; chase the one
-   `NotificationCenter` subject-matching assertion (non-object subjects); teach
-   the harness `Tests/FoundationInternationalizationTests`; then the bridging
-   layer between FoundationEssentials' types and Agora's classes. The
+   by a check in the library-evolution gate.
+15. **The macro plugin and the internationalization suites are in** (§2.32):
+   `build-foundation-macros.sh` builds `FoundationMacros` as a library plugin
+   (host build, `-load-plugin-library`), so `PredicateTests` passes, and the
+   harness's `--fi` selector runs 30 FoundationInternationalization suites / 329
+   tests green. Three findings are recorded rather than fixed: the spike's ICU has
+   no table-driven converter data (`EUC-JP`/`Shift_JIS` return nil; a dependency
+   build decision), `Duration(seconds:milliseconds:)` is newer than the fork's
+   stdlib (version skew — a fork rebase), and the `NotificationCenter` assertion
+   needs **tagged `NSNumber`s** (Darwin's `5 as AnyObject` has stable identity;
+   Agora's does not). What is left for P3 is the phase's real content: install
+   FoundationEssentials/FoundationInternationalization beside the target stdlib,
+   make `import Foundation` re-export them, and write the bridge to Agora's
+   classes. The
    prespecialized-metadata case noted in item 11 is unaffected: it is still
    unreachable, and static prespecialized metadata keeps its
    `MetadataKind::Class` placeholder, which is harmless because a prespecialized

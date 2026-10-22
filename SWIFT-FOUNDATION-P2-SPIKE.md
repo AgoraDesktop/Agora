@@ -286,6 +286,7 @@ Open items, in order:
 ## 9. Reproduction
 
 ```sh
+swift-toolchain/scripts/build-foundation-macros.sh          # #Predicate/#Expression (§2.32)
 swift-toolchain/scripts/build-swift-foundation.sh --configure
 swift-toolchain/scripts/build-swift-foundation.sh --build FoundationEssentials FoundationInternationalization
 

@@ -64,6 +64,55 @@ gate builds a library-evolution module, compiles a client against v1, swaps in a
 v2 with one more struct field *without recompiling the client*, and verifies the
 runtime layout at `-Onone` and `-O` (§2.14).
 
+**A Swift subclass of an AppKit class is laid out correctly now (2026-10-22).**
+The last ABI defect that stood between the bridge and an actual Swift GUI
+program: IRGen laid a Swift class's fields out from the isa word, which is what
+Darwin can do because objc4 *slides* `instance_size` and the ivar offsets when it
+realizes the class. libobjc2 does not slide, so a Swift subclass of `NSView` was
+16 bytes with its field at offset 8 while `NSView` is 496 bytes with 54 ivars:
+the field aliased the superclass's first ivar and the object was allocated
+smaller than the superclass writes to. `ClassLayoutBuilder` now adds an imported
+Objective-C superclass's `getASTObjCInterfaceLayout()` size as padding before the
+Swift fields (gated on `usesGNUstepClassABI()`, the same computation clang's
+`CGObjCGNU` backend makes for `instance_size`). `NSView` + one stored property is
+504 bytes with the field at 496; a Swift `NSView` subclass now draws and its
+pixels reach the compositor. The one case left is a superclass whose ivars are
+synthesized in its `@implementation` (a module importer cannot see them), which
+still needs the runtime slide; Agora's own AppKit declares its ivars in headers.
+§2.23, `SWIFT-GNUSTEP-CLASS-ABI.md` S3, and
+[`swift-interop-probe/conformance/FINDINGS.md`](swift-interop-probe/conformance/FINDINGS.md).
+
+**`BOOL` is Apple's now, so a `BOOL` override is reached by a typed send
+(2026-10-22).** `libagora-objc` defaulted to GNUstep's `unsigned char`, which
+encodes as `C`; Swift's `Bool` encodes as Apple's `c` on x86_64. libobjc2 keys
+typed dispatch on (selector, encoding), so a clang-built caller's
+`-sharedFlag` (`C16@0:8`) missed a Swift override registered as `c16@0:8` and
+the superclass's IMP answered — silently, for every `BOOL`-returning method
+(`-validateMenuItem:`, `-windowShouldClose:`, `-isEqual:`). The header now
+defines `BOOL` per Apple's rule under `STRICT_APPLE_COMPATIBILITY`, which is the
+default: `bool`/`_Bool` on arm64, `signed char` elsewhere; the `@VAR@` form of
+the config header was emitting `ON`, colliding with the compile definition, so
+the `.in` now emits `1`. Because the encoding is baked into every already-built
+library, the whole stack was rebuilt: all suites pass (`libagora-base` 23,
+`libagora-app` 125, `workspace` 13, `window-server` 10, ...), and the
+conformance matrix is now **31/31 encodings and 46/46 checks**. §2.25.
+
+**A Swift class publishes its `@objc` protocol conformances now (2026-10-22).**
+The GNUstep class object's `protocols` field was a null pointer, so
+`class_conformsToProtocol:` answered `NO` for a Swift delegate and
+`class_copyProtocolList` returned nothing — the kind of reflection Cocoa uses for
+delegate validation, `IBOutlet` inspection and KVC. Three things were needed:
+the GNUstep `struct objc_protocol_list` shape (`{ next, count, list[] }`, not
+Apple's `{ count, refs[] }`); clang's `struct objc_protocol` as the entry for an
+*imported* protocol (`emitClangProtocolObject`, previously unused, plus the
+`._OBJC_PROTOCOL_X` symbols in the TBD), because conformance is a pointer
+compare and Swift's own record was Apple-shaped and never registered; and a
+libobjc2 fix — `init_protocols()` now initialises a `protocol_version_gsv2`
+record unconditionally, since a class list can name a protocol from another
+image, which the old code aborted on. §2.24. A protocol declared in *Swift* is
+still Apple-shaped and is filtered out of the list rather than corrupted; that
+emitter is the remaining piece.
+
 **The default is flipped: the installed toolchain is layout 2.** Since
 2026-10-17 `swiftc` and its stdlib are built with `SWIFT_OBJC_CLASS_LAYOUT=2`
 (`Runtime/Config.h` and `native-env.sh`), so Agora sees Swift classes as real
@@ -1623,6 +1672,134 @@ Verified by the language gate's new "value types and header annotations"
 section (the table above, the four annotations, and `Sendable`), the existing
 bridging/zero-copy sections (now including the cast-semantics checks), and the
 whole gate suite plus both probes against the installed toolchain.
+
+### 2.23 The imported superclass's size is part of the static layout
+
+The last ABI defect between this toolchain and a real Swift GUI program. IRGen
+laid a Swift class's own fields out from the isa word (offset 8), which is what
+Darwin can do because objc4 *slides* `instance_size` and the ivar offsets when it
+realizes the class — that is why `ClassLayout.h` says "the Objective-C runtime
+will slide offsets based on the actual superclass size". libobjc2 has no such
+step: the GNUstep class object's `instance_size` is what libobjc2 allocates
+from, and its ivar offsets are what it reports.
+
+What that looked like measured:
+
+```
+NSView:       instanceSize=496, 54 ivars, _frame at offset 32
+CounterView:  instanceSize=16,  ticks at offset 8        (Darwin: 504, 496)
+NSViewController   subclass: 16  (superclass 72)
+NSWindowController subclass: 16  (superclass 82)
+```
+
+So the Swift field aliased the superclass's first ivar, and the instance was
+allocated smaller than the superclass writes to: asking `NSView` for its frame
+aborted in `malloc`/`free`, and a weakly-referenced instance died at teardown.
+`conformance/appkit/SubclassLayout.swift` reproduced it in fifteen lines.
+
+The fix is in `ClassLayoutBuilder`. When the walk up the superclass chain reaches
+a class that came from Clang, its `getASTObjCInterfaceLayout()` size is added as
+padding and the Swift fields are laid out after it — the same computation clang's
+own GNUstep backend makes for `instance_size` (`CGObjCGNU`:
+
+```cpp
+int superInstanceSize = !SuperClassDecl ? 0 :
+  Context.getASTObjCInterfaceLayout(SuperClassDecl).getSize().getQuantity();
+```
+
+). It is gated on `usesGNUstepClassABI() && superclass`, so the Darwin path is
+untouched, and it needs no runtime change and no rebuild of the Objective-C
+stack: only Swift code compiled with the fixed compiler carries the new offsets.
+
+Verified: `NSView` + one stored property is 504 bytes with the field at 496;
+`NSViewController` 72 → 80; `NSWindowController` 82 → 96; every S1–S6 and
+library-evolution gate passes unchanged; the conformance layout checks pass; the
+layout crash probe exits 0; and a Swift `NSView` subclass now draws — the pixels
+it fills reach the headless compositor
+(`conformance/scripts/run-appkit.sh`).
+
+**Not covered:** a superclass whose ivars are synthesized in its
+`@implementation` and never appear in the header. A Swift module importer sees
+only the header, so that class looks eight bytes wide and the old layout is used.
+204 of Agora's 288 Foundation/AppKit headers declare their ivars in the
+`@interface` — every AppKit class a program subclasses (`NSView`, `NSWindow`,
+`NSResponder`, `NSApplication`, `NSControl`, `NSTextView`, `NSViewController`,
+`NSWindowController`, `NSCell`) among them — so Agora's own stack is covered.
+Closing it for third-party classes needs an `instanceStart` and the objc4-style
+slide in libobjc2; the conformance suite measures it as a `[gap]` so it cannot be
+forgotten.
+
+### 2.24 The class object publishes its `@objc` protocol conformances
+
+`class_copyProtocolList` returned `NULL` and `class_conformsToProtocol` answered
+`0` for a Swift class conforming to an imported `@objc` protocol, although the
+required method was implemented and the optional one correctly absent: the
+GNUstep class object's `protocols` field was emitted as a null pointer.
+
+The list has to be GNUstep's shape — `struct objc_protocol_list { next, count,
+list[] }` — not Apple's `protocol_list_t { count, refs[] }`, so Apple's
+`buildProtocolList` cannot be reused. `ClassDataBuilder::buildGNUstepProtocolList`
+builds it from the class's explicit conformances, `GNUstepClassData::Protocols`
+carries it, and `addGNUstepProtocols()` (reachable through
+`ClassMetadataVisitor::addClassGNUstepHeader`) puts it in the class object.
+
+The entry for an imported protocol must be **clang's** record: `._OBJC_PROTOCOL_X`
+in the defining image's `__objc_protocols` section, which is the object libobjc2
+registered. Swift used to emit its own `protocol_t` into the Apple
+`objc_protolist`/`objc_protorefs` sections (different shape, never registered),
+and conformance is a pointer compare, so a copy can never match.
+`emitLazyObjCProtocolDefinition` now routes an imported protocol through
+`emitClangProtocolObject` — a helper that existed but had no caller — and that
+helper no longer applies Apple's `updateProtocolRefs` rewrite to a GNUstep
+record. The referenced symbols go into the TBD (`TBDGenVisitor`), which the
+debug-build validation requires for an external record.
+
+The runtime needed one fix too, and the toolchain self-check found it: a class
+list can name a protocol defined in *another image* (a Swift class in
+`libswiftCore` listing a Foundation protocol), so at class-load time the record
+still carries its `protocol_version_gsv2` marker (`isa = 4`) and
+`init_protocols()` hit `default: abort()` — the case was compiled only under
+`OLDABI_COMPAT`. It is now handled unconditionally: initialise the record in
+place and let `unique_protocol()` merge it with the canonical one.
+
+Verified: five protocol checks green in `swift-interop-probe/conformance/`
+(`class_copyProtocolList -> 1`, `class_conformsToProtocol == 1`, required method
+reachable, optional absent, `objc_getProtocol` finds the protocol); 42/46 →
+44/46; every S1–S6 and library-evolution gate unchanged; both interop probes and
+the toolchain self-check green.
+
+**Not covered:** a protocol declared in Swift is still emitted as Apple's
+`protocol_t` and is not registered, so it is filtered out of the GNUstep list
+(`hasClangNode()`) instead of being handed to libobjc2 in a shape it would
+misread. Every Cocoa protocol is imported, so the AppKit/Foundation case is
+covered; a GNUstep protocol emitter for Swift-declared protocols is the
+remaining piece.
+
+### 2.25 `BOOL` is Apple's: the encoding that typed dispatch keys on
+
+GNUstep's `BOOL` is `unsigned char` (encoding `C`); Apple's is `signed char` on
+x86_64 and `bool` on arm64 (`c` and `B`). libobjc2 keys typed dispatch on
+(selector, encoding) and a class's dispatch table starts as its superclass's, so
+a clang-built caller of `-sharedFlag` typed `C16@0:8` missed a Swift override
+registered as `c16@0:8` and the **superclass's** implementation answered — wrong
+result, no diagnostic, for every `BOOL`-returning method in Cocoa.
+
+`objc/runtime.h` now defines `BOOL` as Apple does, per architecture, under
+`STRICT_APPLE_COMPATIBILITY` (default ON in `CMakeLists.txt`); the option's
+"always signed char" spelling was wrong for arm64. `objc/objc-config.h.in` uses
+`#cmakedefine VAR 1` — the `@VAR@` form wrote `ON`, which both collided with the
+`add_compile_definitions` copy and is not a valid preprocessor value — and the
+duplicate definition is gone.
+
+The encoding is baked into every library already compiled, so the whole stack
+must be rebuilt; a *partially* rebuilt stack reproduces the symptom from the
+other direction. Measured: rebuilding only `libagora-base` left
+`libagora-core`'s `__NSCFURL` override at `C16@0:8`, the typed send fell through
+to `-[NSURL isFileURL]`, which read an uninitialised ivar (`_isFile = 11`), and
+three `bridges` cases failed until every component was rebuilt together.
+
+Verified: the encoding matrix is 31/31 (was 30/31), the conformance suite 46/46
+(was 44/46), and every component's ctest suite passes.
 
 ---
 

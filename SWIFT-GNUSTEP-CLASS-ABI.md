@@ -362,6 +362,68 @@ one, and is why S1 needs no build-system work.
 | S5 | Refcounting/ARC interop, `+alloc`, `UsesSwiftRefcounting`, `+load`/`+initialize`, **typed selector records** | **passed**: selector records are emitted per (name, encoding) and carry the same encoding as the method entry, so Clang-compiled typed sends reach Swift methods — including a Swift override of an inherited typed selector, which is what libobjc2's release path needs. `deinit` runs for fixed, generic and resilient classes with ObjC ancestry; retain/release from Objective-C balance and the destructor runs exactly once; 50k alloc/init/release cycles neither leak nor climb in RSS. `+alloc`/`objc_allocWithZone` and `+load` work — see §7.1. One runtime fix surfaced later (handoff §2.16): after `class_setSuperclass` (how the Swift runtime reparents its `SwiftNativeNS*`/`__SwiftNativeNSError` classes to Foundation's), libobjc2 rebuilt the dtable without the class's own methods in their *untyped* slots, so an untyped Swift send reached the new superclass's implementation |
 | S6 | Remove the Apple-layout remnants and the compatibility shims | **passed**: the bootstrap interop shim (`swift-toolchain/compat/`) and the container probe harness are deleted, the duplicated vendor build flag is gone, and `verify-swift-port.sh` asserts that the interop entry points come from `libswiftCore`. The layout `#if` branches are deliberately kept (Darwin layout 1, layout 0 rollback) — handoff §2.13 |
 
+**S3 has a superclass-size hole (found 2026-10-22, fixed 2026-10-22).** The S3
+gate checked `instance_size` and the Swift field's offset with an
+`NSObject`-rooted class, where the superclass happens to be one word and
+`8 + fields` is the right answer. A subclass of a *larger* Objective-C class
+showed that the emitted class object carried `instanceSize = 8 + ownFields`
+regardless of the superclass: for a superclass with two 8-byte ivars (24 bytes)
+the Swift subclass reported 9, and its first stored property sat at offset 8 —
+on top of the superclass's first ivar. The property aliased the superclass ivar,
+the instance was allocated smaller than the superclass writes to, and a
+weakly-referenced instance aborted in `free()`. A Swift subclass of `NSView`
+(496 bytes, 54 ivars) was 16 bytes with its field at 8.
+
+Darwin does not have this problem because objc4 *slides* `instance_size` and the
+ivar offsets when it realizes the class, which is why IRGen lays the fields out
+from the isa word there. libobjc2 does no such thing: the class object's
+`instance_size` is what it allocates from and its ivar offsets are what it
+reports. So on this runtime the imported superclass's size has to be part of the
+static layout.
+
+`ClassLayoutBuilder::addPaddingForObjCSuperclass()` does that: when the walk up
+the superclass chain reaches an imported Objective-C class, the class contributes
+its `getASTObjCInterfaceLayout()` size as padding, and the Swift fields are laid
+out after it. That is the same computation clang's own GNUstep backend makes for
+`instance_size` (`CGObjCGNU`). It is gated on `usesGNUstepClassABI()`, so the
+Darwin path is untouched, and it needs no runtime change and no rebuild of the
+Objective-C stack — only programs compiled with the fixed compiler.
+
+Verified: `NSView` + 1 stored property is now 504 bytes with the field at offset
+496; `NSViewController` 72 → 80; `NSWindowController` 82 → 96; every S1–S6 gate
+and the library-evolution gate pass unchanged; the conformance suite's layout
+checks pass and its crash probe is now a regression probe that exits 0.
+
+**The remaining case is a superclass whose ivars exist only in its
+`@implementation`** (declared as `@property` and `@synthesize`d, no ivar block in
+the header). A Swift module importer sees only the header, so it cannot know that
+class's size and falls back to the old layout (8 + fields). 204 of Agora's 288
+Foundation/AppKit headers declare their ivars in the `@interface`, including
+`NSView`, `NSWindow`, `NSResponder`, `NSApplication`, `NSControl`, `NSTextView`,
+`NSViewController`, `NSWindowController` and `NSCell`, so this does not affect
+Agora's own AppKit; it does affect a third-party class written that way. Closing
+it needs the runtime slide that libobjc2 lacks (an `instanceStart` the runtime
+can use to compute the delta), and is measured as a `[gap]` by the conformance
+suite.
+
+**The `protocols` field is emitted now too (fixed 2026-10-22).** It was `null`,
+so `class_copyProtocolList`/`class_conformsToProtocol` did not see a Swift
+class's `@objc` conformances. Two parts were needed: a GNUstep
+`struct objc_protocol_list` (`{ next, count, list[] }`, not Apple's
+`protocol_list_t`) built from the class's explicit conformances, and — for an
+*imported* protocol — the entry must be clang's `struct objc_protocol` from the
+defining image (`._OBJC_PROTOCOL_X`), because a conformance check compares
+pointers and Swift's own record was Apple-shaped and unregistered.  The
+referenced symbols are added to the TBD; `init_protocols()` in libobjc2 now
+initialises a `protocol_version_gsv2` record unconditionally, which a class list
+naming a protocol in another image requires.  A protocol *declared in Swift* is
+still Apple-shaped and is therefore left out of the list rather than handed to
+the runtime in the wrong shape; emitting a GNUstep protocol record for those is
+the remaining piece.
+
+Measured by `swift-interop-probe/conformance/` (five protocol checks, all
+green).
+
 Every stage is independently testable, and S0 needs no compiler rebuild.
 
 **S1 result (2026-10-17).** With `SWIFT_OBJC_CLASS_LAYOUT=2` and the emission

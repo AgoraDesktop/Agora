@@ -1,8 +1,8 @@
 # Swift Foundation overlay — the plan to parity
 
-*Status: plan. This document says what "Foundation parity" means for the Swift port, measures where the gap
-is today, chooses an implementation strategy, and stages the work with a gate that makes progress
-checkable. The round-by-round record stays in [`SWIFT-PORT-HANDOFF.md`](SWIFT-PORT-HANDOFF.md); this is the
+*Status: **P0 (measurement) landed** — the harness and the gate exist, and §3 carries measured numbers
+instead of estimates. P1 (names and annotations) is next; P2 (the strategy spike) still decides the T3
+route. The round-by-round record stays in [`SWIFT-PORT-HANDOFF.md`](SWIFT-PORT-HANDOFF.md); this is the
 plan for the part the handoff calls "the long tail".*
 
 ---
@@ -49,19 +49,21 @@ part of T1 (and is tested); matching Apple's allocation counts is not a goal.
 
 The bootstrap Swift toolchain on this host ships the Linux Foundation, which is the *same Swift API*
 Darwin ships: `swift-foundation` (FoundationEssentials + FoundationInternationalization) plus the corelibs
-compatibility layer. Its symbol graph is the reference:
+compatibility layer. `import Foundation` there is one surface over three modules, so the reference is
+three symbol graphs:
 
 ```
-~/.agora-swift/bootstrap/usr/lib/swift/linux/Foundation.swiftmodule
+~/.agora-swift/bootstrap/usr/lib/swift/linux/{Foundation,FoundationEssentials,FoundationInternationalization}.swiftmodule
 ```
 
-Measured today:
+Measured by `verify-foundation-parity.sh --report`:
 
 | | |
 |---|---|
-| reference symbols (main `Foundation` graph) | **5,471** |
-| reference top-level types (non-underscored) | **186** |
-| reference re-export graphs | `Foundation@FoundationEssentials`, `@Dispatch`, `@Glibc`, `@Swift` (4 files, 7.4 MB) |
+| reference symbols | **10,455** — Foundation 5,471, FoundationEssentials 4,531, FoundationInternationalization 453 |
+| reference top-level types (non-underscored) | 186 in the main `Foundation` graph alone |
+| reference re-export graphs | `Foundation@FoundationEssentials`, `@Dispatch`, `@Glibc`, `@Swift`, and each module's own overlays |
+| our symbols | **11,314** — larger than the reference, because the module also carries the CoreFoundation surface (223 `CF*` type containers) that Darwin ships separately |
 | our overlay | 2 files, 2,047 lines, ~30 hand-written value types |
 | our imported Objective-C classes | **164** |
 
@@ -70,45 +72,74 @@ API baseline but not a Darwin SDK. Where corelibs and Darwin differ (e.g. `NSStr
 conformances, `NSNumber` equality across signedness), the source in `~/.agora-swift/src/swift-foundation`
 and `swift-corelibs-foundation` is the tie-breaker, and the difference is recorded rather than averaged.
 
-### 2.2 The diff harness (Phase 0)
+### 2.2 The diff harness (Phase 0 — landed)
 
-Generate a symbol graph for each module and compare `(pathComponents, kind, declarationFragment)` plus
+`swift-toolchain/scripts/verify-foundation-parity.sh` extracts a symbol graph per module and
+`swift-toolchain/scripts/foundation-parity-diff.py` compares `(pathComponents, kind)` sets plus
 `conformsTo` relationships:
 
 ```sh
-# reference (works today)
-~/.agora-swift/bootstrap/usr/bin/swift-symbolgraph-extract \
-  -module-name Foundation -target x86_64-unknown-linux-gnu \
-  -I ~/.agora-swift/bootstrap/usr/lib/swift/linux -output-dir ref
-
-# ours — BLOCKED today: the Clang module is built in C mode, so
-# CFBridgingTypes.h's `#if defined(__OBJC__)` is skipped and NSUInteger/NSRange
-# are unknown.  Fixing this is Phase 0's first task (see §5).
-~/.agora-swift/toolchain/usr/bin/swift-symbolgraph-extract \
-  -module-name Foundation -target x86_64-unknown-linux-gnu \
-  -I ~/.agora-swift/toolchain/usr/lib/swift/linux \
-  -Xcc -fmodule-map-file=swift-interop-probe/agora-modules/module.modulemap \
-  -Xcc -Ibuild-prefix/include -Xcc -Wno-incomplete-umbrella -output-dir ours
+swift-toolchain/scripts/verify-foundation-parity.sh --report            # human diff
+swift-toolchain/scripts/verify-foundation-parity.sh --check             # the gate
+swift-toolchain/scripts/verify-foundation-parity.sh --update-allowlist  # after a landing
 ```
 
-Phase 0 outcomes:
-1. extraction of *our* Foundation graph (fix the module build's language mode; fall back to
-   `swift-api-digester` or a declaration-level diff of the overlay sources if the tool cannot be made to
-   build the Clang module);
-2. `foundation-parity-diff.py`: a stable, sorted report of missing/extra symbols, missing conformances
-   (including re-export graphs), and changed declaration fragments;
-3. `verify-foundation-parity.sh`: `--report` (human diff) and `--check` (CI). `--check` fails when a
-   symbol outside `parity/foundation-allowlist.txt` is missing, **and** when an allowlisted symbol has
-   become present (stale entries force the list to shrink);
-4. the allowlist with one line per accepted gap and a reason, e.g.
-   `Foundation:URLSession # out of scope: FoundationNetworking`.
+The extraction used to be **blocked on our side**: `swift-symbolgraph-extract` builds its own compiler
+invocation instead of going through the driver, and it hard-coded
+`EnableObjCInterop = Target.isOSDarwin()`. An imported Clang module was therefore built in C mode:
+`CoreFoundation/CFBridgingTypes.h` declares `NSInteger`/`NSRange` under `#if defined(__OBJC__)`, they
+vanished, and every Foundation declaration that names them failed to import. The fork now applies the
+driver's rule (`Target.isOSDarwin() || Target.isOSLinux()`) plus the GNUstep runtime vendor for an ELF
+target (patch `0003`, `lib/DriverTool/swift_symbolgraph_extract_main.cpp`). `--keep` retains the graphs
+in `$TMPDIR/agora-foundation-parity` for inspection.
+
+What the harness measures:
+
+- **symbol gaps** — `(dotted path, kind)` in the reference and not in ours. A member that exists only in
+  the other *shape* (method rather than property) is a gap, which is the point: Darwin's property-shaped
+  surface is part of parity;
+- **conformance gaps** — `conformsTo` edges from every reference graph against ours, resolving protocol
+  targets outside the graph through `targetFallback` (so `Swift.Codable` is measurable) and ignoring
+  compiler-synthesized conformances (`Sendable`, `Copyable`, `Escapable`, `SendableMetatype`,
+  `BitwiseCopyable`) and typealiases (whose conformances belong to the aliased type);
+- **extras** — symbols we publish and the reference does not, reported apart for CoreFoundation;
+- **the allowlist gate** — `parity/foundation-allowlist.txt`, one entry per accepted gap with a stage
+  reason and a count. `--check` fails on an unallowlisted gap, on a gap that grew past its count, and on
+  a count that is now too large, so every landing has to shrink the list.
+
+The allowlist is *prefix*-based (`Foundation:NSData` covers `NSData` and everything under it), so the
+baseline is 372 reviewable entries rather than 8,709 lines.
 
 ---
 
-## 3. Where the gap is today
+## 3. Where the gap is today (measured)
 
-The first (approximate) pass over the reference graph gives these clusters. The Phase 0 harness replaces
-the approximation with exact numbers; the clusters are what it will be grouped by.
+`verify-foundation-parity.sh --report`, against the three reference modules:
+
+| | |
+|---|---|
+| reference symbols | 10,455 |
+| our symbols | 11,314 |
+| **missing** | **8,259 distinct `(path, kind)` — 8,704 declarations in 301 containers** |
+| … of those, containers absent entirely | 217 |
+| … members that exist here only in the other shape | 20 |
+| **missing conformances** | **320 edges over 71 types** |
+| extra symbols (ours only) | 9,632 — 223 CoreFoundation type containers plus Agora's own additions |
+
+By the allowlist's stage reasons, the missing symbols split roughly: **T3 ≈ 4,400**, **P1 ≈ 3,000**,
+**P4 ≈ 420**, out-of-scope/capped subsystems ≈ 270, and 144 geometry symbols that Darwin's Foundation
+re-exports from CoreGraphics. The largest containers are the measurement, in order:
+
+```
+933 AttributedString      402 PredicateExpressions   238 AttributeScopes
+195 Data                  194 FileManager            162 Calendar
+154 NSCalendar            151 IndexSet               120 NSString
+115 URLError              112 IndexPath              108 NSData
+106 URLResourceKey        106 Date                   104 NumberFormatter
+```
+
+Every one of those is either T3 (Apple's own Swift code) or a P1 rename/member pass — which is why the
+strategy below matters more than any single container.
 
 ### 3.1 Swift names Darwin gives the imported classes (28 still missing)
 
@@ -123,32 +154,42 @@ PortMessage PropertyListSerialization RunLoop Scanner SocketPort Stream Thread T
 UserDefaults
 ```
 
-plus irregular names (`NSTask` → `Process`, `NSError`-family types, `NSComparisonPredicate` → the
-`Predicate` API). `DateFormatter` and `Notification.Name` are already done; they are the pattern.
+plus irregular names (`NSTask` → `Process`, `NSFileManager` → `FileManager`, `NSNotificationCenter` →
+`NotificationCenter`, `NSError`-family types, `NSComparisonPredicate` → the `Predicate` API). The measured
+allowlist also shows the enum-shaped half of this pass: `NSAlignmentOptions` → `AlignmentOptions`,
+`NSQualityOfService` → `QualityOfService`, `NSOperatingSystemVersion` → `OperatingSystemVersion`, and the
+`NS_ERROR_ENUM`/`NS_TYPED_ENUM` members that Darwin imports as enum cases (≈ 80 containers of one or two
+symbols each). `DateFormatter` and `Notification.Name` are already done; they are the pattern.
 
 ### 3.2 Conformances the value types do not carry
 
-The reference's value types carry `Codable` (and `Sendable`) where ours do not:
+320 edges over 71 types. The shape of it:
 
-```
-Data  Date  URL  Decimal  DateComponents  URLComponents  IndexPath  …
-```
+| Protocol | Missing edges | On |
+|---|---|---|
+| `CustomStringConvertible` / `CustomDebugStringConvertible` | 64 / 65 | almost every class and value type |
+| `NSSecureCoding` / `NSCoding` | 32 / 13 | the Objective-C classes (the archiving suite) |
+| `CustomReflectable` | 22 | collections, value types |
+| `Decodable` / `Encodable` | 19 / 19 | `Data`, `Date`, `URL`, `UUID`, `Decimal`, `IndexPath`, `DateComponents`, `Notification`, `PersonNameComponents`, … |
+| `ReferenceConvertible` | 10 | the `NS`↔Swift value-type pairs |
+| `Sequence` / `Collection` / `DataProtocol` | 5 / 3 / 2 | `NSData`, `IndexPath`, `IndexSet` |
 
-`IndexSet`/`CharacterSet` gained `SetAlgebra` in the last round; the `Codable` family is untouched. There
-is no `JSONEncoder`/`JSONDecoder` or `PropertyListEncoder`/`PropertyListDecoder` at all, so those
-conformances have nothing to talk to yet.
+There is no `JSONEncoder`/`JSONDecoder` or `PropertyListEncoder`/`PropertyListDecoder` at all, so the
+`Codable` conformances have nothing to talk to yet. `CustomStringConvertible` looks trivial and is not:
+Darwin gets it from `NSObject`'s own extension, so every one of those edges closes the same way.
 
 ### 3.3 Swift-native subsystems that are absent
 
-| Subsystem | Darwin source | Note |
-|---|---|---|
-| `JSONEncoder`/`JSONDecoder`, `PropertyListEncoder`/`Decoder` | FoundationEssentials | pure Swift; depends on `JSONSerialization`/plist underneath |
-| `AttributedString`, `AttributeContainer`, attribute scopes | FoundationEssentials | pure Swift, large |
-| `Predicate`, `PredicateExpression`, `Expression` | FoundationEssentials + macros | pure Swift, macro-based |
-| `FormatStyle` family (`Date.FormatStyle`, integer/floating styles, `ByteCountFormatStyle`, …) | FoundationEssentials | pure Swift |
-| `Measurement`/`Unit*` | FoundationEssentials | pure Swift |
-| `URLComponents`/`URLQueryItem` | FoundationEssentials | pure Swift |
-| `Locale`, `Calendar`, `TimeZone` modern APIs, formatters | FoundationInternationalization | ICU-backed |
+| Subsystem | Symbols missing | Darwin source | Note |
+|---|---|---|---|
+| `AttributedString`, `AttributeContainer`, attribute scopes | 933 + 238 + ~100 | FoundationEssentials | largest single gap |
+| `Predicate`, `PredicateExpressions`, `Expression` | 402 + ~20 | FoundationEssentials + macros | macro-based |
+| `Locale`, `Calendar`, `TimeZone` modern APIs, formatters | 647 + 162 + ~500 | FoundationInternationalization | ICU-backed |
+| `Data`, `URL`, `IndexPath`, `Date`, `Decimal` members | 195 + 75 + 112 + 106 + ~50 | FoundationEssentials | the value types exist here; their long tails do not |
+| `FormatStyle` family (`IntegerFormatStyle`, `FloatingPointFormatStyle`, `ByteCountFormatStyle`, …) | ~500 | FoundationEssentials | pure Swift |
+| `Measurement`/`Unit*` | ~300 | FoundationEssentials | pure Swift |
+| `JSONEncoder`/`JSONDecoder`, `PropertyListEncoder`/`Decoder` | ~150 | FoundationEssentials | pure Swift; depends on `JSONSerialization`/plist underneath |
+| `URLComponents`/`URLQueryItem` | ~50 | FoundationEssentials | pure Swift |
 
 ### 3.4 Objective-C subsystems Agora's Foundation does not have (caps on T2)
 
@@ -165,7 +206,8 @@ NSByteCountFormatter
 
 Under the recommended strategy (§4) the pure-Swift replacements (`Predicate`, `Measurement`,
 `URLComponents`, byte-count formatting) arrive with FoundationEssentials/Internationalization; `URLSession`
-and `NSProgress` stay out of scope.
+and `NSProgress` stay out of scope. The measured allowlist marks these `cap:`, and they total ≈ 270
+symbols — small, which is the useful finding: the gap is not in Objective-C subsystems.
 
 ### 3.5 Small, known semantics gaps
 
@@ -176,7 +218,11 @@ and `NSProgress` stay out of scope.
   typed send takes the runtime's untyped fallback. Either give the Swift implementation a Clang-shaped
   door or record it.
 - Property shape: `NSDateFormatter.dateStyle` and friends import as methods; the full property-shaped
-  pass is Phase 1.
+  pass is Phase 1. The harness counts these as gaps (20 today are the same path with another kind),
+  because on Darwin they are properties.
+- `CGFloat` is `Double` here and a struct in the reference (103 members), so the geometry containers are
+  allowlisted as a deviation rather than a task. Darwin's `CGFloat` is a struct too; whether to match it
+  is a decision for P1, not a bug.
 
 ---
 
@@ -215,15 +261,19 @@ CoreFoundation model is fundamentally incompatible does A become the fallback �
 
 Effort is rough and single-developer; gates are what matter.
 
-### P0 — Measurement (1–2 days)
+### P0 — Measurement (1–2 days) — **done**
 
-- Fix our symbol-graph extraction (the Clang module must build in Objective-C mode; record the failing
-  invocation and the fix). Fallback: generate an interface-level diff from the overlay sources and the
-  Clang headers.
-- `foundation-parity-diff.py`, `verify-foundation-parity.sh`, `parity/foundation-allowlist.txt`.
-- Publish the first real numbers in this document (replace §3's approximation).
-- **Gate:** `verify-foundation-parity.sh --check` runs and reports the baseline (allowed to fail only on
-  allowlisted entries).
+- Fixed the extraction: the fork's `swift-symbolgraph-extract` now enables interop for a Linux target and
+  selects the GNUstep runtime vendor, so the imported Clang module builds in Objective-C mode. Recorded in
+  §2.2; the change is in patch `0003`.
+- `foundation-parity-diff.py` (symbol, conformance and extra diff plus the allowlist ratchet) and
+  `verify-foundation-parity.sh` (`--report` / `--check` / `--update-allowlist`, one extraction per module,
+  isolated module caches).
+- `parity/foundation-allowlist.txt` — 372 entries, each with a stage reason and the count it accepts.
+- §3 now carries measured numbers; the first real baseline is 8,259 missing symbols and 320 missing
+  conformance edges.
+- **Gate:** `verify-foundation-parity.sh --check` is green against the baseline, and fails on an
+  unallowlisted gap, a grown gap, or a stale count. Measured cost: ~10 s end to end.
 
 ### P1 — Names and annotations (≈1 week)
 
@@ -283,8 +333,9 @@ Effort is rough and single-developer; gates are what matter.
 
 ## 6. Definition of done
 
-1. `verify-foundation-parity.sh --check` is green, and the allowlist contains only entries with a written
-   reason (out-of-scope subsystems, deliberate deviations).
+1. `verify-foundation-parity.sh --check` is green with an allowlist that has shrunk to zero missing
+   symbols, keeping only entries with a written reason (out-of-scope subsystems, deliberate deviations).
+   Today the same command is green against the baseline: the list *is* the remaining work.
 2. T1 semantics tests pass (existing) and T2/T3 tests come from the reference where possible.
 3. The hand-written overlay is reduced to bridging shims; the value types, coders, formatting and
    attributed strings are Apple's swift-foundation code.
@@ -312,9 +363,15 @@ Effort is rough and single-developer; gates are what matter.
 
 ## 8. Immediate next actions
 
-1. Fix the our-side symbol-graph extraction (P0) and land the diff/gate scripts with a baseline
-   allowlist. The failing invocation and its cause are recorded in §2.2.
-2. Do P1's rename layer first: it is cheap, mechanical, and removes 28 names from the visible diff
-   before the strategic work starts.
-3. Run the P2 spike before writing any more value-type code. The outcome decides whether the remaining
-   effort is "port and bridge" or "port the sources"; either way, it is not "re-implement".
+1. **P1, the rename layer** (§3.1): `public typealias Bundle = NSBundle`, … for the 28 names, the
+   irregulars, and the `NS_ENUM`/`NS_TYPED_ENUM` members. Mechanical, and it removes ~3,000 symbols from
+   the measured gap before any strategic work. Land it in slices and run `--update-allowlist` with each
+   slice; the counts in the diff are the progress metric.
+2. **P1, property shapes**: the `dateStyle` class of gap, plus `CustomStringConvertible` on `NSObject`
+   (64 edges close with one extension).
+3. **P2, the strategy spike**: build `FoundationEssentials` from `~/.agora-swift/src/swift-foundation`
+   against Agora's CoreFoundation/libdispatch/ICU and run its tests. Do this before writing more value
+   type members — it decides whether the remaining work is "port and bridge" (B) or "port the sources"
+   (A), and either way it is not "re-implement".
+4. Wire `verify-foundation-parity.sh --check` into the gate suite (§6) once P1 has moved the baseline
+   once, so the ratchet is exercised before it becomes a blocker.

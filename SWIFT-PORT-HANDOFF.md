@@ -1966,12 +1966,84 @@ encodings for `BOOL`-returning methods; under the `BOOL` fix they no longer
 matched the compiler's selectors, and `-[__NSCFURL isFileURL]` fell through to
 the base class. They now carry the compiler's exact encodings.
 
+### 2.29 Foundation parity: the measurement, and the one-sided tool
+
+The next piece of work has its own plan
+([`SWIFT-FOUNDATION-PARITY-PLAN.md`](SWIFT-FOUNDATION-PARITY-PLAN.md)); this round
+took its P0, the measurement, because a gap you cannot count is a gap you cannot
+close.
+
+**The tool was the blocker.** `swift-symbolgraph-extract` is `swift-frontend`
+invoked directly, so it builds its compiler invocation by hand instead of going
+through the driver. It hard-coded
+
+```cpp
+Invocation.getLangOptions().EnableObjCInterop = Target.isOSDarwin();
+```
+
+The frontend's own default is the same expression (`CompilerInvocation.cpp`), and
+the *driver* is what turns interop on for Linux; a direct tool invocation never
+sees that. An imported Clang module was therefore built in **C mode**, so
+`CoreFoundation/CFBridgingTypes.h` — which declares `NSInteger`, `NSUInteger` and
+`NSRange` under `#if defined(__OBJC__)` — declared nothing, and every Foundation
+header that names them failed to import:
+
+```
+Foundation/NSObjCRuntime.h:83:9: error: unknown type name 'NSUInteger'
+```
+
+Passing `-Xcc -x objective-c` does not help (`-x` from `-Xcc` lands after the
+importer's own input files, and the importer appends its own `-x` anyway). The
+fix is in the fork (`lib/DriverTool/swift_symbolgraph_extract_main.cpp`, in patch
+`0003`): apply the driver's platform rule (`isOSDarwin() || isOSLinux()`) and
+select the GNUstep runtime vendor for a non-Darwin ELF target, so the importer
+also gets `-fobjc-runtime=gnustep-2.0` instead of `ios-7.0`. A frontend-only
+rebuild (`ninja swift-frontend`, ~26 s) and a copy into the install is enough.
+
+**The harness.** `swift-toolchain/scripts/verify-foundation-parity.sh` extracts
+the reference graphs (`Foundation`, `FoundationEssentials`,
+`FoundationInternationalization` — `import Foundation` is one surface over three
+modules, and without the last two the value types' `Codable` conformances and the
+whole of T3 are invisible) and Agora's graph, then
+`foundation-parity-diff.py` compares `(dotted path, kind)` sets and `conformsTo`
+edges. Two details that make it trustworthy:
+
+- a conformance target outside the graph is named via `targetFallback`, so
+  `Data -> Codable` is measurable even though `Codable` lives in the stdlib;
+- compiler-synthesized conformances (`Sendable`, `Copyable`, `Escapable`, …) and
+  conformances on **typealiases** are excluded: the first are the compiler's, not
+  the declaration's, and the second (`CGFloat` here *is* `Double`) would measure
+  the alias rather than a missing declaration.
+
+**The baseline** (2026-10-22, installed toolchain):
+
+```
+reference symbols 10,455      our symbols 11,314
+missing           8,259 distinct (8,704 declarations, 301 containers)
+conformance gaps  320 edges over 71 types
+```
+
+Eight thousand sounds worse than the earlier "surface is finished" (§2.22) — it is
+the same tree, measured against a bigger reference: 5,471 of those come from the
+`FoundationEssentials`/`Internationalization` graphs that the hand-written overlay
+does not implement at all (`AttributedString` 933, `PredicateExpressions` 402,
+`Locale` 647, …). The plan's T3 was exactly that, and the gate now counts it. The
+allowlist (`swift-toolchain/parity/foundation-allowlist.txt`, 372 prefix entries
+with a stage reason and a count) makes the gap a ratchet: `--check` fails on an
+unallowlisted symbol, on a grown count, **and** on a count that is now too small,
+so a landing has to shrink the list. End-to-end cost: ~10 s.
+
+One measured correction to the plan's earlier estimate: the "caps on T2" (missing
+Objective-C subsystems: `NSPredicate`, `NSMeasurement`, `NSProgress`,
+`NSByteCountFormatter`, `URLSession`) total ≈ 270 symbols — the gap is
+overwhelmingly Swift-native Foundation, not Objective-C Foundation.
+
 ---
 
 ## 3. Change inventory
 
-`swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 59 files,
-~2240 insertions. The layout/registration table is from two rounds ago, the S1
+`swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 63 files,
+~2620 insertions. The layout/registration table is from two rounds ago, the S1
 emission from three, S4/S4b from before that, S5 and the flip from earlier, the
 library-evolution `Update` strategy and GNUstep-shaped categories from two
 rounds ago, the importer's bridge check (§2.19) from the last one, and this
@@ -2119,6 +2191,12 @@ swift-toolchain/scripts/build-swift-toolchain.sh
 # collection/string views, and the value types + header annotations)
 swift-toolchain/scripts/verify-swift-port.sh
 
+# the Foundation-surface gate (§2.29): extracts the reference graphs
+# (Foundation + FoundationEssentials + FoundationInternationalization) and ours,
+# diffs symbols/conformances/extras, and ratchets parity/foundation-allowlist.txt;
+# --report for the human diff, --update-allowlist after a landing. ~10 s.
+swift-toolchain/scripts/verify-foundation-parity.sh --check
+
 # the S1 gate (layout-2 test compiler; builds the frontend if needed)
 swift-toolchain/scripts/verify-class-abi.sh
 
@@ -2192,7 +2270,7 @@ done
   wrappers `bin/swiftc-layout2` (frontend only) and `bin/swiftc-layout2-stdlib`
   (frontend + build-tree stdlib).
 - **Fork working tree** (`~/.agora-swift/src/swift`): all of patch 0003,
-  uncommitted by design (59 files now, including the class-object predicate,
+  uncommitted by design (63 files now, including the class-object predicate,
   the `NSUInteger` parameter encodings and the initializer encoding). The Agora
   repository has each round's doc update committed (`53657c7` for zero-copy
   bridging, `2a7c7a1` for the surface round). `swift-toolchain/` and
@@ -2391,9 +2469,12 @@ Debugging techniques that produced the findings above:
    it is a compiler task for the day a stdlib-like module declares such a
    class, and the handoff records what it would take.
    **Foundation *overlay* parity** is a different, larger project and has its
-   own plan: [`SWIFT-FOUNDATION-PARITY-PLAN.md`](SWIFT-FOUNDATION-PARITY-PLAN.md)
-   (the measurement harness, the rename/annotation pass, and the decision to
-   port `swift-foundation` rather than keep re-implementing it).
+   own plan: [`SWIFT-FOUNDATION-PARITY-PLAN.md`](SWIFT-FOUNDATION-PARITY-PLAN.md).
+   Its P0 (measurement) landed this round (§2.29): the harness, the gate and a
+   measured baseline (8,259 missing symbols, 320 missing conformance edges
+   against a 10,455-symbol three-module reference). P1 (the rename/annotation
+   pass) is next; P2 (the `swift-foundation` spike) decides whether the T3 work
+   is "port and bridge" or "port the sources".
 12. **Two Agora-side bugs surfaced by the value-type gate and are fixed**
    (§2.22): `NSCalendar -setTimeZone:` stored the zone without retaining it
    (the next `-startOfDayForDate:` read freed memory), and `IndexSet`'s Swift
@@ -2475,9 +2556,17 @@ swift-toolchain/
     ├── verify-refcount-abi.sh                 the S5 gate (typed selectors:
     │                                          deinit, retain/release, typed
     │                                          dispatch from Objective-C)
-    └── verify-update-abi.sh                   the library-evolution gate
-                                               (resiliently sized members:
-                                               Update + Singleton, evolved v2)
+    ├── verify-update-abi.sh                   the library-evolution gate
+    │                                          (resiliently sized members:
+    │                                          Update + Singleton, evolved v2)
+    ├── verify-foundation-parity.sh            the Foundation-surface gate
+    │                                          (--report / --check /
+    │                                          --update-allowlist; §2.29)
+    └── foundation-parity-diff.py              the symbol/conformance diff
+swift-toolchain/
+└── parity/foundation-allowlist.txt            the accepted gaps, one prefix
+                                               entry each with its count and
+                                               stage reason (the ratchet)
 
 swift-interop-probe/
 ├── scripts/run-native-probe.sh                the harness (the only one; the
@@ -2633,3 +2722,13 @@ round took S4: with a layout-2 stdlib, generic classes work as well, so the
 destination toolchain is buildable and gated; S4b (generic classes with an ObjC
 ancestor) and S5 (refcounting for classes with ObjC ancestry) are what remain
 before the default flips.
+
+The Foundation *overlay* is now measured rather than estimated (§2.29): a
+three-module reference (Foundation + FoundationEssentials +
+FoundationInternationalization, 10,455 symbols) against Agora's 11,314, with
+8,259 symbols and 320 conformance edges still missing, recorded in a 372-entry
+allowlist that `verify-foundation-parity.sh --check` ratchets in both directions
+(a gap may not grow, and a count that is now too large must shrink). The
+measurement needed one compiler fix: `swift-symbolgraph-extract` is a direct
+frontend invocation, so it inherited the frontend's Darwin-only interop default
+instead of the driver's Linux one, and imported Agora's module in C mode.

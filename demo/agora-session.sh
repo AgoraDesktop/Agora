@@ -66,11 +66,20 @@ SOCK="${AGORA_SESSION_SOCKET:-agora-session}"
 DESK="${AGORA_DESKTOP:-$HOME/Desktop}"
 WALLPAPER="${AGORA_WALLPAPER:-$ROOT/wallpaper.jpg}"
 
-# **AND THE TRASH, WHICH IS A DIRECTORY BEFORE IT IS AN ICON.** The Dock draws `~/.Trash` as the can, the way
-# the Mac does, and a machine that has never thrown anything away has no such directory — so the icon lookup falls
-# back to a generic file and the Dock shows a piece of paper. Login creates it on the Mac; the session is the closest
-# thing this tree has to a login (WORKSPACE-PLAN.md §2, W13), so it creates it here.
-mkdir -p "$DESK" "$HOME/.Trash"
+# **THE HOME DIRECTORY SET IS A LOGIN'S JOB, SO THE SESSION DOES IT.** A complete Agora installation
+# carries the Mac OS X directories at the root (README, "The installation"), and each account's share of
+# them — `~/Applications`, `~/Desktop`, `~/Library` and the folders beside them — is created when that
+# account logs in. This session is the closest thing this tree has to a login (WORKSPACE-PLAN.md §2,
+# W13), so it creates the same list `release/scripts/install-layout.sh --user` writes. THE TRASH IS THE
+# ICON THAT MEASURED IT: the Dock draws `~/.Trash` as the can, and a machine that has never thrown
+# anything away had no such directory, so the icon lookup fell back to a piece of paper.
+for d in Applications Desktop Documents Downloads Movies Music Pictures Public \
+         Library "Library/Application Scripts" "Library/Application Support" Library/Autosave \
+         Library/Caches Library/Colors Library/Documentation Library/Fonts "Library/Input Methods" \
+         Library/PreferencePanes Library/Preferences Library/Printers/PPDs .Trash; do
+	mkdir -p "$HOME/$d"
+done
+mkdir -p "$DESK"
 if [ -S "${RUNTIME}/${SOCK}" ]; then
 	echo "a session socket already exists at ${RUNTIME}/${SOCK}" >&2
 	echo "stop that session, or choose another with AGORA_SESSION_SOCKET=name" >&2

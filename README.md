@@ -102,6 +102,46 @@ The component repositories named below exist and build. This list will grow; fur
 |---|---|
 | `release` | the `release` repository (a submodule of this workspace): the same components, `main` following them and tags pinning them, plus the build that produces a desktop and an installable image |
 
+## The installation
+
+**A complete Agora installation carries the usual Mac OS X directories**, because the Cocoa surface it
+implements NAMES its directories rather than searching for them: `/Applications`, `/Library`, `/System`,
+`/Users` and `/Volumes` at the root, and `~/Applications`, `~/Desktop`, `~/Library` and the folders beside
+them in every home. "As much as is needed for supporting Cocoa applications" is a checkable rule rather than
+a licence to copy a Mac's tree: the table below is the whole set, and every row names the code that reads
+it.
+
+| directory | who names it |
+|---|---|
+| `/Applications`, `/Applications/Utilities`, `~/Applications` | Launch Services scans them (`libagora-launchservices/LaunchServices.c`), `-[NSWorkspace fullPathForApplication:]` searches them, Workspace's PLACES points at `/Applications`; a bundled application installed for all users belongs in `/Applications`, for one user in `~/Applications` |
+| `/Library/Preferences`, `~/Library/Preferences` | the Mac-shaped preferences directory CFPreferences names on a Darwin build (`libagora-core/CFKnownLocations.c`), and where a ported application expects its plist; Agora's own defaults store is the `Configuration/` scopes below (`NSUserDefaults`) |
+| `/Library/Colors`, `~/Library/Colors` | `NSColorList` — the standard directory is `~/Library/Colors`, and `+availableColorLists` scans both |
+| `/Library/Fonts`, `/System/Library/Fonts` | Core Graphics' font search (`libagora-drawing/CGFont.c`), with `~/Library/Fonts` beside them |
+| `/System/Library/CoreServices` | `CFCopySystemVersion*` reads the version bundles there |
+| `/System/Temporary Files` | `NSTemporaryDirectory()` answers it; the autosave path writes under it |
+| `/System/Configuration`, `/Shared/Configuration`, `~/Configuration` | `NSUserDefaults`' system, shared and user scopes (created on demand) |
+| `~/Library/Autosave` | `NSDocumentController`'s autosave directory |
+| `~/Desktop`, `~/Documents`, `~/Downloads`, `~/Movies`, `~/Music`, `~/Pictures`, `~/Public`, `~/Library/{Application Support,Caches,…}` | the search-path types `NSSearchPathForDirectoriesInDomains()` answers (`libagora-base/NSFileManager.m`) |
+| `~/.Trash` | the Dock draws it as the can; `-trashItemAtURL:` does not move anything yet |
+| `/Users`, `/Volumes` | the file-system hierarchy's own root set (`NSUserDirectory`; `fsh-notes.txt` in the FNX tree) |
+
+`/Users` and `/Volumes` are the hierarchy's own rather than a program's: the first is where the FSH keeps
+accounts — a hosted installation's accounts may live elsewhere, which is why the home half above is written
+`~/` — and the second is the mount root.
+
+**Two doors create it, and neither assumes the other ran.** The root half is part of the image:
+`release/scripts/install-layout.sh` writes it, and the release runs it against the image root, so
+`make install` and the Debian package both carry it (`dh_installdirs` is what keeps the empty ones in a
+package). The home half belongs to an account and is created at login — the session script does it the way
+it already creates `~/Desktop` — with `--user` for an installer preparing an existing account. Account
+creation, when Agora has one, copies the same list.
+
+**A program asks for the table instead of hard-coding a path.** `NSSearchPathForDirectoriesInDomains()`
+answers it by directory type and domain, and `-URLForDirectory:inDomain:appropriateForURL:create:error:`
+creates one that is missing. What it does not answer is named: the network domain (there is no `/Network`),
+and `NSItemReplacementDirectory`, whose answer on a Mac is a new temporary directory per call rather than a
+location.
+
 ## Where to start
 
 - **Run the default session.** `demo/agora-session.sh` starts the window server, the wallpaper client and
@@ -197,8 +237,10 @@ cd audit && ./audit.py setup          # clone the pinned comparison trees
 ./audit.py explain LIBAGORA-FILE CORPUS-FILE   # inspect one candidate
 ```
 
-The corpus is `gnustep/libs-base`, `gnustep/libs-gui` and Apple's
-`swift-corelibs-foundation`/`-libdispatch`, pinned in `audit/audit.py`. **`--control` is not optional:**
+The corpus is `gnustep/libs-base`, `gnustep/libs-gui`, Apple's
+`swift-corelibs-foundation`/`-libdispatch`, and Cocotron (`cjwl/cocotron`) — both
+independent implementations of this API plus Apple's own — pinned in
+`audit/audit.py`. **`--control` is not optional:**
 it runs the same comparison against `libagora-core` and `libagora-dispatch`, which are known verbatim
 extractions, so the control must light up — if it does not, the tool is broken and a clean result means
 nothing.
@@ -214,8 +256,9 @@ run, its numbers and the tool's own failure modes are in `audit/README.md`.
 1. **Rewrite the span.** Cheap, always preferred, and the only outcome that leaves the file's
    provenance clean.
 2. **If it cannot be rewritten**, keep it and mark it honestly — reproduce the upstream copyright
-   notice on that file, leave it under GNUstep's own terms (LGPL-2.1-or-later upgrades cleanly into
-   this tree's LGPL-3.0-or-later), and add a row to `THIRD-PARTY.md`.
+   notice on that file, leave it under that upstream's own terms (GNUstep's LGPL-2.1-or-later
+   upgrades cleanly into this tree's LGPL-3.0-or-later; Cocotron's MIT composes with either),
+   and add a row to `THIRD-PARTY.md`.
 3. **Record it** in `release/debian/copyright` and in `audit/README.md`, so the next run sees a known
    file rather than a surprise.
 

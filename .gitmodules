@@ -76,3 +76,7 @@
 [submodule "dock"]
 	path = dock
 	url = https://github.com/AgoraDesktop/dock.git
+[submodule "libagora-data"]
+	path = libagora-data
+	url = https://github.com/AgoraDesktop/libagora-data.git
+	branch = main

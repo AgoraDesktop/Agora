@@ -1178,3 +1178,38 @@ Measured as a standard client reads it:
    around a temporary ID, which the round trip would then fail to resolve.
 3. **`NSFetchedPropertyDescription` still evaluates nothing**: the fetched-property door exists (W1) and a fetch
    expression exists (W5), but nothing runs one per object yet.
+
+
+### 0.11 Routing and configuration — the two doors nothing opened
+
+§0.10 left a list; this closes its first two items, and they are worth recording because **the census scored them
+and the behaviour was wrong**.
+
+| Door | Before | Now |
+|---|---|---|
+| `-assignObject:toPersistentStore:` | wrote into `_storeAssignments`, and **nothing ever read it** | the first of four routing rules; `nil` clears the assignment, and a save consumes the table because afterwards the object's ID names the store |
+| `-addPersistentStoreWithType:configuration:` | stored a name; nothing consulted it | the third rule, and it filters on **load** as well as on save |
+| `-cd_saveContext:` | always `_stores[0]` | groups by store, then saves **every** store it touched — and §6.7 still says that is not atomic across them |
+| `-cd_obtainPermanentIDsForObjects:` | minted keys from `_stores[0]` | mints each key **from the store that object is going to** |
+| `-cd_faultObject:` | read `_stores[0]`'s cache node | reads the cache node of the store the **ID names** |
+| `-cd_executeFetchRequest:` | `_stores[0]` | every store, or the ones `-setAffectedStores:` names; shaped **once** after merging |
+
+**The four rules, in precedence order** (`tests/routing.m`, 26 checks): an explicit assignment wins; an object that
+already lives in a store stays there; otherwise the configuration decides; and **an entity that no store's
+configuration names is an error**, not a quiet write to the first store.
+
+Two consequences worth naming:
+
+- **The fetch engine had to be split in two.** "Which rows" is per store; "what order, which slice, what shape" is
+  over the merged set. Sorting and paging inside each store would return the first N rows of *every* store and
+  restart `fetchOffset` at each one — a bug that only appears the day a second store exists, which is exactly why it
+  was invisible.
+- **A managed object cannot be a dictionary key.** `_storeAssignments` keyed by the object raised
+  `-[AGDictionaryMutable insert]: key <NSManagedObject> does not conform to NSCopying` — because this framework
+  refuses `-copy` on a managed object deliberately (one identity, one context). The table is keyed by **object ID**,
+  which is stable while unsaved and copyable.
+
+**The lesson, stated for the census's sake:** `api-ledger` counts doors a caller *can* reach, and both of these were
+reachable — declared, implemented, and never called by anything. A census cannot measure whether a door is opened.
+`tests/routing.m` is that measurement, and it is the first suite in this component added because of a **reading** of
+the code rather than a failure.

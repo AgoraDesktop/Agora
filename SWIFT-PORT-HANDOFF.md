@@ -2779,14 +2779,35 @@ step applied *after* a toolchain build.
 | the two probes | 18/18 |
 | S1, S4, S4b/S4c, S5, library evolution, generic release | all green |
 
-**What the P3 stack still needs**, in order: the `Data`/`String` bridges are still
-*copies* (Darwin's are views over the same storage through `__NSSwiftData`-style
-holders, which needs a CoreFoundation-side holder); the setter-retain audit the
-`NSCalendar -setLocale:` bug opened (`NSRunLoop -setFireDate:`, `NSTask`'s four,
-`NSOperation`/`NSThread -setName:`, `NSUserUnixTask`'s three,
-`NSXMLDocument -setDTD:`); the T2 value-type diff, which is meaningful now that the
-overlay's copies are out of the way; and the two harness findings above (ICU data,
-stdlib skew).
+**The T2 diff, measured for the first time against the ported surface.** The
+parity gate extracts graphs from the *installed* modules, so this round it saw the
+ported Foundation instead of the overlay (it needed one fix: the extractor now
+passes the two C-module include directories). The trade the plan predicted is now
+a number:
+
+| | before (overlay) | now (ported) |
+|---|---|---|
+| reference symbols | 10,455 | 10,455 |
+| missing symbols | 7,691 | **8,002** (+311) |
+| missing conformance edges | 179 | **128** (−51) |
+
+Conformances improved a lot — FoundationEssentials' value types bring
+`CustomReflectable`, `Codable`, `Comparable` and the rest that the overlay never
+wrote — and the symbol tails grew by the ~311 members the *overlay* published and
+FoundationEssentials does not. That list is the compat shim's work list, and it is
+what `--report` prints, per type (`URL` 74 → 97 missing, `UUID` 5 → 23, ...). The
+allowlist has **not** been regenerated: it still records the overlay's gaps, and
+it should be updated when those members are shimmed back, not before — otherwise
+the ratchet would hide them.
+
+**What the P3 stack still needs**, in order: those ~311 overlay-published members
+back in `FoundationCompat.swift` (the report is the list); the `Data`/`String`
+bridges as *views* rather than copies (Darwin's are views over the same storage
+through `__NSSwiftData`-style holders, which needs a CoreFoundation-side holder);
+the setter-retain audit the `NSCalendar -setLocale:` bug opened
+(`NSRunLoop -setFireDate:`, `NSTask`'s four, `NSOperation`/`NSThread -setName:`,
+`NSUserUnixTask`'s three, `NSXMLDocument -setDTD:`); and the two harness findings
+above (ICU data, stdlib skew).
 
 ---
 
@@ -2858,6 +2879,7 @@ P3's third slice (§2.35):
 | `swift-toolchain/patches/0016-swift-foundation-bundle-stub-name.patch` | FoundationEssentials' stand-in bundle type becomes `FoundationBundle`, and FoundationInternationalization's two non-framework uses follow it, so `Bundle` means the Objective-C Foundation's class on this platform |
 | `swift-toolchain/scripts/build-swift-foundation.sh` | `--apply-patches`, which applies that patch idempotently |
 | `swift-toolchain/scripts/run-foundation-tests.sh` | the harness imports the *installed* Foundation (the spike re-export is no longer on its search path) |
+| `swift-toolchain/scripts/verify-foundation-parity.sh` | the extractor passes the two C-module include directories, so the gate can read the ported Foundation's graph |
 
 | File (bridging) | Change |
 |---|---|
@@ -3354,9 +3376,13 @@ Debugging techniques that produced the findings above:
    `Bundle` collision that had blocked it is fixed by naming
    FoundationEssentials' stand-in bundle type `FoundationBundle`
    (`patches/0016-...`, applied by `build-swift-foundation.sh --apply-patches`).
-   What P3 still needs: `Data`/`String` bridges as views rather than copies, the
-   setter-retain audit, the T2 value-type diff, and the two harness findings (ICU
-   converter data, the fork's stdlib snapshot).
+   The T2 diff is measured against the ported surface for the first time:
+   **missing symbols 8,002 (was 7,691), missing conformance edges 128 (was 179)** —
+   conformances up sharply, and ~311 symbols the overlay published and FE does not
+   are the compat shim's work list (`--report` prints them per type). What P3 still
+   needs: those members shimmed back (then regenerate the allowlist), `Data`/`String`
+   bridges as views rather than copies, the setter-retain audit, and the two harness
+   findings (ICU converter data, the fork's stdlib snapshot).
 16. **The macro plugin and the internationalization suites are in** (§2.32):
    `build-foundation-macros.sh` builds `FoundationMacros` as a library plugin
    (host build, `-load-plugin-library`), so `PredicateTests` passes, and the

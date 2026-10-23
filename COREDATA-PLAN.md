@@ -1064,7 +1064,7 @@ after W4 is a store that serialises (W7), a fetch engine (W5), and migration (W6
 | The pipeline (§8.1) | **landed** in `CDFetchEngine.m`: candidates → predicate → sort → offset → limit → shape. Offset before limit, because paging is "skip n, take m" |
 | The predicates the engine evaluates | **Foundation's**, restored in P0 — `tests/fetch.m` filters on `age > 30` and sorts by a descriptor |
 | `includesPendingChanges` | **the reason the engine is not in the store**: an unsaved insert has no row, so the engine asks the CONTEXT for pending objects and merges by identity |
-| The census | **16 of 21 classes, 272 of 272 offered selectors**. Remaining: **5 classes, 59 selectors** — W6's migration |
+| The census | **16 of 21 classes, 272 of 272 offered selectors.** Remaining: **5 classes, 59 selectors** — W6's migration. The first pin said 271 of 272: `api-ledger missing` named `NSPersistentStoreCoordinator +metadataForPersistentStoreWithURL:error:` — the **deprecated** copy 10.6 declares on both the store and the coordinator — and it is in |
 
 Three defects the first caller found, two of them in code this plan had already declared done:
 
@@ -1079,3 +1079,10 @@ Three defects the first caller found, two of them in code this plan had already 
 3. **`-propertiesToFetch` had to accept key names.** Apple documents the array as property descriptions, but
    nearly every caller writes strings, and the engine raised `-[NSTinyString name] is not implemented` at the
    caller's expense. Both forms are accepted now.
+
+**And one number that was wrong the first time, found after the fact.** The W5 commit message and this section
+originally claimed 272 of 272 selectors; the actual pin said 271 of 272. `api-ledger missing` named the
+declaration the header had omitted — the **deprecated** `+metadataForPersistentStoreWithURL:error:` that 10.6
+declares on `NSPersistentStoreCoordinator` as well as on `NSPersistentStore`. The instrument found it, not a
+reader; the gate was consistent all along, because it was comparing 271 to 271. A plan that reports its own
+arithmetic failure is worth more than one that quietly corrects the table.

@@ -1031,3 +1031,26 @@ Four failures W3 measured, each of which a declaration would have hidden:
 relationship does not update the other, because a to-many side needs the mutable collection that a fetch installs
 (W4/W5). `tests/context.m` writes both sides explicitly and says so at the call site; the wave that adds mutable
 relationship collections must make that asymmetry disappear.
+
+
+### 0.6 Where W4 stands
+
+| W4 item | State |
+|---|---|
+| The four store classes (59 selectors) | **landed**: `NSPersistentStore`, `NSAtomicStore`, `NSAtomicStoreCacheNode`, `NSPersistentStoreCoordinator`, plus the 30 store-type/option constants |
+| The store registry | **landed**: `+registerStoreClass:forStoreType:` is the extension point, so W7's SQLite store is a registration rather than an edit. `NSInMemoryStoreType` is the only type registered on 10.6, and it is the conformance reference (§7.2) |
+| `CDStoreDoors` | **implemented** — the protocol W3 declared is now answered, which is what turns a temporary ID into a permanent one |
+| The two-context fault | **measured**: one context saves, a second is handed only the permanent ID, gets a fault, and fires it by reading a property |
+| The census | **14 of 21 classes, 238 of 238 offered selectors**, `selectors-missing 0`, `methods-declared-not-implemented 0`. Remaining: **7 classes, 93 selectors** — W5's fetch pair and W6's five migration classes |
+
+Two things W4 decided rather than discovered:
+
+- **Permanent IDs are assigned before any node is written**, so a relationship stored as a key refers to a row
+  that already has its key. The context re-keys its registry afterwards (`-cd_rekeyRegisteredObjects`), because a
+  save replaces the very IDs that registry is keyed by — the first place in this plan where identity changes.
+- **A missing store type names its wave.** `NSSQLiteStoreType` returns `NSPersistentStoreInvalidTypeError` with a
+  reason that says "W7", because a caller who mistyped a type and a caller asking for a store that is not built
+  yet must be able to tell the two apart from the error alone.
+
+**The object graph is now whole:** model → object → context → store, with an ID that names a row. Everything
+after W4 is a store that serialises (W7), a fetch engine (W5), and migration (W6).

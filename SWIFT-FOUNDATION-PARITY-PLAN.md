@@ -462,15 +462,16 @@ Effort is rough and single-developer; gates are what matter.
    FoundationInternationalization suites / 329 tests green. What it found is recorded there: the spike's ICU
    has no table-driven converters, `Duration(seconds:milliseconds:)` is newer than the fork's stdlib, and
    the `NotificationCenter` assertion needs tagged `NSNumber`s.
-3. **P3's first two slices — in** (handoff §2.33, §2.34): `import Foundation` is one module re-exporting
-   FoundationEssentials + FoundationInternationalization with eleven value bridges (probe round-tripped),
-   and `build-foundation-p3.sh --install` puts it in the overlay's place — measured green across the
-   language gate, both probes and every class-ABI gate — with `--uninstall` to roll back. It was rolled
-   back because the Foundation test harness hits one name collision (FE's package `Bundle` stub vs Agora's
-   `NSBundle`). Next, in order: resolve that (make FI stop needing the stub, then gate it on
-   `canImport(ObjectiveC)`), keep the install in place, then make the `Data`/`String` bridges views rather
-   than copies, the setter-retain audit the `NSCalendar -setLocale:` bug opened, and the T2 value-type
-   diff. `run-foundation-tests.sh` is the regression harness for all of it.
+3. **P3's first step is in** (handoff §2.33–§2.35): `import Foundation` is one module re-exporting
+   FoundationEssentials + FoundationInternationalization with eleven value bridges, and it is **installed**
+   in the overlay's place (FoundationEssentials, FoundationInternationalization and the two C modules beside
+   the target stdlib; the overlay kept in `Foundation.overlay-backup/`; `--uninstall` reverses it). The
+   `Bundle` collision that blocked the install is fixed by naming FoundationEssentials' stand-in bundle
+   type `FoundationBundle` (patch 0016). Measured: language gate all checks, both harnesses against the
+   installed module (11 suites / 672 tests; 30 suites / 329 tests), both probes, every class-ABI gate.
+   Remaining: the `Data`/`String` bridges as views rather than copies, the setter-retain audit the
+   `NSCalendar -setLocale:` bug opened, the T2 value-type diff, and the two harness findings (ICU converter
+   data, the fork's stdlib snapshot). `run-foundation-tests.sh` is the regression harness for all of it.
 4. **P1, `CustomReflectable`**: 21 edges, and the only remaining conformance cluster that is
    mechanical. A `customMirror` per value type, delegating to the backing object.
 5. **P5, archiving**: 44 `NSCoding`/`NSSecureCoding` edges need `-encodeWithCoder:`/`-initWithCoder:`

@@ -29,8 +29,10 @@ and bridges their eleven value types to Agora's Objective-C classes, with a prob
 that round-trips every one of them (and an Agora `-setLocale:` retain bug found
 and fixed on the way). The install was then measured with the ported Foundation
 in place of the overlay — the language gate, both probes and every class-ABI gate
-green — and rolled back for one name collision (`Bundle`) that the test harness
-hits; §2.34 records the three ways out. §2.30, §2.31, §2.32, §2.33, §2.34.
+green — rolled back for one name collision (`Bundle`), then **kept**: a 20-line
+swift-foundation patch names the stand-in bundle type `FoundationBundle`, after
+which the Foundation test harness runs against the *installed* module too
+(§2.35). §2.30–§2.35.
 
 **The Swift surface is finished.** The Cocoa value types carry the API a
 program actually calls (`Data` is a collection you can slice and mutate,
@@ -2732,6 +2734,62 @@ option 2 is the one that leaves the modules closest to upstream.
 
 ---
 
+### 2.35 P3 slice 3: the `Bundle` collision resolved — the ported Foundation is installed
+
+The install from §2.34 is now the toolchain's state. One patch to
+swift-foundation made it possible.
+
+**The collision, restated.** FoundationEssentials carries a stand-in bundle type
+for platforms whose Foundation has no Objective-C Foundation
+(`Bundle+Stub.swift`: `main`, `localizations`, `preferredLocalizations`), and
+`FoundationInternationalization/Locale/Locale_ICU.swift` uses it to match a
+locale identifier against the main bundle's localizations. Agora's Clang
+Foundation supplies `NSBundle`, which the importer publishes as **`Bundle`**. With
+the ported module installed, both are visible, so any file that names `Bundle`
+under `@testable import FoundationEssentials` — which the upstream test suites do —
+failed with `ambiguous name 'Bundle' in module 'Foundation'`. Gating the stub on
+`canImport(ObjectiveC)` (the honest test: "is there an Objective-C Foundation?")
+was tried and reverted because FI calls the stub: it is not dead code.
+
+**The patch** (`patches/0016-swift-foundation-bundle-stub-name.patch`, 2 files,
+~20 lines): the stand-in is named for what it is — `FoundationBundle` — and FI's
+two non-framework uses follow it. The framework-guarded `Bundle` uses in FE and FI
+are untouched (there `Bundle` *is* the framework class). On a platform with an
+Objective-C Foundation, `Bundle` now means that class, as on Darwin; on a platform
+without one, nothing public changed (the stub was `package`). The build script
+gained `--apply-patches`, which applies it idempotently.
+
+**State now.** `swiftc` on this host has the ported Foundation installed:
+FoundationEssentials, FoundationInternationalization, the module from
+`foundation-p3/` (re-exports + eleven value bridges + the five retained value
+types + the compat shims) beside the target stdlib, with the overlay it replaced
+kept in `Foundation.overlay-backup/` and the two C modules the ported Foundation
+imports shipped under `lib/swift/linux/foundation-c-modules/` (the driver adds
+those include directories — the SDK piece). `--uninstall` reverses all of it, and
+a `build-swift-toolchain.sh` run reinstalls the overlay, so the P3 install is a
+step applied *after* a toolchain build.
+
+**Measured with it installed** — this is the P3 acceptance picture:
+
+| Gate | Result |
+|---|---|
+| language gate | **all checks passed** (11 sections, including bridging, zero-copy views and the value-type surfaces, which only run against an installed toolchain) |
+| FoundationEssentials harness | **11 suites / 672 tests, 670 passing** — and it now imports the *installed* module (`-I` on the spike re-export is gone), so the suites test what the toolchain ships |
+| FoundationInternationalization harness | **30 suites / 329 tests passing**; the same two known findings (the spike's ICU has no table-driven converters; `Duration(seconds:milliseconds:)` is newer than the fork's stdlib) |
+| the two probes | 18/18 |
+| S1, S4, S4b/S4c, S5, library evolution, generic release | all green |
+
+**What the P3 stack still needs**, in order: the `Data`/`String` bridges are still
+*copies* (Darwin's are views over the same storage through `__NSSwiftData`-style
+holders, which needs a CoreFoundation-side holder); the setter-retain audit the
+`NSCalendar -setLocale:` bug opened (`NSRunLoop -setFireDate:`, `NSTask`'s four,
+`NSOperation`/`NSThread -setName:`, `NSUserUnixTask`'s three,
+`NSXMLDocument -setDTD:`); the T2 value-type diff, which is meaningful now that the
+overlay's copies are out of the way; and the two harness findings above (ICU data,
+stdlib skew).
+
+---
+
 ## 3. Change inventory
 
 `swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 63 files,
@@ -2792,6 +2850,14 @@ P3's second slice (§2.34):
 | `swift-toolchain/foundation-overlay/FoundationValueTypes.swift` | `TimeZone`'s two initializers are failable, as Darwin's are, so one source compiles against the overlay and FoundationEssentials alike |
 | `swift-toolchain/scripts/verify-swift-port.sh` | the two `TimeZone(identifier:)` spellings gain the `!` Darwin's failable initializer needs |
 | `swift-toolchain/scripts/run-foundation-tests.sh` | the harness keeps the spike's re-export `Foundation` (the reason is §2.34's `Bundle` collision) |
+
+P3's third slice (§2.35):
+
+| File | Change |
+|---|---|
+| `swift-toolchain/patches/0016-swift-foundation-bundle-stub-name.patch` | FoundationEssentials' stand-in bundle type becomes `FoundationBundle`, and FoundationInternationalization's two non-framework uses follow it, so `Bundle` means the Objective-C Foundation's class on this platform |
+| `swift-toolchain/scripts/build-swift-foundation.sh` | `--apply-patches`, which applies that patch idempotently |
+| `swift-toolchain/scripts/run-foundation-tests.sh` | the harness imports the *installed* Foundation (the spike re-export is no longer on its search path) |
 
 | File (bridging) | Change |
 |---|---|
@@ -2965,8 +3031,12 @@ swift-toolchain/scripts/run-foundation-tests.sh --fi --all   # Locale/Formatting
 # staging tree and round-trip every value bridge through Agora's classes
 swift-toolchain/scripts/build-foundation-p3.sh
 
-# P3's second slice (§2.34): install it as `Foundation` beside the target stdlib
-# (the overlay moves to Foundation.overlay-backup/) and roll that back
+# P3 (§2.34, §2.35): the swift-foundation patch the install needs, then install the
+# module as `Foundation` beside the target stdlib (the overlay moves to
+# Foundation.overlay-backup/; --uninstall reverses it).  This is the state the
+# toolchain is in today, and a build-swift-toolchain.sh run restores the overlay,
+# so both steps are applied after a toolchain build.
+swift-toolchain/scripts/build-swift-foundation.sh --apply-patches
 swift-toolchain/scripts/build-foundation-p3.sh --install
 swift-toolchain/scripts/build-foundation-p3.sh --uninstall
 
@@ -3274,17 +3344,19 @@ Debugging techniques that produced the findings above:
    (`NSRunLoop -setFireDate:`, `NSTask`'s four, `NSOperation`/`NSThread
    -setName:`, `NSUserUnixTask`'s three, `NSXMLDocument -setDTD:`); then the T2
    value-type diff once the overlay is gone.
-   **Slice 2 (§2.34): the install is implemented and measured.** With the ported
-   module in the overlay's place, the language gate passes *all* its checks
+   **Slices 2 and 3 (§2.34, §2.35): the install is in place.** With the ported
+   module where the overlay was, the language gate passes *all* its checks
    (including the three that only run against an installed toolchain), the probes
-   are 18/18, and every class-ABI gate stays green. It ships FoundationEssentials,
-   FoundationInternationalization and the two C modules beside the stdlib, and the
-   driver adds those include directories when they exist (the SDK piece). It was
-   rolled back because the Foundation *harness* cannot build against it: FE's
-   `package struct Bundle` stub and Agora's `NSBundle` are both `Bundle` under
-   `@testable import FoundationEssentials`. The next round's first task is that
-   name — the preferred fix is to make FoundationInternationalization stop needing
-   the stub and then gate it on `canImport(ObjectiveC)`.
+   are 18/18, every class-ABI gate stays green, and both Foundation harnesses run
+   against the *installed* module (11 suites / 672 tests and 30 suites / 329 tests).
+   The install ships FE/FI and the two C modules beside the stdlib and the driver
+   adds those include directories (the SDK piece); `--uninstall` reverses it. The
+   `Bundle` collision that had blocked it is fixed by naming
+   FoundationEssentials' stand-in bundle type `FoundationBundle`
+   (`patches/0016-...`, applied by `build-swift-foundation.sh --apply-patches`).
+   What P3 still needs: `Data`/`String` bridges as views rather than copies, the
+   setter-retain audit, the T2 value-type diff, and the two harness findings (ICU
+   converter data, the fork's stdlib snapshot).
 16. **The macro plugin and the internationalization suites are in** (§2.32):
    `build-foundation-macros.sh` builds `FoundationMacros` as a library plugin
    (host build, `-load-plugin-library`), so `PredicateTests` passes, and the
@@ -3339,8 +3411,11 @@ swift-toolchain/
 │   ├── 0014-libagora-objc-ivar-null-offset.patch  1 file (ivar.c: a late-bound
 │   │                                               class's null-offset ivar;
 │   │                                               §2.31)
-│   └── 0015-libagora-base-nscalendar-retain-locale.patch 1 file (NSCalendar
-│                                                   -setLocale: retains; §2.33)
+│   ├── 0015-libagora-base-nscalendar-retain-locale.patch 1 file (NSCalendar
+│   │                                               -setLocale: retains; §2.33)
+│   └── 0016-swift-foundation-bundle-stub-name.patch 2 files (the stand-in
+│                                                   bundle type is named
+│                                                   FoundationBundle; §2.35)
 ├── objectivec-overlay/
 │   └── ObjectiveC.swift                       the `ObjectiveC` module the
 │                                              importer looks BOOL/SEL/NSZone

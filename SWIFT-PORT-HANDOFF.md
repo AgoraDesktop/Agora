@@ -2544,8 +2544,10 @@ findings worth keeping:
 - **`DurationUnitsFormatStyleTests` does not build, and it is version skew.**
   It calls `Duration(seconds:milliseconds:)`, which the fork's stdlib snapshot
   does not have (this stdlib has `secondsComponent:attosecondsComponent:` and the
-  static factories). The swift-foundation checkout is newer than the Swift fork;
-  closing it means rebasing the fork's stdlib, which is its own round.
+  static factories) — and which Swift **6.3.3 release** does not have either, while
+  the test arrives with our swift-foundation checkout (`d72ae91`). So the checkout
+  is *ahead of* the stdlib: the fix is a fork rebase or a pin of swift-foundation to
+  the matching snapshot tag, not an API addition here (§2.39 has the check).
 
 **Also this round, the `NotificationCenter` assertion from §2.31 is explained.**
 Its subject bookkeeping keys observers by

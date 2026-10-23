@@ -2984,6 +2984,19 @@ the new one included), both Foundation harnesses (11 suites; 30 suites / 329
 tests), both probes 18/18, S1, S4, S4b/S4c, S5, library evolution, generic
 release, and the P3 probe.
 
+**What was *not* fixed, and why it is not ours to fix here.** The one remaining
+build failure in the FI harness (`DurationUnitsFormatStyleTests`) is the
+`Duration(seconds:milliseconds:)` skew §2.32 recorded, and checking it against the
+*six months older release* toolchain settles what it is: the initializer is absent
+from Swift **6.3.3 release** too, and the test that calls it arrives with the
+swift-foundation checkout we have (`d72ae91`, 2026-08-21). So swift-foundation is
+*ahead of* the fork's stdlib snapshot — adding the API to the stdlib to satisfy a
+newer test would be backwards. The fix is a fork rebase (or pinning swift-foundation
+to the snapshot tag that matches the fork's stdlib); the other harness finding, the
+ICU converter data, is a dependency-build decision (`swift-foundation-icu` builds
+`common`/`i18n`/`io` with `USE_PACKAGE_DATA=1` and no data target, so only ICU's
+built-in converters exist).
+
 ---
 
 ## 3. Change inventory
@@ -3579,7 +3592,10 @@ Debugging techniques that produced the findings above:
    the two harness findings (ICU converter data, the fork's stdlib snapshot), and
    (the compiler-side follow-up §2.38 raised is **done**: §2.39 — a Swift override of
    an imported property or method now carries the imported encoding, gated by a new
-   check in the language gate).
+   check in the language gate). The two harness findings stand, and are not API
+   work: the ICU converter data (a dependency build) and the `Duration` skew
+   (swift-foundation is newer than the fork's stdlib — a rebase or a pin; Swift
+   6.3.3 release does not have that initializer either).
 17. **The setter audit is done, and it was mostly the list that was wrong**
    (§2.36): of the nine setters §2.33 named, seven already retain and release;
    `NSThread -setName:` and `NSOperationQueue -setName:` borrowed their argument

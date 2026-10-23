@@ -114,7 +114,7 @@ it.
 | directory | who names it |
 |---|---|
 | `/Applications`, `/Applications/Utilities`, `~/Applications` | Launch Services scans them (`libagora-launchservices/LaunchServices.c`), `-[NSWorkspace fullPathForApplication:]` searches them, Workspace's PLACES points at `/Applications`; a bundled application installed for all users belongs in `/Applications`, for one user in `~/Applications` |
-| `/Library/Preferences`, `~/Library/Preferences` | CFPreferences' store on every host Agora builds for (`libagora-core/CFKnownLocations.c`, `CFPreferences.c`) — including `AppleLanguages`, which bundle localization reads — and where a ported application expects its plist; Agora's own defaults store is the `Configuration/` scopes below (`NSUserDefaults`) |
+| `/Library/Preferences`, `~/Library/Preferences` | CFPreferences' store on every host Agora builds for (`libagora-core/CFKnownLocations.c`, `CFPreferences.c`) — where `AppleLanguages` lives, which bundle localization asks for — and where a ported application expects its plist; Agora's own defaults store is the `Configuration/` scopes below (`NSUserDefaults`) |
 | `/Library/Colors`, `~/Library/Colors` | `NSColorList` — the standard directory is `~/Library/Colors`, and `+availableColorLists` scans both |
 | `/Library/Fonts`, `/System/Library/Fonts` | Core Graphics' font search (`libagora-drawing/CGFont.c`), with `~/Library/Fonts` beside them |
 | `/System/Library/CoreServices` | `CFCopySystemVersion*` reads the version bundles there |

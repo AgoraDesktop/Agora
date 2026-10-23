@@ -2942,6 +2942,50 @@ suites, FoundationInternationalization 30 suites / 329 tests, probes 18/18.
 
 ---
 
+### 2.39 An override of an imported method carries the imported encoding
+
+§2.38 hit this from the outside: a Swift subclass of `NSData` overriding `-length`
+was invisible to Clang-compiled callers, which read the *superclass*'s length (0).
+The cause is the same one §2.25 fixed for `BOOL` and §2.21 for `count` — typed
+dispatch is keyed on (selector, encoding) — but this time it was on the
+**compiler's** side of the line, in two places, and both are fixed in the fork
+(patch `0003`):
+
+1. **A property override got its encoding from the Swift type.** A Swift class's
+   `-length` override is emitted through `emitObjCGetterDescriptorParts`, which
+   derived the encoding from the property's *Swift* value type (`Int` → `q16@0:8`),
+   while the imported declaration it overrides says `NSUInteger` → `Q16@0:8`. The
+   getter (and setter) now walk the override chain to the imported
+   `clang::ObjCPropertyDecl` and take the encoding of its getter/setter method.
+2. **A method override had none of it either.** `getObjCEncodingForMethod` only
+   consulted the decl's own `ClangNode`, and a Swift override has none — the node
+   belongs to the declaration it overrides. It now walks `getOverriddenDecl()` (and,
+   for an accessor, its storage) until it finds one. That covers the method list's
+   `types` string *and* the selector record's encoding, which is derived from it.
+
+Nothing changes for a method that is purely Swift: it has no imported declaration
+to inherit from, so it keeps the encoding derived from its Swift types.
+
+**Gated.** The language gate has a new check — "a Swift subclass's property
+overrides are reached from Objective-C" — that defines a `ByteView: NSData`
+overriding `length`/`bytes`, then hands it to Agora's Clang-compiled
+`-[NSMutableData initWithData:]` and requires the override's length and bytes back.
+It fails on the old compiler (length 0) and passes now.
+
+**The consequence worth knowing:** `FNDataView` (§2.38) no longer *had* to be
+Objective-C. It stays, because it works and because moving it would be a second
+rewrite of code that is already pinned by the probe; but the reason it was written
+there — "a Swift subclass cannot register the imported encoding" — is gone. That
+is also the general case fixed: any Swift subclass of an Objective-C class now
+dispatches correctly through Clang-compiled code, for properties and methods.
+
+All gates re-run green with the fixed frontend installed: language gate (12 checks,
+the new one included), both Foundation harnesses (11 suites; 30 suites / 329
+tests), both probes 18/18, S1, S4, S4b/S4c, S5, library evolution, generic
+release, and the P3 probe.
+
+---
+
 ## 3. Change inventory
 
 `swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 63 files,
@@ -3023,6 +3067,8 @@ Zero-copy `Data` (§2.38):
 | `swift-toolchain/foundation-p3/FoundationValueBridges.swift` | the `Data` bridge returns the view for out-of-line data and adopts it back (with a `DataBridgeBox` owner, so the box does not re-enter the bridge) |
 | `swift-toolchain/foundation-p3/FoundationShim.swift`, `foundation-overlay/FoundationOverlay.swift` | `_convertNSErrorToError` takes `NSError?`, the signature `SILGen` requires |
 | `swift-toolchain/foundation-p3/Probe.swift` | the view assertions: same address both ways, length, copy/mutableCopy/subdata contracts |
+| `lib/IRGen/GenObjC.cpp` | `findInheritedClangDecl`/`getInheritedPropertyEncoding`: an override of an imported ObjC property or method takes the imported encoding (patch `0003`, §2.39) |
+| `swift-toolchain/scripts/verify-swift-port.sh` | the gate check "a Swift subclass's property overrides are reached from Objective-C" |
 
 | File (bridging) | Change |
 |---|---|
@@ -3531,9 +3577,9 @@ Debugging techniques that produced the findings above:
    regression list (a re-exporting module's graph is not comparable member-for-member;
    206 of the overlay-only paths are C library re-exports). What P3 still needs:
    the two harness findings (ICU converter data, the fork's stdlib snapshot), and
-   the compiler-side follow-up §2.38 raises — an override of an imported ObjC method
-   should carry the *Clang* encoding, which would let a Swift subclass of an ObjC
-   class dispatch correctly and make `FNDataView` expressible in Swift.
+   (the compiler-side follow-up §2.38 raised is **done**: §2.39 — a Swift override of
+   an imported property or method now carries the imported encoding, gated by a new
+   check in the language gate).
 17. **The setter audit is done, and it was mostly the list that was wrong**
    (§2.36): of the nine setters §2.33 named, seven already retain and release;
    `NSThread -setName:` and `NSOperationQueue -setName:` borrowed their argument

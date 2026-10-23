@@ -129,7 +129,7 @@ Remaining after W1: 14 classes, 232 selectors.
 | The census | **now a `ctest` gate**: `coredata-api-census` runs `api-ledger census` against the built library and holds `tests/coredata-census.txt`, in both directions. Perturbing one pin produced *"the 10.6 API census has drifted, in 2 place(s)"* naming both the metric and the consistency rule |
 
 **Measured after W2: 9 of 21 classes, 140 of 140 offered selectors, `selectors-missing 0`,
-`methods-declared-not-implemented 0`.** Remaining: **12 classes, 191 selectors.**
+`methods-declared-not-implemented 0`.** Remaining at that point: 12 classes, 191 selectors.
 
 Three things W2 found by measuring, in the order they failed:
 
@@ -1000,3 +1000,34 @@ the iCloud/ubiquitous store, and `NSQueryGenerationToken`.
 | `NSManagedObjectContextBinding`, `NSEditor` categories | `libagora-app` (`NSKeyValueBinding`) | yes (223/531) |
 | `NSController`, `NSObjectController`, `NSArrayController` | `libagora-app` | **no** — W8.2, deferred |
 | `NSRuleEditor`, `NSPredicateEditor`, `NSPredicateEditorRowTemplate` | `libagora-app` | **no** — W8.3, deferred |
+
+
+### 0.5 Where W3 stands
+
+| W3 item | State |
+|---|---|
+| `NSManagedObjectContext` (39 selectors) | **landed**: registry, six sets, save pipeline, undo/redo, rollback, refresh, reset, delete propagation, merge, 10.6's `<NSLocking>` |
+| D2 — cross-thread misuse | **landed and measured by a real thread**: `tests/context.m` starts a pthread, calls into the context without the lock, and asserts the exception; then one that takes the lock first and asserts it is allowed |
+| The store's doors | **declared as a protocol, not a type** — `CDStoreDoors` with `@optional` members, so the context can ask whether the coordinator it was given answers, and W3 runs with no coordinator at all |
+| Save without a coordinator | **in-memory, and the header says so**: validate, adopt the diff, clear the sets, post both notifications. No durability claim; W4 replaces the middle of `-save:` |
+| The census | **10 of 21 classes, 179 of 179 offered selectors**, `selectors-missing 0`, `methods-declared-not-implemented 0`. Remaining: **11 classes, 152 selectors** |
+
+Four failures W3 measured, each of which a declaration would have hidden:
+
+1. **`-hasChanges` was NO for a brand-new object.** Registration is not insertion: an object created into a
+   context had no *changes* and was therefore invisible to the context's own question. `-cd_registerManagedObject:`
+   now files a pending insertion, which is what "inserted" meant in the first place.
+2. **`-rollback` emptied the snapshot it was reading.** `-cd_applyCommittedValues:` was handed `_committed` itself
+   and cleared it before copying — so rollback forgot everything instead of restoring it. The new snapshot is now
+   built first and swapped in.
+3. **`-redo` was a no-op.** Undo registration was suppressed while an undo was replaying, on the theory that it
+   would recurse; `NSUndoManager` instead routes registrations made during `-undo` into the **redo** stack, which
+   is the entire mechanism. The flag now quietens change tracking only.
+4. **Apple's notification carries SETS, not arrays.** `-mergeChangesFromContextDidSaveNotification:` indexed them
+   and raised `-[AGSetItems objectAtIndex:] is not implemented` — the Foundation's own refusal, from a crash that
+   only a test with a real notification would have found.
+
+**One gap, stated rather than hidden: automatic inverse maintenance is not implemented.** Setting one side of a
+relationship does not update the other, because a to-many side needs the mutable collection that a fetch installs
+(W4/W5). `tests/context.m` writes both sides explicitly and says so at the call site; the wave that adds mutable
+relationship collections must make that asymmetry disappear.

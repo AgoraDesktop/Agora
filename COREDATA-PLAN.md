@@ -1146,3 +1146,35 @@ typed values read back as a standard client sees them, and the metadata blob is 
 **So: M1 complete, M2 complete for the in-memory, binary and XML stores and for the object graph, M3 complete
 except relationship persistence.** What remains is that one slice, and the W8 AppKit seam (`NSPersistentDocument`),
 which is blocked on nothing here — only on the AppKit's own controller wave.
+
+
+### 0.10 Relationships, end to end — the gap §0.9 named is closed
+
+| Piece | State |
+|---|---|
+| To-many values | **mutable collections**: `-primitiveValueForKey:` answers a working `NSMutableSet` that *is* the object's value, so membership changes work through the object graph rather than through a replace-the-set dance |
+| Inverse maintenance | **landed**: setting one side updates the other, to-one→to-many, to-many→to-one and to-one→to-one, with the previous member unlinked. 7 checks in `tests/object.m` |
+| Storage | **landed**: `NSAtomicStore` writes a relationship as the related row's **object-URI string**, and a to-many as an array of them. The node format needs no type marker, because the model already says which properties are relationships |
+| Resolution | **landed**: the coordinator's fault door turns those URIs back into objects through `[context objectWithID:]`, so reading `person.department.title` after a reopen is two hops, both from the file |
+| SQLite | `type = 'array'` with a property-list blob for a to-many, documented in `SCHEMA.md`; a to-one is the URI as a plain `string`, which `sqlite3` shows |
+| The tests | **52 checks in `tests/serialisation.m`** (up from 37), run through all three store types; 39 in `tests/object.m` |
+
+Measured as a standard client reads it:
+
+```
+('Person', 1, 'department', 'string', 'x-coredata://agora-store-3-.../Department/p1')
+('Person', 1, 'name',       'string', 'alice')
+('Department', 1, 'staff',  'array',  (blob))
+('Department', 1, 'title',  'string', 'Engineering')
+```
+
+**Three things this slice did not do, said plainly rather than implied:**
+
+1. **Mutating a to-many set directly does not maintain the inverse, fire KVO, or register undo.** It changes the
+   value and it persists, and `tests/object.m` proves exactly that much. A proxied collection is the missing piece,
+   and it is the next slice.
+2. **A reference to an object that was never saved cannot be stored** — its ID is temporary, so its URI names a row
+   that does not exist. A save assigns permanent IDs to insertions first, so this only bites on a store written
+   around a temporary ID, which the round trip would then fail to resolve.
+3. **`NSFetchedPropertyDescription` still evaluates nothing**: the fetched-property door exists (W1) and a fetch
+   expression exists (W5), but nothing runs one per object yet.

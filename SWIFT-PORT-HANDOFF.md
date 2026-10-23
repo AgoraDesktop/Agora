@@ -2887,6 +2887,61 @@ need dependency and fork work respectively.
 
 ---
 
+### 2.38 Zero-copy `Data`: the view had to be Objective-C, and why
+
+Darwin's `Data` -> `NSData` bridge hands back a view. Ours copied; this round it
+does not, and getting there found one real compiler-level obstacle and one latent
+overlay bug.
+
+**The obstacle is the type encoding.** A *Swift* subclass of `NSData` overriding
+`-length` registers the selector with the *Swift* type's encoding (`q16@0:8`, `Int`),
+while Agora's `NSData` registers `Q16@0:8` (`NSUInteger`) — so a Clang-compiled
+caller's typed send for `Q` misses the override and answers the *superclass's*
+implementation: `[copy initWithData:view]` read length 0 and produced an empty
+copy. This is §2.25's `BOOL` trap and §2.21's `count` trap again, now for an
+override of an imported method; Swift will not let one class declare both spellings
+("getter for 'length' … conflicts with getter for 'objcLength'"), and the encoding
+of an override comes from the Swift type, not from the Clang declaration it
+overrides.
+
+So the view is a class where the encodings come from a header:
+**`FNDataView`** in `libagora-base` (`NSData.h`/`NSData.m`, patch `0018`) — borrowed
+bytes, borrowed length, a retained `owner`, and `-subdataWithRange:` answering
+another view with the same owner and its own offset. The Swift bridge only
+constructs it:
+
+- `Data -> NSData` views when FoundationEssentials keeps the bytes **out of line**
+  (more than 14 bytes). Up to 14 bytes it keeps them *inside the struct*
+  (`_Representation.inline`), where `withUnsafeBytes` addresses a temporary and
+  there is nothing to point at — those copy, which is cheaper than a holder.
+- The owner is a Swift box (`DataBridgeBox`), **not** `self as AnyObject`: `Data`
+  conforms to `_ObjectiveCBridgeable` in the same file, so `as AnyObject` would
+  call the bridge again.
+- `NSData -> Data` adopts the view: same value, no copy, and a subrange view slices
+  the shared value (a `Data` slice shares storage).
+
+**The latent bug it exposed:** the overlay's
+`_convertNSErrorToError(_ error: NSError) -> Error` did not match the signature the
+compiler looks that function up with. `SILGen.cpp` asks for
+`_convertNSErrorToError(_: NSError?) -> Error` — the parameter is **optional** —
+and a mismatch is fatal: *"definition of implicit conversion function
+'Foundation._convertNSErrorToError' is not of the correct type"*, then "unable to
+set up the ObjC bridge". It stayed latent because nothing in the module ever
+needed the ObjC `throws` bridge; a Swift subclass of an Objective-C class asks for
+it immediately (the recorded P2-spike crash had the same shape). Both the overlay
+and the P3 shim declare it correctly now, with the nil arm returning an empty
+`NSError` (unreachable in practice: a failing `throws` call always hands one back).
+
+**Measured.** The P3 probe asserts the property that cannot be faked — the address
+`Data` hands out and the address its `NSData` view reports are the same, in both
+directions — and checks the contract around it: length, `-copy` is self,
+`-mutableCopy` is a real `NSMutableData` with the right bytes, `-subdataWithRange:`
+is the right slice. With the module installed: language gate **all checks passed**
+(including the zero-copy and value-type sections), FoundationEssentials harness 11
+suites, FoundationInternationalization 30 suites / 329 tests, probes 18/18.
+
+---
+
 ## 3. Change inventory
 
 `swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 63 files,
@@ -2959,6 +3014,15 @@ P3's third slice (§2.35):
 | `libagora-base/NSThread.m`, `NSOperation.m` | `-setName:` copies (Cocoa's `name` is a copy property), and `NSOperationQueue` gains the `-dealloc` it never had (patch `0017`, §2.36) |
 | `swift-toolchain/parity/foundation-allowlist.txt` | re-baselined against the ported surface: ten types lose their conformance entries, member tails rise; 360 entries covering all 8,002 missing symbols (§2.37) |
 | `swift-toolchain/scripts/verify-foundation-parity.sh` | `KEEP=1` (and `--keep`) actually keeps the extracted graphs — it was documented but deleted them anyway |
+
+Zero-copy `Data` (§2.38):
+
+| File | Change |
+|---|---|
+| `libagora-base/NSData.h`, `NSData.m` | `FNDataView`: a read-only `NSData` answering `-bytes`/`-length` out of borrowed memory with a retained owner, and `-subdataWithRange:` as another view over the same owner (patch `0018`) |
+| `swift-toolchain/foundation-p3/FoundationValueBridges.swift` | the `Data` bridge returns the view for out-of-line data and adopts it back (with a `DataBridgeBox` owner, so the box does not re-enter the bridge) |
+| `swift-toolchain/foundation-p3/FoundationShim.swift`, `foundation-overlay/FoundationOverlay.swift` | `_convertNSErrorToError` takes `NSError?`, the signature `SILGen` requires |
+| `swift-toolchain/foundation-p3/Probe.swift` | the view assertions: same address both ways, length, copy/mutableCopy/subdata contracts |
 
 | File (bridging) | Change |
 |---|---|
@@ -3455,14 +3519,21 @@ Debugging techniques that produced the findings above:
    `Bundle` collision that had blocked it is fixed by naming
    FoundationEssentials' stand-in bundle type `FoundationBundle`
    (`patches/0016-...`, applied by `build-swift-foundation.sh --apply-patches`).
+   **Zero-copy `Data` is in** (§2.38): the bridge is a view both ways, through
+   `FNDataView` in `libagora-base` (a Swift subclass could not register the
+   `NSUInteger` encoding, so the class lives where the header gives it), with the
+   probe asserting address identity; and the overlay's `_convertNSErrorToError`
+   signature — which the compiler requires to be `NSError?` — is fixed.
    The T2 diff is measured against the ported surface and **re-baselined**
    (§2.37): `missing symbols 8,002 (was 7,691), missing conformance edges 128 (was
    179)`; the allowlist drops the conformance entries ten types no longer need and
    the gate is green again. The graph diff is a *surface* measurement, not a
    regression list (a re-exporting module's graph is not comparable member-for-member;
    206 of the overlay-only paths are C library re-exports). What P3 still needs:
-   `Data`/`String` bridges as views rather than copies, and the two harness findings
-   (ICU converter data, the fork's stdlib snapshot).
+   the two harness findings (ICU converter data, the fork's stdlib snapshot), and
+   the compiler-side follow-up §2.38 raises — an override of an imported ObjC method
+   should carry the *Clang* encoding, which would let a Swift subclass of an ObjC
+   class dispatch correctly and make `FNDataView` expressible in Swift.
 17. **The setter audit is done, and it was mostly the list that was wrong**
    (§2.36): of the nine setters §2.33 named, seven already retain and release;
    `NSThread -setName:` and `NSOperationQueue -setName:` borrowed their argument

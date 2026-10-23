@@ -1137,6 +1137,12 @@ The storage half (write the related row's key) is trivial; the resolution half �
 object when a fault fires — is the next slice, and writing a wrong-typed value instead would have been worse than
 this note.
 
+**A third thing W7's checks found, in the checks themselves:** the SQLite readability test shelled out to the
+`sqlite3` binary, and this machine does not have one — so the check silently did nothing and "readable by sqlite3"
+was an unverified claim in a commit message. It now uses Python's `sqlite3` module (the same client library by
+another door) and **skips loudly** when neither is present. Verified running: the file's four tables and all nine
+typed values read back as a standard client sees them, and the metadata blob is an XML property list.
+
 **So: M1 complete, M2 complete for the in-memory, binary and XML stores and for the object graph, M3 complete
 except relationship persistence.** What remains is that one slice, and the W8 AppKit seam (`NSPersistentDocument`),
 which is blocked on nothing here — only on the AppKit's own controller wave.

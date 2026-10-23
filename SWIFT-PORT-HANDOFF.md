@@ -2846,6 +2846,47 @@ the same methods that retain do so before the assignment.
 
 ---
 
+### 2.37 T2 re-baselined — and what the graph diff can and cannot say
+
+With the ported Foundation installed, the parity ratchet needed a new baseline, and
+the diff it moved tells the story better than a paragraph could:
+
+- **Conformance entries disappeared for ten types** — `Calendar`, `Data`, `Date`,
+  `DateComponents`, `DateInterval`, `Decimal`, `IndexPath`, `Locale`, `TimeZone`,
+  `OperatingSystemVersion` — because the ported types now carry what the overlay
+  never wrote: `CustomReflectable`, `Codable`, `Collection`/`RandomAccessCollection`
+  (`IndexPath`), `Numeric`/`SignedNumeric` (`Decimal`), `ReferenceConvertible`,
+  `Strideable`. This is the 179 → 128 conformance improvement, now the baseline.
+- **Member counts rose for the ported types** (`Data` 165 → 309, `Calendar` 150 →
+  185, `Decimal` 54 → 86, `IndexPath` 110 → 127, `DateInterval` 8 → 26) and fell
+  slightly for the classes the overlay owned (`IndexSet` 149 → 146, `NSArray` 19 →
+  16, `NSDictionary`/`NSSet`/`NSOrderedSet` −3 each).
+- One small real regression: `OperatingSystemVersion` lost `Equatable`/`Hashable`,
+  because the overlay's conformance had to go when *both* the Clang and
+  FoundationEssentials declarations became visible (§2.35's ambiguity, on a C
+  struct this time); its conformance gap is 2 → 4.
+
+**The caveat, recorded because it cost time.** Asking "which members did the
+overlay publish that the ported module does not" by *diffing the two symbol graphs*
+does not answer it: 466 paths appeared overlay-only, of which **206 are C library
+re-exports** (`erf`, `j0`, `lgamma`, `fpos_t`, `socklen_t`, `stdin`, ...) that
+arrive through the Clang module, and the value-type ones are dominated by members
+the ported types demonstrably *have* (`Data.count`, `UUID.uuidString`,
+`Date.timeIntervalSinceReferenceDate`). A re-exporting module's symbol graph is not
+comparable member-for-member with a module that declares the types itself, so the
+graph is a *surface* measurement, not a regression list. The authority is that code
+compiles and runs: the language gate (every check), both Foundation harnesses (11
+suites / 672 tests; 30 suites / 329 tests), both probes and the whole class-ABI
+suite are green against the installed module.
+
+So the next P3 item is not "shim back 311 members" — it is the work that gates
+cannot yet see: the `Data`/`String` bridges are still copies where Darwin's are
+views, and the two harness findings (the spike's ICU has no table-driven converter
+data; `Duration(seconds:milliseconds:)` is newer than the fork's stdlib snapshot)
+need dependency and fork work respectively.
+
+---
+
 ## 3. Change inventory
 
 `swift-toolchain/patches/0003-swift-enable-objc-interop.patch`, 63 files,
@@ -2916,6 +2957,8 @@ P3's third slice (§2.35):
 | `swift-toolchain/scripts/run-foundation-tests.sh` | the harness imports the *installed* Foundation (the spike re-export is no longer on its search path) |
 | `swift-toolchain/scripts/verify-foundation-parity.sh` | the extractor passes the two C-module include directories, so the gate can read the ported Foundation's graph |
 | `libagora-base/NSThread.m`, `NSOperation.m` | `-setName:` copies (Cocoa's `name` is a copy property), and `NSOperationQueue` gains the `-dealloc` it never had (patch `0017`, §2.36) |
+| `swift-toolchain/parity/foundation-allowlist.txt` | re-baselined against the ported surface: ten types lose their conformance entries, member tails rise; 360 entries covering all 8,002 missing symbols (§2.37) |
+| `swift-toolchain/scripts/verify-foundation-parity.sh` | `KEEP=1` (and `--keep`) actually keeps the extracted graphs — it was documented but deleted them anyway |
 
 | File (bridging) | Change |
 |---|---|
@@ -3412,13 +3455,14 @@ Debugging techniques that produced the findings above:
    `Bundle` collision that had blocked it is fixed by naming
    FoundationEssentials' stand-in bundle type `FoundationBundle`
    (`patches/0016-...`, applied by `build-swift-foundation.sh --apply-patches`).
-   The T2 diff is measured against the ported surface for the first time:
-   **missing symbols 8,002 (was 7,691), missing conformance edges 128 (was 179)** —
-   conformances up sharply, and ~311 symbols the overlay published and FE does not
-   are the compat shim's work list (`--report` prints them per type). What P3 still
-   needs: those members shimmed back (then regenerate the allowlist), `Data`/`String`
-   bridges as views rather than copies, and the two harness findings (ICU converter
-   data, the fork's stdlib snapshot).
+   The T2 diff is measured against the ported surface and **re-baselined**
+   (§2.37): `missing symbols 8,002 (was 7,691), missing conformance edges 128 (was
+   179)`; the allowlist drops the conformance entries ten types no longer need and
+   the gate is green again. The graph diff is a *surface* measurement, not a
+   regression list (a re-exporting module's graph is not comparable member-for-member;
+   206 of the overlay-only paths are C library re-exports). What P3 still needs:
+   `Data`/`String` bridges as views rather than copies, and the two harness findings
+   (ICU converter data, the fork's stdlib snapshot).
 17. **The setter audit is done, and it was mostly the list that was wrong**
    (§2.36): of the nine setters §2.33 named, seven already retain and release;
    `NSThread -setName:` and `NSOperationQueue -setName:` borrowed their argument

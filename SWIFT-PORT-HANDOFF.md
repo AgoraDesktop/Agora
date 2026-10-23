@@ -2625,12 +2625,9 @@ did for its own types — and call sites do not change.
   frames away. This is the same defect §2.22 fixed for `-setTimeZone:` and §2.29
   for `NSDateFormatter`; the rule stands — **in this tier a setter that assigns
   an object ivar retains it**. An audit of the rest of `libagora-base` for the
-  same pattern found these, still open: `NSRunLoop -setFireDate:`,
-  `NSTask -setExecutableURL:`/`-setArguments:`/`-setEnvironment:`/
-  `-setCurrentDirectoryURL:`, `NSOperation`/`NSThread -setName:`,
-  `NSUserUnixTask -setStandardInput:`/`-setStandardOutput:`/`-setStandardError:`,
-  `NSXMLDocument -setDTD:`. Each needs a retain *and* a release in `-dealloc`,
-  so they are a Foundation round of their own rather than a sed.
+  same pattern produced a list of nine setters — of which seven turned out to
+  retain already and two did not (§2.36), so the list was mostly the grep's
+  fault; the two real ones are fixed now.
 
 **What is measured.** `build-foundation-p3.sh` builds the module into a staging
 tree (`~/.agora-swift/build/p3-foundation`, nothing installed) against the
@@ -2804,10 +2801,48 @@ the ratchet would hide them.
 back in `FoundationCompat.swift` (the report is the list); the `Data`/`String`
 bridges as *views* rather than copies (Darwin's are views over the same storage
 through `__NSSwiftData`-style holders, which needs a CoreFoundation-side holder);
-the setter-retain audit the `NSCalendar -setLocale:` bug opened
-(`NSRunLoop -setFireDate:`, `NSTask`'s four, `NSOperation`/`NSThread -setName:`,
-`NSUserUnixTask`'s three, `NSXMLDocument -setDTD:`); and the two harness findings
-above (ICU data, stdlib skew).
+the setter-retain audit the `NSCalendar -setLocale:` bug opened (done in §2.36:
+two of the nine were real); and the two harness findings above (ICU data, stdlib
+skew).
+
+---
+
+### 2.36 The setter audit: two real bugs, and the list that was wrong
+
+The audit list §2.33 opened (from the `NSCalendar -setLocale:` bug) said "these
+setters assign an object ivar without retaining it": `NSRunLoop -setFireDate:`,
+`NSTask -setExecutableURL:`/`-setArguments:`/`-setEnvironment:`/
+`-setCurrentDirectoryURL:`, `NSOperation`/`NSThread -setName:`,
+`NSUserUnixTask -setStandardInput:`/`-setStandardOutput:`/`-setStandardError:`,
+`NSXMLDocument -setDTD:`. Checked one by one against the source, the list was
+mostly wrong — the first assignment inside those methods is to a *local*, and the
+retain/release pair is two lines later:
+
+| setter | what it actually does |
+|---|---|
+| `NSRunLoop -setFireDate:` | `[fireDate retain]; [_fireDate release]; _fireDate = fireDate;` ✓ |
+| `NSTask`'s four | same shape ✓ |
+| `NSUserUnixTask`'s three | same shape ✓ |
+| `NSXMLDocument -setDTD:` | same shape ✓ |
+| `NSThread -setName:` | `_name = name;` — **borrowed** |
+| `NSOperationQueue -setName:` | `_name = name;` — **borrowed**, and the class had no `-dealloc` at all |
+
+So two were real, and both are the same bug: the name a caller hands in had to
+outlive the call, and Swift hands over autoreleased strings, so a name set from a
+temporary dangled as soon as the pool drained. Cocoa's `name` is a **copy**
+property: both copy now and release the old value (`NSThread`'s `-dealloc` releases
+it; `NSOperationQueue` gained the `-dealloc` it never had, which also releases the
+three objects `-init` creates and which had leaked all along). Patch `0017`.
+
+The regression is a behavioural one, not a compile-time one: set the name from
+inside an autorelease pool and read it after the drain — `Thread()` and
+`OperationQueue()` (Swift's names) both survive now, and a `NSMutableString` handed
+in cannot change the name afterwards. Everything else stayed green (language gate,
+FoundationEssentials harness 11 suites, both probes 18/18).
+
+The lesson for the next audit is about the *method*, not the list: a grep for
+`_ivar = argument;` finds the shape only when it reads the whole setter body, since
+the same methods that retain do so before the assignment.
 
 ---
 
@@ -2880,6 +2915,7 @@ P3's third slice (§2.35):
 | `swift-toolchain/scripts/build-swift-foundation.sh` | `--apply-patches`, which applies that patch idempotently |
 | `swift-toolchain/scripts/run-foundation-tests.sh` | the harness imports the *installed* Foundation (the spike re-export is no longer on its search path) |
 | `swift-toolchain/scripts/verify-foundation-parity.sh` | the extractor passes the two C-module include directories, so the gate can read the ported Foundation's graph |
+| `libagora-base/NSThread.m`, `NSOperation.m` | `-setName:` copies (Cocoa's `name` is a copy property), and `NSOperationQueue` gains the `-dealloc` it never had (patch `0017`, §2.36) |
 
 | File (bridging) | Change |
 |---|---|
@@ -3381,8 +3417,14 @@ Debugging techniques that produced the findings above:
    conformances up sharply, and ~311 symbols the overlay published and FE does not
    are the compat shim's work list (`--report` prints them per type). What P3 still
    needs: those members shimmed back (then regenerate the allowlist), `Data`/`String`
-   bridges as views rather than copies, the setter-retain audit, and the two harness
-   findings (ICU converter data, the fork's stdlib snapshot).
+   bridges as views rather than copies, and the two harness findings (ICU converter
+   data, the fork's stdlib snapshot).
+17. **The setter audit is done, and it was mostly the list that was wrong**
+   (§2.36): of the nine setters §2.33 named, seven already retain and release;
+   `NSThread -setName:` and `NSOperationQueue -setName:` borrowed their argument
+   (and the queue had no `-dealloc` at all, leaking its two operation lists and its
+   condition). Both copy now — Cocoa's `name` is a copy property — with releases in
+   `-dealloc`, pinned by an autorelease-pool probe (patch `0017`).
 16. **The macro plugin and the internationalization suites are in** (§2.32):
    `build-foundation-macros.sh` builds `FoundationMacros` as a library plugin
    (host build, `-load-plugin-library`), so `PredicateTests` passes, and the
@@ -3439,9 +3481,12 @@ swift-toolchain/
 │   │                                               §2.31)
 │   ├── 0015-libagora-base-nscalendar-retain-locale.patch 1 file (NSCalendar
 │   │                                               -setLocale: retains; §2.33)
-│   └── 0016-swift-foundation-bundle-stub-name.patch 2 files (the stand-in
-│                                                   bundle type is named
-│                                                   FoundationBundle; §2.35)
+│   ├── 0016-swift-foundation-bundle-stub-name.patch 2 files (the stand-in
+│   │                                               bundle type is named
+│   │                                               FoundationBundle; §2.35)
+│   └── 0017-libagora-base-setters-copy-names.patch 2 files (NSThread/
+│                                                   NSOperationQueue -setName:
+│                                                   copy; §2.36)
 ├── objectivec-overlay/
 │   └── ObjectiveC.swift                       the `ObjectiveC` module the
 │                                              importer looks BOOL/SEL/NSZone

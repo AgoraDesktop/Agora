@@ -1054,3 +1054,28 @@ Two things W4 decided rather than discovered:
 
 **The object graph is now whole:** model → object → context → store, with an ID that names a row. Everything
 after W4 is a store that serialises (W7), a fetch engine (W5), and migration (W6).
+
+
+### 0.7 Where W5 stands
+
+| W5 item | State |
+|---|---|
+| `NSFetchRequest` (30) and `NSFetchRequestExpression` (4) | **landed**, with Apple's defaults written out rather than left to zero — `includesPendingChanges`, `includesSubentities`, `includesPropertyValues` and `returnsObjectsAsFaults` are YES, and a request that defaulted them to NO would be right about the rows and wrong about the answer |
+| The pipeline (§8.1) | **landed** in `CDFetchEngine.m`: candidates → predicate → sort → offset → limit → shape. Offset before limit, because paging is "skip n, take m" |
+| The predicates the engine evaluates | **Foundation's**, restored in P0 — `tests/fetch.m` filters on `age > 30` and sorts by a descriptor |
+| `includesPendingChanges` | **the reason the engine is not in the store**: an unsaved insert has no row, so the engine asks the CONTEXT for pending objects and merges by identity |
+| The census | **16 of 21 classes, 272 of 272 offered selectors**. Remaining: **5 classes, 59 selectors** — W6's migration |
+
+Three defects the first caller found, two of them in code this plan had already declared done:
+
+1. **`-propertiesByName` did not include inherited properties.** An `Employee` could not answer `name` because
+   only a `Person` declares it, so every inherited write was an unmodelled key. Apple's contract is explicit and
+   now implemented — and the three places that gathered values from `-properties` (the atomic store's node
+   writer, the coordinator's save, the engine's dictionary shaper) had to move with it, or a subentity's
+   inherited attributes would silently never be stored.
+2. **The predicate family's `-copy` raised.** `NSObject.h` removed every `NSZone`-taking method, so the copying
+   protocol's member is `-copy`; all four classes implemented Cocoa's `-copyWithZone:` instead, and
+   `-setPredicate:` — which copies — failed in one line. Fixed in `libagora-base` and committed there.
+3. **`-propertiesToFetch` had to accept key names.** Apple documents the array as property descriptions, but
+   nearly every caller writes strings, and the engine raised `-[NSTinyString name] is not implemented` at the
+   caller's expense. Both forms are accepted now.

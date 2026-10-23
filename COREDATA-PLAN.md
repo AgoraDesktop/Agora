@@ -1086,3 +1086,27 @@ declaration the header had omitted — the **deprecated** `+metadataForPersisten
 declares on `NSPersistentStoreCoordinator` as well as on `NSPersistentStore`. The instrument found it, not a
 reader; the gate was consistent all along, because it was comparing 271 to 271. A plan that reports its own
 arithmetic failure is worth more than one that quietly corrects the table.
+
+
+### 0.8 Where W6 stands — and what "complete" does and does not mean
+
+| W6 item | State |
+|---|---|
+| The five migration classes (59 selectors) | **landed**: `NSMappingModel`, `NSEntityMapping`, `NSPropertyMapping`, `NSMigrationManager`, `NSEntityMigrationPolicy`, and the six migration context keys |
+| The inference (§9.1) | **landed in both directions**: an entity in both models becomes a copy or a transform (a transform when its hash changed), one only in the destination an add, one only in the source a remove. A destination property with no source namesake gets **no** mapping — it keeps its default rather than being produced from nothing |
+| The three passes (§9) | **landed and run**: creation for every source instance, then relationships for every destination instance, then validation. The passes are separate because a relationship can only be rebuilt once every destination object exists |
+| The association table | **landed**: `-destinationInstancesForEntityMappingNamed:sourceInstances:` and its inverse, keyed by **object ID** so two contexts' objects for one row agree |
+| Migration, actually performed | **measured**: the suite seeds a source context, runs an inferred mapping model, and reads a value the default policy copied into the destination |
+
+**Measured: 21 of 21 classes, 331 of 331 selectors, `classes-missing 0`, `selectors-missing 0`,
+`methods-declared-not-implemented 0`. M1 — the declared surface — is complete.**
+
+That sentence is true and it is worth being exact about what it does not say. **Declared is not durable.** Three of
+the four store types still refuse by name — `NSSQLiteStoreType`, `NSXMLStoreType` and `NSBinaryStoreType` return
+`NSPersistentStoreInvalidTypeError` with a reason that names W7 — and so does every option that belongs to them
+(`NSSQLitePragmasOption`, `NSReadOnlyPersistentStoreOption`, the external-records keys). What exists is the whole
+object graph against an in-memory store, which is a real application's worth of Core Data minus the file.
+
+So the milestones stand as: **M1 done**; **M2** done except its binary and XML stores; **M3** (SQLite and migration
+against a file) untouched. **The remaining work is W7, and it is one wave of serialisation — not a set of missing
+declarations.**

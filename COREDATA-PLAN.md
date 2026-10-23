@@ -116,9 +116,31 @@ Two things W1 found by measuring rather than recalling:
 - **`NSMutableArray.h` and `NSMutableDictionary.h` do not exist**, as with `NSMutableString`/`NSMutableSet`: the
   mutable class lives in the immutable one's header. Three files had to stop importing them.
 
-Remaining: **14 classes, 232 selectors**. Next is W2 (`NSManagedObject`, `NSManagedObjectID`) and W3
-(`NSManagedObjectContext`) — and the census should be wired as a `ctest` gate before either of them grows the
-number, so that 99 is pinned rather than reported.
+Remaining after W1: 14 classes, 232 selectors.
+
+### 0.4 Where W2 stands, and the census is a gate
+
+| W2 item | State |
+|---|---|
+| The object pair (41 selectors) | **landed**: `NSManagedObjectID` (4) and `NSManagedObject` (37) |
+| The two-dictionary value store | **landed**: `_committed` is what the store holds, `_changed` is the diff; `NSNull` carries "explicitly nil"; re-stamping a committed value is not a change |
+| The access chokepoint | **landed**: every modelled key routes `-valueForKey:`/`-setValue:forKey:` through `-willAccessValueForKey:` (the fault door) and `-willChangeValueForKey:` (the KVO door) |
+| Validation | **landed, and it took three attempts to get right** — see below |
+| The census | **now a `ctest` gate**: `coredata-api-census` runs `api-ledger census` against the built library and holds `tests/coredata-census.txt`, in both directions. Perturbing one pin produced *"the 10.6 API census has drifted, in 2 place(s)"* naming both the metric and the consistency rule |
+
+**Measured after W2: 9 of 21 classes, 140 of 140 offered selectors, `selectors-missing 0`,
+`methods-declared-not-implemented 0`.** Remaining: **12 classes, 191 selectors.**
+
+Three things W2 found by measuring, in the order they failed:
+
+1. **`-[Person valueForKey:@"SELF"]` raised.** `SELF.age >= 0` is how Apple's validation predicates are written,
+   and KVC resolves that path by asking the object for `SELF` first. `NSManagedObject` must answer it with
+   itself — Apple's does, for this reason — or every SELF-qualified predicate raises instead of evaluating.
+2. **Validation must judge the CANDIDATE value, not the stored one.** `-validateValue:forKey:error:` takes
+   `id *` rather than `id` precisely so the value can be swapped in, judged and restored; evaluating against the
+   object's current value validates the previous value. The diff entry is saved and restored exactly, so
+   validation leaves no change behind.
+3. **`NSMutableArray.h`/`NSMutableDictionary.h` do not exist** (the W1 lesson recurring in two more files).
 
 ---
 

@@ -1110,3 +1110,33 @@ object graph against an in-memory store, which is a real application's worth of 
 So the milestones stand as: **M1 done**; **M2** done except its binary and XML stores; **M3** (SQLite and migration
 against a file) untouched. **The remaining work is W7, and it is one wave of serialisation — not a set of missing
 declarations.**
+
+
+### 0.9 Where W7 stands — and what is left
+
+| W7 item | State |
+|---|---|
+| `store/sqlite/SCHEMA.md` | **written and committed BEFORE the first table**, as §7.1 requires: the DDL, why the values are four typed columns rather than one blob, why the metadata is an opaque plist, and what is refused |
+| `NSSQLiteStoreType` | **landed** against that schema: DDL, one transaction per save, pragmas from `NSSQLitePragmasOption`, `ANALYZE`/`VACUUM`, and `+metadataForPersistentStoreOfType:URL:error:` answered without a stack |
+| `NSBinaryStoreType` | **landed**: a keyed archive of `{metadata, nodes}` |
+| `NSXMLStoreType` | **landed**: the same tree as an XML property list, which is parseable XML that keeps the value types; `NSValidateXMLStoreOption` re-serialises what it parsed |
+| Apple-authored stores (D1-b) | **refused by name**: the version hashes cannot match, so opening one fails with `NSPersistentStoreIncompatibleVersionHashError` |
+| The census | **21 of 21 classes, 331 of 331 selectors, `methods-declared 361`, `methods-declared-not-implemented 0`**. The three stores are private classes, so W7 moved `methods-declared` and not a single manifest selector — which is the right shape: the public surface is the store *types* |
+
+**Two bugs W7's suite found, and both had shipped:**
+
+1. **The coordinator never called `-load:` on a store.** `-loadMetadata:` ran and then the store was registered with
+   no contents — so the write path worked, the file was correct, and **every read returned zero rows**. Found by
+   the first test that wrote a file and opened a *fresh* stack on it; nothing before W7 had ever read a store back.
+2. **This Foundation's property-list writer refuses the binary format**, with a named error. The SQLite metadata
+   blob uses XML v1.0 now. The refusal was correct and the store was wrong to assume otherwise.
+
+**One gap, stated: relationships are not persisted.** `NSAtomicStore -updateCacheNode:fromManagedObject:` skips
+relationship properties, because a relationship's value is another managed *object* and a node is scalar values.
+The storage half (write the related row's key) is trivial; the resolution half — translating a key back into an
+object when a fault fires — is the next slice, and writing a wrong-typed value instead would have been worse than
+this note.
+
+**So: M1 complete, M2 complete for the in-memory, binary and XML stores and for the object graph, M3 complete
+except relationship persistence.** What remains is that one slice, and the W8 AppKit seam (`NSPersistentDocument`),
+which is blocked on nothing here — only on the AppKit's own controller wave.

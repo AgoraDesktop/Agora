@@ -15,6 +15,7 @@
 # Mac's behaviour, and it is the thing this demo exists to show.
 #
 # Usage:  demo/agora-demo.sh [WIDTHxHEIGHT]
+#         AGORA_DPI=92 demo/agora-demo.sh 1280x720   forces the compositor's scale (dots per inch)
 # Ctrl-C stops everything.
 set -u
 
@@ -40,6 +41,13 @@ done
 GEOM="${1:-1280x720}"
 W="${GEOM%x*}"
 H="${GEOM#*x}"
+# **A MULTI-HEAD X SCREEN MAKES THE DERIVED SCALE TOO LARGE, SO THE DEMO CAN FORCE IT.** `DisplayWidth` spans every
+# monitor while `DisplayWidthMM` describes one, so two 1080p panels side by side read as twice the dpi a single
+# panel has. AGORA_DPI states the panel's own number and is passed to the compositor as `--dpi`.
+DPI=()
+if [ -n "${AGORA_DPI:-}" ]; then
+	DPI=(--dpi "${AGORA_DPI}")
+fi
 
 export DISPLAY="${DISPLAY:-:1}"
 # The AppKit's own dependencies live in the install prefix, and DT_RUNPATH is not inherited by a dependency.
@@ -89,7 +97,7 @@ trap cleanup EXIT INT TERM
 # 1. THE COMPOSITOR. `--input host` routes the pointer and keyboard that THIS WINDOW is given, which is why the
 #    scene can be left open without taking the host desktop's input away.
 # ---------------------------------------------------------------------------------------------------------------
-"$SERVER_BIN" --backend x11 --input host --socket "$SOCK" --frames 0 --width "$W" --height "$H" \
+"$SERVER_BIN" --backend x11 --input host --socket "$SOCK" --frames 0 --width "$W" --height "$H" "${DPI[@]}" \
 	>/tmp/agora-demo-server.log 2>&1 &
 SPID=$!
 for _ in $(seq 1 60); do

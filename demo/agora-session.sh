@@ -17,6 +17,7 @@
 #         AGORA_DESKTOP=/path demo/agora-session.sh
 #         AGORA_WALLPAPER=/path/to/image.jpg demo/agora-session.sh
 #         AGORA_DOCK_POSITION=left demo/agora-session.sh     # the Dock's alternative side
+#         AGORA_DPI=57.97 demo/agora-session.sh              # force the output scale (dots per inch)
 # Ctrl-C stops everything.
 set -u
 
@@ -43,6 +44,13 @@ done
 GEOM="${1:-1280x720}"
 W="${GEOM%x*}"
 H="${GEOM#*x}"
+# **A MULTI-HEAD X SCREEN MAKES THE DERIVED SCALE WRONG, SO THE SESSION CAN FORCE IT.** `DisplayWidth` spans every
+# monitor while `DisplayWidthMM` describes one, so the derived dpi is not the panel's. AGORA_DPI states the real
+# number and is passed to the compositor as `--dpi`; it applies to the X11 backend only.
+DPI=()
+if [ -n "${AGORA_DPI:-}" ]; then
+	DPI=(--dpi "${AGORA_DPI}")
+fi
 
 export DISPLAY="${DISPLAY:-:1}"
 # The AppKit's dependencies live in the install prefix, and DT_RUNPATH is not inherited by a dependency. The build
@@ -99,7 +107,7 @@ trap cleanup EXIT INT TERM
 # 1. THE COMPOSITOR. `--input host` routes the pointer and keyboard that THIS WINDOW is given, so the session can
 #    be left open without taking the host desktop's input away.
 # ---------------------------------------------------------------------------------------------------------------
-"$SERVER_BIN" --backend x11 --input host --socket "$SOCK" --frames 0 --width "$W" --height "$H" \
+"$SERVER_BIN" --backend x11 --input host --socket "$SOCK" --frames 0 --width "$W" --height "$H" "${DPI[@]}" \
 	>/tmp/agora-session-server.log 2>&1 &
 SPID=$!
 for _ in $(seq 1 60); do
@@ -135,12 +143,20 @@ sleep 0.5
 # ---------------------------------------------------------------------------------------------------------------
 # 3. THE WALLPAPER: ONE FRAME, THEN HOLD. It redraws on every frame callback, so a still picture asks for one frame
 #    rather than becoming a frame-rate generator.
+#
+#    **AND IT RENDERS AT THE COMPOSITOR'S OWN SCALE, BECAUSE IT IS THE ONE CLIENT THAT DOES NOT SPEAK `wl_output`.**
+#    Every AppKit application reads `wl_output.scale` and renders at that integer factor; the raw test client used as
+#    the wallpaper does not, so a 1x wallpaper on a 1.333x output is magnified by the compositor and looks soft. The
+#    factor is the scale the server just printed, rounded up — the same `ceil` the server advertises — and 1 (the
+#    client's own default) when the line cannot be read.
 # ---------------------------------------------------------------------------------------------------------------
+OUTPUT_SCALE=$(sed -n 's/.*(scale \([0-9.]*\).*/\1/p' /tmp/agora-session-server.log | head -1)
+WALLPAPER_SCALE=$(awk -v s="${OUTPUT_SCALE:-1}" 'BEGIN { n = int(s); if (n < s) n++; if (n < 1) n = 1; print n }')
 if [ -f "$WALLPAPER" ]; then
-	WAYLAND_DISPLAY="$SOCK" "$CLIENT_BIN" --width "$W" --height "$H" --image "$WALLPAPER" \
+	WAYLAND_DISPLAY="$SOCK" "$CLIENT_BIN" --width "$W" --height "$H" --image "$WALLPAPER" --buffer-scale "$WALLPAPER_SCALE" \
 		--x 0 --y 0 --level $(( -2147483648 + 20 )) --frames 1 --hold >/dev/null 2>&1 &
 else
-	WAYLAND_DISPLAY="$SOCK" "$CLIENT_BIN" --width "$W" --height "$H" --colour 48240E \
+	WAYLAND_DISPLAY="$SOCK" "$CLIENT_BIN" --width "$W" --height "$H" --colour 48240E --buffer-scale "$WALLPAPER_SCALE" \
 		--x 0 --y 0 --level $(( -2147483648 + 20 )) --frames 1 --hold >/dev/null 2>&1 &
 fi
 WALLPID=$!

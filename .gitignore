@@ -3,6 +3,8 @@
 
 # Agent/runtime state
 /.reasonix/
+# Machine-local agent notes: recorded DPI, host quirks. Never upstream.
+/AGENTS.md
 
 # Local logs
 *.log

@@ -1386,3 +1386,23 @@ just written. And an unknown selector reaches `-doesNotRecognizeSelector:` rathe
 
 With this the predicate grammar covers what `tests/predicate.m` exercises: literals, key paths, variables, the
 comparison operators, `AND`/`OR`/`NOT`, the set and string operators, aggregates, and `FUNCTION(…)`.
+
+
+### 0.17 SQL-backed fetch — the WHERE selects the rows, not just the count
+
+| Piece | State |
+|---|---|
+| The store's query door | `CDSQLiteStore -cd_objectIDsForFetchRequest:error:` — `SELECT o.object_key, e.name … WHERE e.name = ? AND (<translated>)`, one statement built by the same `-cd_prepareForRequest:select:error:` the count uses, so the two **cannot disagree about the WHERE** |
+| The coordinator | asks SQL when one store can answer it; builds only the matching objects (`objectWithID:` per hit) and lets `CDFetchShape` sort, page and shape the result |
+| The fallbacks | three, the same as the count door: more than one store, a request scoped with `-setAffectedStores:`, or **pending changes SQL has never seen**. All answer nil, and the scan runs |
+| The test | the equivalence is now for **results**, not just counts: for six predicates the suite builds its own reference — fetch everything, filter with the same predicate in the test — and compares identity sets. **29 checks** |
+
+Measured at 5,000 rows: count via SQL 0.009 s, count via scan 0.016 s, fetch via SQL 0.015 s, fetch of everything
+0.012 s. **At this size the two are indistinguishable, and the reason is worth stating rather than hiding:** the store
+still loads *every* node in `-load:`, so pushdown saves building managed objects and not the node load. The next
+step is not a translator at all — it is a store that does not read the file eagerly, which is a change to W4's
+`NSAtomicStore` contract and its own slice.
+
+**And one bargain, made explicit:** the predicate is **not** re-evaluated on what SQL returned. Re-checking would hide
+a translator bug behind a second, in-memory answer; the equivalence suite is the guard instead — the same bargain the
+count door makes, and the reason both were tested that way before either was trusted.

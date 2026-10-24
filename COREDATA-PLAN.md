@@ -1440,3 +1440,28 @@ predicate, pending changes, more than one store) now iterates object IDs and fau
 SELECT per row instead of one file read. Pushing predicates down stopped being an optimisation and became the normal
 path on a big store, and the next step is a **batched** node read for the scan: one `IN (…ids…)` per chunk rather
 than one statement per object.
+
+
+### 0.19 The batched scan, and `ORDER BY`/`LIMIT` in SQL
+
+| Piece | State |
+|---|---|
+| The scan's reads | **batched**: `-cd_prefetchNodesForObjectIDs:` groups the candidates by entity and reads them **200 at a time** (`IN (?,?,…)`), so a 10^5-row scan is 500 statements rather than 100,000. The base class no-ops, so the eager stores are untouched |
+| Ordering | **in SQL**: each sort descriptor becomes a correlated scalar subquery over the EAV table — the same shape the `WHERE` uses — so `ORDER BY age` costs one subquery per row and the order is settled before any object exists |
+| Paging | **in SQL**: `LIMIT ? OFFSET ?`, bound as integers |
+| The double-paging guard | `-cd_canPushDownOrderingForRequest:` tells the caller, and `CDFetchShapeAfterSQL` **skips** the sort and the paging when the store did them. Paging a page is the classic bug this exists to prevent, and the test was written before the code |
+| The suites | `tests/lazy.m` **14 checks** — the batched scan over 5,000 rows in **0.049 s** — and `tests/pushdown.m` **32 checks**, including three ordered+paged fetches compared against a slice of a sort done in the test |
+
+**`ORDER BY` IS REFUSED WHEN IT CANNOT BE HONEST:** a sort on a relationship, a selector, a blob, or a request that
+asks for `returnsDistinctResults` returns NO from `-cd_canPushDownOrderingForRequest:` and is sorted in memory. A
+distinct page is a page of distinct rows, and SQL's `DISTINCT` before `ORDER BY`/`LIMIT` is not that.
+
+**THE BUG THIS WAVE TOOK LONGEST TO FIND WAS NOT NEW.** Three suites failed at once — `serialisation`,
+`lazy` and `pushdown` — and the cause was one missing loop: `-cd_objectIDs` had lost its row-reading loop in an
+earlier edit and returned nothing at all. Everything downstream looked broken: the scan found no candidates, so
+`IN`, `BETWEEN` and `FUNCTION(...)` disagreeing with their references; a lazy store reported no rows. **The lesson is
+the one §0.12 already recorded and it was not applied:** an edit that removes a loop compiles cleanly, and only a
+suite that reads rows back can see it. A `-Wunused` flag would not have; the three suites did.
+
+Also fixed here: the prefetch's decoder **retained a data value and then autoreleased it twice** — an over-release that
+surfaced as wrong scan results rather than as a crash, which is the worst kind.

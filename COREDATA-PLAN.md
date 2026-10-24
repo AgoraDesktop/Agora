@@ -1331,3 +1331,38 @@ own version, the bundle door finds and merges, an empty `.momd` raises rather th
 *implementation*, and the suite that asserted the refusal fails. `tests/migration.m` was updated to Apple's contract
 (`nil` when no `.cdm` fits) rather than the refusal being kept to keep an old test green. The refusal was honest when
 it was written; the assertion is not allowed to freeze it.
+
+
+### 0.15 Predicate pushdown — the count is answered by SQLite now
+
+| Piece | State |
+|---|---|
+| The translator (§8.2) | **landed** in `CDSQLPredicate.m`: a predicate tree becomes a `WHERE` fragment over the EAV schema, with **every value a bound parameter** and only the attribute name a literal (escaped) |
+| Operators | comparisons (`<`, `<=`, `>`, `>=`, `==`, `!=`), `BEGINSWITH`, `ENDSWITH`, `CONTAINS`, `LIKE`, `IN`, `BETWEEN`, `AND`/`OR`/`NOT`, and **reversed operands** (`40 < age` flips the ordering operator) |
+| The door it answers | `-countForFetchRequest:error:` — the store counts, and the context asks the store first. A store that cannot translate answers **-1** and the scan is the reference (§8.4) |
+| The equivalence test | **20 checks**: every predicate is asked twice — once through SQL, once by fetching everything and counting — and the two must agree. Plus three fallbacks: a block predicate, a key-path-to-key-path comparison, and pending changes |
+
+Measured at 5,000 rows on a cold stack: **count via SQL 0.010 s, count via scan 0.066 s** — and the ratio is the point
+rather than the number, because the scan's cost grows with the file and SQL's does not.
+
+**THREE BUGS THIS SLICE FOUND, TWO OF THEM IN CODE THIS PLAN HAD CALLED DONE:**
+
+1. **An uninitialized local produced the wrong SQL.** `NSString *valueSQL;` was assigned only by the string operators,
+   so `if (valueSQL == nil)` read **garbage** — which happened to alias the LIKE clause. `age >= 50` therefore
+   generated `v.ival LIKE ? ESCAPE '\'`, bound no parameter, and matched zero rows, while every string operator
+   worked. The equivalence test caught it in one run; nothing else would have.
+2. **`[block copy]` on a block segfaults.** `+predicateWithBlock:` — written in P0 and never called until this suite —
+   did `_block = [block copy]`, which dies inside `objc_msgSend`. The house rule is stated in `NSOperationQueue.h`
+   ("a block is not an ordinary object": `Block_copy` and `Block_release`), and the rest of the tree follows it.
+   Fixed in `NSPredicate.m` and in `NSExpression`'s block payload.
+3. **`LIKE` has two wildcard alphabets.** NSPredicate's `LIKE` is ICU's (`*`, `?`); SQLite's is `%`, `_`. Passing the
+   pattern through unchanged made `name LIKE "person-1%"` match 1,111 rows in SQL and none in the scan — the
+   equivalence test again, and the translator now converts.
+
+**What is deliberately not translated**, each falling back to the scan: relationship quantifiers (`ANY`/`ALL`), a
+comparison between two key paths (needs a join per row), `MATCHES`, custom selectors, blobs and transformables.
+
+**And one gap the test met head-on:** `FUNCTION(receiver, "selector")` is **not in this tree's predicate grammar**.
+The parser reads it as a function named `FUNCTION:`, so it raises "the function `FUNCTION:` is not implemented" — an
+honest refusal, and a real gap in the grammar from P0 that the pushdown suite documented by tripping over it. The
+test uses a key-path-to-key-path comparison as its untranslatable case instead of avoiding the issue.

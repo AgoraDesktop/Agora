@@ -1257,3 +1257,46 @@ optimisation's author had not read.
 **And two of my own expectations were wrong**, corrected in the fixture: the page check assumed numeric ordering for
 string names (`person-10` sorts before `person-2`), and the "new attribute gets no mapping" count. Both are the kind
 of thing a test asserts wrongly for a long time because it passes at small sizes.
+
+
+### 0.13 The sort, and the crash that was not a memory bug
+
+| Item | State |
+|---|---|
+| `-sortedArrayUsingDescriptors:` | **was an insertion sort** — O(n²) comparisons, 16 s for 5,000 rows and 502 s for 20,000. Now a **stable bottom-up merge sort**: 0.31 s and 1.89 s for the same sizes, 18 s for 10⁵. Stability is the tie rule ("a tie takes the LEFT run's element"), so `NSSortStable` still holds without a second rule |
+| `§15.2` #6 — the 10⁵-row workload | **met**: `tests/scale.m` runs 10⁵ rows with relationships, batching and undo, and passes **19 checks** |
+| `§15.3` #8 — SQLite in the behaviour suite | **met**: the same suite writes, reads back through a fresh coordinator, resolves a relationship through a fault, and opens the file read-only |
+
+At 10⁵ rows, with every block enabled:
+
+```
+in-memory  insert 2.45s   process 2.04s   save 6.16s   fetch 0.69s
+           predicate 0.78s   sorted page 18.03s   count 0.66s   undo ~0
+sqlite     insert 2.10s   save 14.55s   load 1.17s   fetch 0.72s
+```
+
+**AND THE CRASH THAT COST MOST OF THIS WAVE WAS NOT A MEMORY BUG.** §0.12 recorded a segfault after the last
+phases and blamed a cache I had just added; the cache was reverted, and it still crashed. `gdb -batch -ex run -ex bt`
+answered it in one line:
+
+```
+#0..#13  -[NSComparisonPredicate fn:compareLeft:right:]
+```
+
+**Infinite recursion.** `NSNotEqualToPredicateOperatorType` was implemented as
+`return ![self fn_compareLeft:l right:r]` — which switches on `_operatorType`, still `NotEqual`, so it called
+itself until the stack ran out. **The first `!=` in the entire test corpus was `department != nil` in this suite**,
+added by W7d. The negation is now computed by deciding equality and inverting it, and `tests/predicate.m` gained the
+four cases it was missing (`!=`, `<>`, `!= nil`, and the case-insensitive form).
+
+Three things worth keeping from it:
+
+1. **A suite that tests `==` and not `!=` has a hole**, and it survived P0, W1–W7 and 26 predicate checks because no
+   caller had needed `!=`. Predicates are a *grammar*: every operator needs a case, not just the ones a fixture
+   happens to use.
+2. **`gdb` is worth a minute and guessing is not.** Two hypotheses (the NSSet `-dealloc`, then the properties cache)
+   each cost a build, a run and a revert; the backtrace named the frame immediately.
+3. **The cache was innocent and is restored**, in the safe form: `-propertiesByName` hands out the cache itself, so
+   `-cd_invalidatePropertyCaches` **autoreleases** the old dictionary rather than freeing it — a caller may hold it
+   across a model mutation, and a sort descriptor in a fetch request is exactly such a caller. With it the 10⁵ sort
+   is 18 s; without it, 42 s.

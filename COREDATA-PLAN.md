@@ -1465,3 +1465,52 @@ suite that reads rows back can see it. A `-Wunused` flag would not have; the thr
 
 Also fixed here: the prefetch's decoder **retained a data value and then autoreleased it twice** — an over-release that
 surfaced as wrong scan results rather than as a crash, which is the worst kind.
+
+
+### 0.20 Apple's compiled `.mom`/`.cdm` — refused by name
+
+§0.14 left `momc`'s format as a **documented gap**. It is now a **named refusal**, which is the disposition §4.3 asks
+for:
+
+| Door | Refusal |
+|---|---|
+| `-initWithContentsOfURL:` (a `.mom` that is not this library's archive) | `COREDATA-REFUSE Apple's compiled model format (momc): … Apple's .mom is a keyed archive whose CLASS NAMES could be mapped but whose ENCODER KEYS are undocumented, and no compiled Core Data model exists on this machine to measure them against: archive a model with NSKeyedArchiver instead` |
+| `+mappingModelFromBundles:…` / `-initWithContentsOfURL:` (a `.cdm`) | the same, naming `.cdm` |
+
+**Every refusal in this component now goes through one helper** (`CDRefuse`) that logs a single
+`COREDATA-REFUSE <name>: <reason>` line and returns the `NSError` carrying the same reason — so a refusal is countable
+and visible in a log without a debugger, the way `APPKIT-REFUSE` is in the AppKit. `tests/bundles.m` holds it: a keyed
+archive that is not a model must be refused **and its reason must name the format**, because a caller has to be able
+to tell a corrupt file from a format this tree does not read.
+
+The reason the refusal is the right disposition rather than a to-do: `NSKeyedUnarchiver` *can* map Apple's class names
+(`+setClass:forClassName:`), so the remaining work is the **encoder keys** — and there is still no compiled Core Data
+model on this machine to measure them against. A decoder written from recollection against an unseen file is the
+failure mode §0.14 exists to prevent.
+
+
+### 0.21 The AppKit seam — `NSPersistentDocument`, the one class that is the AppKit's
+
+| Piece | State |
+|---|---|
+| `NSPersistentDocument` (9 selectors) | **landed** in `libagora-app`, over `NSDocument`'s existing hooks: `-readFromURL:ofType:error:`, `-writeToURL:ofType:forSaveOperation:originalContentsURL:error:` and `-revertToContentsOfURL:ofType:error:` |
+| Store type | `-persistentStoreTypeForFileType:` answers **`NSXMLStoreType`**, which is 10.6's documented default and the reason §7.2 ordered the XML store before this class |
+| The dependency | `libagora-app` now finds and links `AgoraData::Data` **PUBLIC** — `NSPersistentDocument.h` names Core Data's types, so a consumer of the AppKit reaches Core Data itself, exactly as it reaches Foundation and Core Graphics |
+| The census | **`classes-present 137 → 138`, `methods-declared 5205 → 5214`, `selectors-present 4645 of 4645`** — the *first* wave in this plan to move the AppKit's census, and it moved it by exactly the class and selectors the manifest promised |
+| The test | `tests/persistent_document.m`, **10 checks**: a document opens a new file, records where it lives, saves its graph, a *fresh* document reads the row back, and `-revertToContentsOfURL:` drops an unsaved insertion while keeping the file's row |
+
+**TWO THINGS THE FIRST RUN TAUGHT, both about ownership of the write:**
+
+1. **The document's bytes ARE the store**, so `-writeToURL:` must not ask `NSDocument` for data. The first version
+   called `[super writeToURL:…]`, which asks for `-dataOfType:error:` or a file wrapper — a persistent document has
+   neither — and answered **NO for a document that had in fact saved**. The store the coordinator wrote is the file.
+2. **`-readFromURL:` has to record the URL** (`-setFileURL:`/`-setFileType:`), or the save-as comparison in
+   `-writeToURL:` can never be true and every save reconfigures the store.
+
+**And one bug in the fixture, which is the same shape as §0.13's:** the test's `-managedObjectModel` built a **fresh
+model on every call**, so each fetch was handed an entity from a different model and identity matching found nothing.
+The suite reported it as "the saved row is not there" — a fixture bug wearing a framework bug's clothes.
+
+**What is NOT done at this seam, and it is not this library's:** `NSObjectController` and `NSArrayController` (the 11
+Core Data selectors on the former, W8.2) are absent from the AppKit and are its own 10.6 debt; `NSPredicateEditor` and
+`NSPredicateEditorRowTemplate` (W8.3) likewise. A document with no controllers is still a document.

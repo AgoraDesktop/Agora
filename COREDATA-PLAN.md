@@ -1366,3 +1366,23 @@ comparison between two key paths (needs a join per row), `MATCHES`, custom selec
 The parser reads it as a function named `FUNCTION:`, so it raises "the function `FUNCTION:` is not implemented" — an
 honest refusal, and a real gap in the grammar from P0 that the pushdown suite documented by tripping over it. The
 test uses a key-path-to-key-path comparison as its untranslatable case instead of avoiding the issue.
+
+
+### 0.16 `FUNCTION(receiver, "selector")` — the grammar gap §0.15 met
+
+| Piece | State |
+|---|---|
+| The parser | `FUNCTION(a, "selector" [, args…])` is **not** a function named `FUNCTION:`: the receiver is parsed first, the selector is taken from the **constant expression** the quoted string parses to, and the rest are arguments. `+expressionForFunction:selectorName:arguments:` was already there and unused |
+| The evaluator | the selector form invokes `-performSelector:`, `-performSelector:withObject:` or `-performSelector:withObject:withObject:` — the three that `NSObject.h` declares — and refuses more than two arguments by name |
+| The renderer | a selector form prints back as `FUNCTION(_, "sel", …)` rather than `sel(x)`, so `-predicateFormat` round-trips and a predicate that cannot render itself cannot be saved |
+| The suite | `tests/predicate.m` grew from 26 to **35 checks**: the positive case, the negative, the round trip, and an unknown selector refusing |
+| The pushdown suite | its untranslatable example is `FUNCTION(...)` again, which is what the gap was found by — 21 checks now |
+
+**Two things worth naming from a small slice.** The selector arrives as an **expression**, not a string — every
+argument is parsed as an expression and a quoted string parses to `expressionForConstantValue:`, so the first version
+of the check (`[selector isKindOfClass:[NSString class]]` on the *expression*) failed on text this plan itself had
+just written. And an unknown selector reaches `-doesNotRecognizeSelector:` rather than a message of mine, because
+`NSSelectorFromString` answers a `SEL` for any name — which is still a named refusal, and the test holds it to that.
+
+With this the predicate grammar covers what `tests/predicate.m` exercises: literals, key paths, variables, the
+comparison operators, `AND`/`OR`/`NOT`, the set and string operators, aggregates, and `FUNCTION(…)`.

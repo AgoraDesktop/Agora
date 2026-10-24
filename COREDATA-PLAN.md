@@ -1300,3 +1300,34 @@ Three things worth keeping from it:
    `-cd_invalidatePropertyCaches` **autoreleases** the old dictionary rather than freeing it — a caller may hold it
    across a model mutation, and a sort descriptor in a fetch request is exactly such a caller. With it the 10⁵ sort
    is 18 s; without it, 42 s.
+
+
+### 0.14 `.momd`, `.mom`, `.cdm` — a model that lives in a directory
+
+| Door | Before | Now |
+|---|---|---|
+| `+mergedModelFromBundles:` | **refused by name** — "needs a compiled model reader" | finds every `.momd` and `.mom` in the bundles, loads them and merges; still refuses when it finds nothing, because an empty model returned "successfully" is the failure the refusal prevented |
+| `-initWithContentsOfURL:` | a file only | a **`.momd` directory** too: `VersionInfo.plist` names the current version and `<version>.mom` is loaded; without a `VersionInfo` every `.mom` in it is merged |
+| `+mappingModelFromBundles:forSourceModel:destinationModel:` | refused by name | finds every `.cdm`, and returns **the first one that fits the two models** — a mapping whose entity names are not in them is a mapping for another pair of versions, and returning it would migrate by guess |
+
+`tests/bundles.m`, 10 checks: the directory form loads the version `VersionInfo.plist` names, the file form loads its
+own version, the bundle door finds and merges, an empty `.momd` raises rather than answering an empty model, and the
+`.cdm` door finds the mapping and declines one that does not fit.
+
+**WHAT THIS DOES NOT DO, AND THE EVIDENCE FOR SAYING SO.** It reads the archive **this library writes** — an
+`NSKeyedArchiver` archive of `NSManagedObjectModel`, which is what "compiled" means here. It does **not** read
+`momc`'s output. Two facts decided that rather than a preference:
+
+1. **There is no compiled Core Data model on this machine to read.** A search for `*.mom`/`*.momd`/`*.cdm` found only
+   groff macro files (`.mom` is also a groff package's extension, which is a coincidence worth writing down because it
+   is exactly how a search "succeeds" and proves nothing).
+2. **The mechanism exists; the keys do not.** `NSKeyedUnarchiver` has `+setClass:forClassName:`, so Apple's private
+   class names could be mapped onto ours. What is missing is Apple's **encoder keys** — an `-initWithCoder:` that
+   reads what `momc` wrote — and those are undocumented, so reverse-engineering them needs a sample file. That is the
+   recipe for the day one exists: map the class names, dump the key set, and write the decoder against what the dump
+   says rather than against recollection.
+
+**And one pattern worth naming, because it happened four times in this plan:** a door that was a *refusal* becomes an
+*implementation*, and the suite that asserted the refusal fails. `tests/migration.m` was updated to Apple's contract
+(`nil` when no `.cdm` fits) rather than the refusal being kept to keep an old test green. The refusal was honest when
+it was written; the assertion is not allowed to freeze it.

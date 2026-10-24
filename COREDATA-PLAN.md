@@ -1406,3 +1406,37 @@ step is not a translator at all — it is a store that does not read the file ea
 **And one bargain, made explicit:** the predicate is **not** re-evaluated on what SQL returned. Re-checking would hide
 a translator bug behind a second, in-memory answer; the equivalence suite is the guard instead — the same bargain the
 count door makes, and the reason both were tested that way before either was trusted.
+
+
+### 0.18 The eager-load limit — a store that reads one row when asked
+
+| Piece | State |
+|---|---|
+| `-load:` | **opens the file and checks the schema, and reads no values.** It used to join `agora_object`, `agora_entity` and `agora_value` and build a node per row — 100,000 rows of work before the first fetch, every launch |
+| Which rows exist | `-cd_objectIDs`: a two-column `SELECT o.object_key, e.name`, no values at all |
+| One row | `-cd_cacheNodeForObjectID:`: a per-id `SELECT` over `agora_value`, decoded by type, **cached directly** — a read is not a write, so it is not put in the dirty set |
+| Saving | **incremental**: `NSAtomicStore` tracks dirty nodes and removed IDs; the store deletes those rows, writes those nodes, replaces each written object's value rows in one transaction, and clears the tracking |
+| The suites | **`tests/lazy.m`, 13 checks**, including the regression that matters: write 5,000 rows, open a fresh stack, change ONE object, save, then read all 5,000 back through a third stack |
+
+Measured: **open a 5,000-row file 0.001 s** (it was a whole-file node load), fetch by predicate 0.006 s, fetch-all
+0.012 s.
+
+**FOUR BUGS, AND ONLY ONE OF THEM WAS IN THE NEW CODE:**
+
+1. **An update did not mark the node dirty**, so an edit to a row the store had already *read* was never written —
+   silent data loss with no error anywhere.
+2. **The save path used the eager cache door** (`cacheNodeForObjectID:`) instead of the lazy one, so an update to a
+   row nobody had read started from an empty node.
+3. **An unread property was written back as nil, wiping the row's value.** `-primitiveValueForKey:` does not fire a
+   fault, so an unfetched property answers nil — one edited object came back from the file with its `name` gone. The
+   fix distinguishes *changed* (including explicitly cleared) from *never read*, using the object's own diff and
+   snapshot. **`tests/lazy.m` checks identity as well as count, which is the only reason this was not shipped** — a
+   row count would have said 5,000 either way.
+4. **The per-row reader had no `array` case**, so every to-many relationship vanished from a lazily-read store. Found
+   by the existing serialisation suite, twenty minutes after the new one was green.
+
+**The cost that this wave creates, stated rather than discovered later:** the *scan* fallback (an untranslatable
+predicate, pending changes, more than one store) now iterates object IDs and faults each row individually — one
+SELECT per row instead of one file read. Pushing predicates down stopped being an optimisation and became the normal
+path on a big store, and the next step is a **batched** node read for the scan: one `IN (…ids…)` per chunk rather
+than one statement per object.

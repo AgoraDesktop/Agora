@@ -630,19 +630,28 @@ is: the empty substitution is keyed on the immutable concrete class. Both mutabl
 the immutable's designated constructor, and `AGArraySmall` starts from the super's designated constructor with an empty
 list before filling its inline storage. The collection family is closed.
 
-`designated-present` 32 → 40, `designated-missing` 110 → 102. **The measured residue, from `annotate`'s dry run rather
-than from the earlier estimate (which undercounted it):** 102 unmarked facts, of which 16 are `NSNumber`'s refused
-constructors and 2 more are `NSDecimalNumber`'s (unreachable for the same cluster reason) — so **84 facts on 54–18
-headers remain**, producing roughly 70 diagnostics. The size order is the batch order: the scripting family
-(`NSScriptObjectSpecifiers.h` 8 warnings, `NSScriptWhoseTests.h` 8, `NSScriptCommand.h` 2), `NSFileWrapper` (7),
-`NSMachPort` + `NSSocketPort` (14), `NSString` (8), then the 1–2-site classes (`NSValue`, `NSIndexSet`, `NSIndexPath`,
-`NSInputStream`, `NSOutputStream`, `NSHashTable`, `NSMapTable`, `NSNotification`, `NSPointerArray`, `NSScript…`,
-`NSArchiver`, `NSLocale`, `NSAppleEventDescriptor`, `NSComparisonPredicate`, `NSExpression`, `NSAppleScript`,
-`NSBundle`, `NSFileHandle`).
-`NSDictionary`/`NSSet`/
-`NSOrderedSet`/`NSCountedSet`/`NSArray`/`NSCharacterSet` (39, the collection family) → `NSString`/`NSFileWrapper`/`NSMachPort`/
-`NSSocketPort` (29) → the scripting six (14) → the 1–3-site tail (26) → the number cluster (57) last, because it is the
-only group whose disposition is a decision rather than a recipe.
+`designated-present` 32 → 40, `designated-missing` 110 → 102.
+
+**THE THIRD BATCH, third part: arrays and ordered sets, 11 sites → 0.** The two coders were designated doors chaining
+to `-initWithArray:`; they call super and make the member storage themselves, and the convenience array doors turn the
+array into the C list. `NSMutableArray -initWithCapacity:` had been calling `[super init]`, which is not a designated door
+of `NSArray` — it calls the canonical constructor with an empty list, safe for the reason the dictionary's capacity door
+is. Both mutable classes owe a CONVENIENCE override of the immutable's designated constructor, and `AGArraySmall` starts
+from the super's designated constructor with an empty list. The collection family is closed.
+
+**THE FOURTH AND FIFTH BATCHES.** The scripting family (15 sites: `NSScriptObjectSpecifier`'s six concrete kinds,
+`NSLogicalTest`, and the command/class-description doors) closed by giving the six specifier subclasses a CONVENIENCE
+override of the base's designated door — routing to each subclass's own door, so no new mark and `designated-extra`
+stays at 2. `NSFileWrapper` + `NSMachPort` (14 sites) closed the other shapes: a wrapper `-init` routes to
+`-initRegularFileWithContents:nil`, an inherited coder door needed a HEADER DECLARATION to carry its mark (candidates
+142 → 143), and the port's two `initWithMachPort:` refusals keep the local pragma.
+
+**THE MEASURED POSITION NOW, AND THE RESIDUE.** `designated-present` 63, `designated-missing` 80, candidates 143,
+`designated-extra` 2, `methods-declared` 4,045. With every remaining mark placed the library emits **98 diagnostics in 21
+files**; 56 of them are the number cluster's (`NSNumber` 34, `NSDecimalNumber` 22 — §4.15 refuses the marks). The scope
+is therefore 146, **104 are closed**, and **42 remain in 19 files**: `NSSocketPort` 8, `NSString` 5, `NSDate` 4,
+`NSDataDetector` 3, and fifteen 1–2-site classes. `DESIGNATED-INITIALIZER-HANDOFF.md` reproduces that table and the
+order to take it in; the marks for the residue are reverted so the tree stays warning-free.
 
 ---
 

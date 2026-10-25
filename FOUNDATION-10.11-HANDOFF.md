@@ -349,17 +349,11 @@ sites across 13 files; the rules are in §4.15 and every batch so far has been o
 11 sites to 0 (`24e7ca4`): `NSArray`, `NSMutableArray`, `NSOrderedSet`, `NSMutableOrderedSet`, plus `AGArraySmall`.
 The collection family is done: `designated-present` 40, `designated-missing` 102.
 
-**The plan's earlier "1–3-site tail (26)" was an undercount, and `annotate`'s dry run is the authority.** It now says 102
-unmarked declarations in 54 headers. Of those, 18 are refused by decision (`NSNumber` 16, `NSDecimalNumber` 2 — the same
-re-routing cluster), so **84 facts remain, producing roughly 70 diagnostics**, in this size order:
-
-| Group | Warnings |
-|---|---:|
-| scripting (`NSScriptObjectSpecifiers`, `NSScriptWhoseTests`, `NSScriptCommand`) | 18 |
-| `NSFileWrapper` | 7 |
-| `NSMachPort` + `NSSocketPort` | 14 |
-| `NSString` | 8 |
-| 1–2-site classes (values, indexes, streams, hash/map tables, notifications, pointer arrays, archivers, locale,  Apple events, predicate/expression, bundle, file handle, AppleScript) | ~23 |
+**The plan's "1–3-site tail" was an undercount, and the authoritative count is measured, not estimated.** With every
+remaining mark placed the library emits **98 diagnostics in 21 files**: 56 are the number cluster's (refused by decision,
+§5 above and the plan's §4.15), and **42 remain in 19 files** — `NSSocketPort` 8, `NSString` 5, `NSDate` 4,
+`NSDataDetector` 3, and fifteen classes with 1–2 each. `DESIGNATED-INITIALIZER-HANDOFF.md` is the document to read: it
+carries the per-file table, the four measured clang rules, the recipes, and the order to take the residue in.
 
 Nothing else about the pass changed: the four rules in §4.15 plus the pair lesson, one family per commit, the tree green
 and the diagnostic count at zero between batches.
@@ -387,6 +381,11 @@ each** (so the next session does not re-derive it). All are one of three pattern
 | `NSLocale` | `-initWithCoder:` | designated chaining to `-initWithLocaleIdentifier:` | super + sub-tag establishment |
 | `NSNotification` | `-initWithCoder:` | designated chaining to `-initWithName:object:userInfo:` | it already copies through the designated door; make the coder door the CONVENIENCE one instead |
 | `NSSocketPort` | `-init`, `initWithTCPPort:`, two remote doors | convenience calling `[super init]` while three socket doors are marked | each should route to a marked door; `-init`'s binding behaviour is the one to check first |
+| `NSString` (5) | its own cluster doors | not yet inspected | the string family's own funnel, one commit |
+| `NSDate` (4) | ditto | not yet inspected | follow the cluster back to `initWithTimeIntervalSinceReferenceDate:` |
+| `NSDataDetector` (3) | ditto | not yet inspected | `initWithTypes:error:` is the marked door |
 
-The pass's rules are unchanged (§4.15's four plus the pair lesson); the tail is 15 small decisions rather than one
-pattern, which is why it is written out here instead of attempted in a batch.
+The pass's rules are unchanged (§4.15's four plus the pair lesson), and the residue is 42 diagnostics in 19 files —
+mostly 1–2-site decisions rather than one family shape, which is why it is written out here instead of attempted in a
+batch. `DESIGNATED-INITIALIZER-HANDOFF.md` is the fuller document: measured rules, recipes, per-batch lessons,
+reproduction commands, and the order to take the rest.

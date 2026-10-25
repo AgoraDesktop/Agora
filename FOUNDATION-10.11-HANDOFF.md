@@ -363,3 +363,30 @@ re-routing cluster), so **84 facts remain, producing roughly 70 diagnostics**, i
 
 Nothing else about the pass changed: the four rules in §4.15 plus the pair lesson, one family per commit, the tree green
 and the diagnostic count at zero between batches.
+
+## 17. Batch 5a — file wrappers and Mach ports, and the tail's remaining shapes
+
+14 sites to 0 (`a26683b`). `designated-present` 63, `missing` 80, `candidates` 143, `extra` 2 (the census counts an
+extra only for a CLASS-OWNED selector, which is why NSMachPort's three restated socket doors do not raise it — said in a
+comment on the pin). `methods-declared` 4,045.
+
+**The remaining ~14 diagnostics are in 15 classes, their marks reverted, and this is the work list with the shape of
+each** (so the next session does not re-derive it). All are one of three patterns:
+
+| Class | Site | Shape | Fix |
+|---|---|---|---|
+| `NSAppleEventDescriptor` | `-init` | convenience calling `[super init]` | route to `-initWithAEDescNoCopy:NULL` (the one marked door) after checking it accepts NULL |
+| `NSAppleScript` | `initWithContentsOfURL:error:` | **designated** chaining to `[self initWithSource:]` | give it super + the compile body, or extract the body into a method |
+| `NSBundle` | `-init` | convenience calling `fnInitBareWithPath:` | route to the marked `-initWithPath:` with `@""`… check the bare path semantics first |
+| `NSFileHandle` | `-initWithCoder:` | convenience whose body is a refusal | local pragma (the refusal pattern) |
+| `NSHashTable`, `NSMapTable`, `NSPointerArray` | `initWithOptions:capacity:` | convenience chaining to `initWithPointerFunctions:` | already legal as convenience→designated; the warning comes from the *marked* door being uninvolved — check which mark fires |
+| `NSExpression` | `-initWithCoder:` | designated calling `[super init]` (NSObject has no designated door, so this should be legal) | investigate: probably the class has another marked door making `-init` non-designated |
+| `NSComparisonPredicate` | `initWithLeftExpression:rightExpression:customSelector:` | designated chaining to the 5-argument door | inline, or make the custom-selector door the convenience one |
+| `NSIndexSet`, `NSIndexPath` | `-initWithIndex:` | convenience calling `[super init]` | route to the class's marked indexed doors (`initWithIndexes:count:` / `initWithIndexes:length:`) |
+| `NSInputStream`, `NSOutputStream` | `initWithFileAtPath:` | convenience calling `[super init]` | route to the marked `-initWithURL:` / `-initWithData:` |
+| `NSLocale` | `-initWithCoder:` | designated chaining to `-initWithLocaleIdentifier:` | super + sub-tag establishment |
+| `NSNotification` | `-initWithCoder:` | designated chaining to `-initWithName:object:userInfo:` | it already copies through the designated door; make the coder door the CONVENIENCE one instead |
+| `NSSocketPort` | `-init`, `initWithTCPPort:`, two remote doors | convenience calling `[super init]` while three socket doors are marked | each should route to a marked door; `-init`'s binding behaviour is the one to check first |
+
+The pass's rules are unchanged (§4.15's four plus the pair lesson); the tail is 15 small decisions rather than one
+pattern, which is why it is written out here instead of attempted in a batch.

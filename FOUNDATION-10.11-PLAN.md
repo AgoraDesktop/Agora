@@ -416,7 +416,7 @@ runtime probe will see the protocol.
 | Group | Doors | Backing |
 |---|---:|---|
 | `NSAppleEventDescriptor` | 12 | 10.11 factories (`descriptorWithDouble:`, `…Date:`, `…FileURL:`, `…ProcessIdentifier:`, `…BundleIdentifier:`, `…ApplicationURL:`), the value accessors they added (`dateValue`, `doubleValue`, `fileURLValue`, `isRecordDescriptor`), `+currentProcessDescriptor`, `-sendEventWithOptions:timeout:error:` (refuses: no AppleEvents transport) |
-| `NSExpression`/`NSPredicate`/`NSSortDescriptor` | 11 | `expressionWithFormat:` family, `expressionForAnyKey`, `expressionForConditional:trueExpression:falseExpression:` and its two accessors, the three `-allowEvaluation` doors (secure decoding), `+predicateFromMetadataQueryString:` |
+| `NSExpression`/`NSPredicate`/`NSSortDescriptor` | 11 | `expressionWithFormat:` family, `expressionForAnyKey`, `expressionForConditional:trueExpression:falseExpression:` and its two accessors, the three `-allowEvaluation` doors (secure decoding), `+predicateFromMetadataQueryString:` — **all eleven are done** |
 | URLSession-adjacent | 13 | `NSURLCache` (3), `NSURLCredentialStorage` (4), `NSHTTPCookieStorage` (3), `NSURLProtocol` (3: `canInitWithTask:`, `-initWithTask:cachedResponse:client:`, `task`) — in W3 |
 | `NSOrderedSet`/`NSMutableOrderedSet` | 8 | `descriptionWithLocale:`(+`indent:`), `filteredOrderedSetUsingPredicate:`, `filterUsingPredicate:`, the four index/`passingTest:` enumerations |
 | `NSOperation`/`NSOperationQueue` | 9 | `isAsynchronous`, `name`, `qualityOfService`, `underlyingQueue` and their setters — the 10.6-era operation surface grown a queue |
@@ -552,9 +552,28 @@ Sizes are order-of-magnitude.
   of `/ ? #`, then the authority (userinfo at `@`, host, port after the last colon inside the authority), then the path,
   the query and the fragment. The probe slices the string for each range and checks three absences on a `mailto:` URL,
   where a zero-length range at 0 would look plausible and be wrong.
-- **Remaining:** the `expressionWithFormat:` family (3), `expressionForConditional:trueExpression:falseExpression:` and
-  its two accessors (needs a conditional expression type this tree does not have), and
-  `NSPersonNameComponentsFormatter` (8).
+- **Done: the three `+expressionWithFormat:` doors** (10.6) — one parser with a mode flag, so an expression's operands
+  are the predicate's operands exactly; what the flag ADDS is Apple's arithmetic (`+ - * / **` over `add:to:`,
+  `from:subtract:`, `multiply:by:`, `divide:by:`, `raise:toPower:`) and grouping parentheses, and what it does NOT
+  change is the predicate grammar, whose parenthesis refusal keeps its wording. A comparison is refused BY NAME
+  (`+predicateWithFormat:` is the door that reads one): returning the left side and dropping ` < 2` is what a scanner
+  without a trailing-text check does, and it is the one answer §4.3 forbids. Two things had to be solved rather than
+  declared — `-fn_expressionFormat` must render arithmetic as arithmetic (`a + (b * 2)`), or the text does not parse
+  again; and a selector-shaped function name (`modulus:by:`, the one arithmetic function with no operator) round-trips
+  only once a trailing colon is read as part of the symbol. `%d + 1` and `%d + %d` are both in the probe: the
+  substitutions were never the fault, the missing arithmetic was. `tests/expression_format.m` pins 42 of its cases,
+  six of them round trips. The slice also DECLARES `+expressionForBlock:arguments:`, implemented earlier and never
+  named in a header — a door a caller cannot open is not a door.
+- **Done: the conditional expression** (10.11) — `NSConditionalExpressionType = 20`, its factory and the two branch
+  accessors, rendered and read back as `TERNARY(condition, true, false)` in BOTH grammars, because a conditional renders
+  as TERNARY and the predicate door therefore has to read the text its own renderer writes. The condition is a PREDICATE
+  and the branches are EXPRESSIONS, which is why TERNARY could not go through the function-argument loop — that loop
+  parses every argument as an expression. Only the branch the answer names is evaluated, so the other may name a key the
+  object does not have; the set expressions' `-leftExpression`/`-rightExpression` stay nil here, because answering a true
+  branch for a left side is the invented fact the total-accessor rule forbids. The census moves to 3,414 of 3,513
+  selectors, 99 missing; `tests/expression_format.m` is 56 cases, including the archive round trip that pins the two new
+  coding keys.
+- **Remaining:** `NSPersonNameComponentsFormatter` (8).
 
 `NSProgress` + `NSProgressReporting`; `NSURLComponents` + `NSURLQueryItem`; `NSByteCountFormatter` and
 `NSPersonNameComponentsFormatter`; `unitStyle` on the three unit formatters; the predicate/expression evaluation

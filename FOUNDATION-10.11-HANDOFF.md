@@ -155,3 +155,30 @@ The reference SDK is **not** in the repository. `api/10.11/README.md` has the fe
 5. **The constructor pass** — 135 designated initializers, 208 warnings as the gate, then the marks and both pins.
 6. **W3 (`URLSession`)** — the largest item; start with the task state machine over the existing libcurl engine, since
    `NSURLConnection`/`NSURLDownload` already drive it.
+
+## 8. Items 1–3, closed (the session after)
+
+The first three are done, and two of the three guesses in §7 were wrong in a useful way:
+
+1. **The `%d + 1` probe found no substitution fault at all.** `%d` was substituted correctly at primary level, as
+   §4 suspected; what failed was the arithmetic that followed it, which did not exist. `%d + 1` and a two-argument
+   `%d + %d` are now cases in the suite, so the next reader does not have to take that on trust.
+2. **The mode flag was the smaller half of the slice.** Grouping was one case in `FNParsePrimary`; what the new door
+   actually needed was a precedence-climbing arithmetic grammar (`**`, then `* /`, then `+ -`), Apple's function names
+   behind it, and — the part no header diff would have caught — a RENDERER that writes arithmetic as arithmetic.
+   `add:to:(a, b)` is text no grammar here can parse, so without that half the door would build trees that cannot
+   survive their own `-predicateFormat`. The second unplanned piece was a trailing-colon rule: `modulus:by:` has no
+   operator, so it is only round-trippable once a selector-shaped name is read as one symbol.
+3. **The conditional** was as sized (3 doors), plus the `TERNARY` production, because it renders as `TERNARY(...)` and
+   the predicate door must be able to read what the renderer writes. `TERNARY` also could not reuse the function
+   argument loop: its first argument is a predicate, and that loop parses all arguments as expressions.
+
+Two things are worth knowing before the next slice:
+
+- `-Wobjc-designated-initializers` is still the constructor pass's gate, untouched. Nothing here moved it.
+- The expression suite (`tests/expression_format.m`, 56 cases) is where a comparison refusal, the round trip and the
+  `TERNARY` form meet; `1 < 2` raises naming `+predicateWithFormat:` on purpose, and that refusal is a test now.
+
+State after the two commits (`ea2b053`, `12af1e2`): 10.11 census 3,414 of 3,513 selectors (99 missing), 197 of 219
+classes, 31 of 40 protocols; 10.6 census unmoved except `methods-declared` 4,017 → 4,024; annotations 799 of 799;
+30 of 30 tests green, including the header-compile gate over 196 headers in three modes.

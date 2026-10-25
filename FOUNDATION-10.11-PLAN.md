@@ -452,6 +452,40 @@ version they really arrived in, behind an `AGORA_EXTENSION` spelling that a `-DA
 from the surface check. The consensus with `COCOA-10.11-SURFACE-PLAN.md` §4.1 is that removing a working door to
 satisfy an older reference is a regression.
 
+### 4.14 `NSPersonNameComponentsFormatter` — the locale policy, written before the code
+
+The one thing that makes a name's rendering locale-specific is ORDER: whether the family name precedes the given name.
+Apple gets that from CLDR. **This tree has no CLDR and does not acquire one in this slice**, so the policy is a written
+table rather than a discovery — and it is stated in the header, where a caller can read it, not inferred from output:
+
+- **The order is decided by ONE fact**: the language subtag of `[NSLocale currentLocale]` (`NSLocaleLanguageCode`, the
+  same subtag `-objectForKey:` already derives). Nothing else — not the region, not the script.
+- **The table is `ja`, `ko`, `vi`, `zh`, `hu` → family name first; every other language → given name first.** The five
+  are the languages whose usual full name puts the family name first; the default is the order the tree can state
+  without data.
+- **Prefix and suffix are not part of the order decision.** An honorific precedes a name in both orders and a
+  generational suffix follows it, so they keep their positions and only the {given, middle, family} group moves.
+- **The style chooses WHICH components, not the order**: `Short` is the given name — the family name when there is none,
+  the nickname when there is neither — `Medium` is given + family, and `Long`/`Default` are every formal component the
+  object carries. The nickname is not part of a formal name, which is why only `Short` reaches it.
+- **`phonetic` renders from `phoneticRepresentation` when the object has one**, falling back to the components
+  themselves. A total switch, so `-isPhonetic` cannot promise something the render does not do.
+- **Two doors refuse rather than approximate.** An unimplemented `style` value raises `NSInvalidArgumentException`
+  naming it — `NSPersonNameComponentsFormatterStyleAbbreviated` is 10.12, outside this reference, and guessing what
+  initials look like in an unknown script is the invented fact §4.13's discipline forbids.
+  `-getObjectValue:forString:errorDescription:` answers NO with a nil object and a nil error description: parsing a name
+  out of text needs the same data to know which word is which, and Apple's own class does not parse either, so NO is
+  the documented answer rather than a refusal of ours.
+- **The annotated string makes the policy visible** instead of merely following it: every run carries
+  `NSPersonNameComponentKey` naming its component (`…GivenName`, `…MiddleName`, `…FamilyName`, `…Prefix`, `…Suffix`,
+  `…Nickname`) and every separator between two runs carries `NSPersonNameComponentDelimiter`. A caller that lays a name
+  out per script therefore receives the boundaries this formatter actually used, including the ones the order table
+  moved.
+
+**What this is NOT, said plainly:** it is not CLDR, and a caller who needs a name rendered exactly as one culture writes
+it should not read the header as a promise that it will be. What the header promises is one documented order per
+language code, the default named, the boundaries published, and no silent third behaviour.
+
 ---
 
 ## 5. The waves
@@ -570,10 +604,21 @@ Sizes are order-of-magnitude.
   and the branches are EXPRESSIONS, which is why TERNARY could not go through the function-argument loop — that loop
   parses every argument as an expression. Only the branch the answer names is evaluated, so the other may name a key the
   object does not have; the set expressions' `-leftExpression`/`-rightExpression` stay nil here, because answering a true
-  branch for a left side is the invented fact the total-accessor rule forbids. The census moves to 3,414 of 3,513
-  selectors, 99 missing; `tests/expression_format.m` is 56 cases, including the archive round trip that pins the two new
-  coding keys.
-- **Remaining:** `NSPersonNameComponentsFormatter` (8).
+  branch for a left side is the invented fact the total-accessor rule forbids. `tests/expression_format.m` is 56 cases,
+  including the archive round trip that pins the two new coding keys.
+- **Done: `NSPersonNameComponentsFormatter`** (10.11) — the class that needed a POLICY before it needed code (§4.14), and
+  all 8 of its doors: the four styles, the phonetic switch, the one-shot class method, the annotated string and the
+  parsing door. The order comes from one written table (`hu`, `ja`, `ko`, `vi`, `zh` family-first, every other language
+  given-first) read from the LOCALE's language subtag, so the rule is observable and the header states it; the annotated
+  form publishes the boundaries the renderer actually used, separators marked, because a caller who lays a name out per
+  script should not have to re-derive the split. The two refusals are deliberate: an unimplemented style raises naming
+  the value (10.12's `Abbreviated` is outside this reference and initials in an unknown script are not a fact this tree
+  has), and `-getObjectValue:forString:errorDescription:` answers NO with a nil object and a nil error description, which
+  is what Apple's own class does. `tests/foundation_10_11_person_name.m` pins 39 cases, including the order under five
+  language codes and two controls. **The census falls by one CLASS and zero selectors** — 198 of 219 classes, 3,422 of
+  3,521 selectors — because the eight doors arrived with the class they belong to; the remaining 99 selectors are on the
+  21 classes still to write.
+- **Remaining:** nothing in W2. The wave's list is closed.
 
 `NSProgress` + `NSProgressReporting`; `NSURLComponents` + `NSURLQueryItem`; `NSByteCountFormatter` and
 `NSPersonNameComponentsFormatter`; `unitStyle` on the three unit formatters; the predicate/expression evaluation

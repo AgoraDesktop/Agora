@@ -182,3 +182,29 @@ Two things are worth knowing before the next slice:
 State after the two commits (`ea2b053`, `12af1e2`): 10.11 census 3,414 of 3,513 selectors (99 missing), 197 of 219
 classes, 31 of 40 protocols; 10.6 census unmoved except `methods-declared` 4,017 → 4,024; annotations 799 of 799;
 30 of 30 tests green, including the header-compile gate over 196 headers in three modes.
+
+## 9. Item 4, closed — and the policy it asked for
+
+`NSPersonNameComponentsFormatter` landed all eight of its doors (`3b67dec`), and the decision §7 item 4 said had to be
+written before the code is FOUNDATION-10.11-PLAN.md **§4.14**: this tree has no CLDR and does not get one in this slice,
+so the order of a name comes from a **written table of five languages** (`hu`, `ja`, `ko`, `vi`, `zh` family-first) and a
+**documented default** (given-first) for every other language, read from the locale's language subtag. The header states
+the table, because a caller reads the header and not the plan.
+
+Three things that were decisions and not mechanics:
+
+- **The refusals are the two places a guess would have been invisible.** An unimplemented style raises naming the value
+  (10.12's `Abbreviated` would otherwise have rendered *something*), and the parsing door answers NO with a nil object
+  and **no invented error string** — Apple's class does not parse either, so that is the documented answer.
+- **The annotated string is the same renderer, not a second one.** It records the range of every component and every
+  separator as it appends, so `-stringFromPersonNameComponents:` and `-annotatedStringFromPersonNameComponents:` cannot
+  disagree, and the separator is a marked run because a caller laying a name out needs to know where the spaces are.
+- **`phonetic` is a total switch.** The representation is used only when it carries a component; a hollow one falls back
+  to the components rather than rendering nothing.
+
+The census fell by **one class and zero selectors** (198 of 219, 3,422 of 3,521, 99 missing): the eight doors arrived
+with the class they belong to, which is what a slice that starts at the input type looks like when it finishes.
+
+W2 is closed. What remains in the plan is the W1 residue (the constructor pass, `AGORA_EXTENSION`, the 411
+nullability warnings) and W3 onward (`URLSession`, notifications/extensions, XPC refusals, the 70-door tail, the 26
+header names).

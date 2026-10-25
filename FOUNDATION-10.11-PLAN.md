@@ -515,8 +515,15 @@ Sizes are order-of-magnitude.
   enum divergence was found by the first code to read the value, which is the argument for implementing in order of
   dependency rather than in order of count. `tests/foundation_10_11_formatting.m` pins the constants, the medium
   default, both styles and the singular/plural rule on all three families (23 cases).
-- **Remaining:** `NSProgress` (+ `NSProgressReporting`), `NSURLComponents`/`NSURLQueryItem`, `NSByteCountFormatter`,
-  `NSPersonNameComponentsFormatter`, and the 11 predicate/evaluation doors.
+- **Done: `NSURLQueryItem`** (10.10) — four doors and three protocols, and the three properties that make it a VALUE
+  rather than a pair of pointers: two items built from the same strings are equal and hash alike, a copy keeps the text
+  it was handed when the caller edits the original, and an archive round-trips through the secure-coding allow-list.
+  `tests/foundation_10_11_url_query_item.m` pins them (16 cases). The 10.11 census moves to 194 of 219 classes, 3,306 of
+  3,411 selectors.
+- **Remaining:** `NSURLComponents` (its 46 doors are the next slice — the internal `FNURLComponents` already implements
+  the surface, and the eight 10.11 `rangeOf…` properties plus `queryItems` are what is left), `NSProgress`
+  (+ `NSProgressReporting`), `NSByteCountFormatter`, `NSPersonNameComponentsFormatter`, and the 11 predicate/evaluation
+  doors.
 
 `NSProgress` + `NSProgressReporting`; `NSURLComponents` + `NSURLQueryItem`; `NSByteCountFormatter` and
 `NSPersonNameComponentsFormatter`; `unitStyle` on the three unit formatters; the predicate/expression evaluation

@@ -528,10 +528,29 @@ marked type constructors do `[self release]; return [[AGNumber… alloc] initWit
 subclasses override those same 16 selectors. Under rule 3 a concrete override must call a marked super init; under the
 cluster's design, calling `[super initWithInt:]` re-enters the front's re-router and recurses forever, so the only legal
 call it can make is `[super init]` — which is rule 3's violation. **Apple's marks describe a cluster whose storage lives
-in Core Foundation, where no clang rule applies; this cluster's storage lives here.** The honest dispositions are (a)
-leave the 16 marks out and record `designated-missing` 16 with this paragraph as the reason, or (b) mark `NSNumber`'s
-`-init` as designated, which is a fact Apple does not state (`designated-extra` 1) but which is TRUE of this class and
-clears the cluster. That is a decision to make before the batch that touches `NSNumber.m`, not during it.
+in Core Foundation, where no clang rule applies; this cluster's storage lives here.** Two dispositions were possible:
+(a) leave the 16 marks out, or (b) mark `NSNumber`'s `-init` as designated — a fact Apple does not state
+(`designated-extra` 1) but one that is TRUE of this class, and the only thing that makes a concrete subclass's
+`[super init]` legal.
+
+**DECIDED: (a). The sixteen stay unmarked, and the pin carries them.** The reasons, in the order they weigh:
+
+- **A header is the reference's statement, not this tree's.** Marking `NSNumber -init` would put a fact in the header
+  that Apple's 10.11 header does not state, and the next person to regenerate the manifest would find the tree
+  disagreeing with its own reference. The census would show it as `designated-extra`, which is honest — but the fact
+  would then be *load-bearing for the build*, and a load-bearing tree-local fact in a reference header is the kind of
+  thing §4.13 confines to `AGORA_EXTENSION` spellings, not to constructor contracts.
+- **(b) buys 57 quiet diagnostics, not 57 correct contracts.** The concrete subclasses' `[super init]` would become
+  legal *by fiat of a mark about `-init`*, while the re-routing design that made it illegal is unchanged. Silencing a
+  checker by asserting something adjacent is exactly the move this pass exists to avoid.
+- **(a)'s cost is a number that already exists.** `designated-missing` counts the sixteen, `api-ledger annotate` keeps
+  naming them as work, and this paragraph is the reason they stay named. The gate does not fail on `missing`; it fails
+  on `wrong` and on drift, and neither moves.
+
+Consequence for the batch: `NSNumber.m` and `NSDecimalNumber.m` keep their constructors as they are, and the 57 sites
+they would contribute are NOT part of the pass's remaining count. `annotate`'s dry run will keep offering the sixteen;
+that is the work list naming a decision rather than an oversight, and the sixteen are the only entries on it that the
+tree intends to refuse.
 
 **THE FIRST BATCH IS LANDED: `NSURL`, 11 sites → 0.** Its parse became `-fn_takePartsFromString:` answering YES/NO, and
 each of the eight marked doors is now its own constructor (`self = [super init]`, the parse, `[self release]` on

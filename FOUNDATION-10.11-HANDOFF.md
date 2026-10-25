@@ -322,3 +322,24 @@ behaved exactly like its siblings:
 State: `designated-present` 32, `missing` 110, `candidates` 142, `extra` 2; 31 of 31 suites green. Left in the
 collection family: `NSOrderedSet` (6) and `NSArray` (5), marks not placed — then the 1–3-site tail (26) and the number
 cluster (57), which still needs the (a)/(b) decision §4.15 records.
+
+## 15. The number-cluster decision: the sixteen stay unmarked
+
+§4.15 asked for one decision before the last batch, and it is taken: **option (a)** — `NSNumber`'s sixteen typed
+constructors stay unmarked, and `designated-missing` carries them.
+
+- **A header states the reference, not this tree.** Marking `NSNumber -init` (option b) would put a fact in the header
+  Apple's 10.11 header does not state, and it would be *load-bearing for the build* — the kind of tree-local contract
+  §4.13 confines to `AGORA_EXTENSION` spellings.
+- **(b) buys 57 quiet diagnostics, not 57 correct contracts.** The concrete subclasses' `[super init]` would become
+  legal by fiat of a mark about `-init`, while the re-routing design that made it illegal stays. Silencing a checker
+  with an adjacent assertion is what this pass exists to avoid.
+- **(a)'s cost is a number that already exists** and is honest: the sixteen are counted as missing, `annotate` keeps
+  naming them, and §4.15's paragraph is the reason they stay named. The gate fails on `wrong` and on drift, not on
+  `missing`.
+
+So `NSNumber.m` and `NSDecimalNumber.m` are not touched, their 57 sites are **not** part of the pass's remaining count,
+and `annotate`'s dry run will keep offering the sixteen as the one refusal on the list.
+
+Remaining, in order: `NSOrderedSet` (6) and `NSArray` (5) — marks unplaced — then the 1–3-site tail (26). That is 37
+sites across 13 files; the rules are in §4.15 and every batch so far has been one family, one commit.

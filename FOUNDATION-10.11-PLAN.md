@@ -112,13 +112,18 @@ directory entry through the contents API, so the versioned path is fetched direc
 | declared selectors | 3,763 |
 | `ios-class` facts | 1 |
 | `unavailable-selector` facts | 9 |
+| `class-era` facts | 109 |
+| `selector-era` facts | 860 |
 
 The manifest line grammar is the 10.6 one (`class X : Y`, `selector X : sel`, `function f`, `protocol P`), extended
-with exactly the two facts a name list cannot carry and the census needs in order not to charge a disposal as a gap:
-`ios-class <Name>` for a class whose macOS availability is `NA`, and `unavailable-selector <Class> <sel>` for a door
-Apple marks `NS_UNAVAILABLE`. Introduction and deprecation **versions** are deliberately not in the manifest: the
-availability sweep (W1) needs them per declaration, so it reads them from the same headers with an AST instead of
-overloading a name list that four censuses parse.
+with the four facts a name list cannot carry: `ios-class <Name>` for a class whose macOS availability is `NA`,
+`unavailable-selector <Class> <sel>` for a door Apple marks `NS_UNAVAILABLE`, and `class-era`/`selector-era` carrying
+Apple's introduction and deprecation tokens verbatim (`10_6`, and `-` for no deprecation). The first two keep a
+disposal from being charged as a gap; the eras make the availability gate runnable without an SDK checkout.
+
+The availability field is a fact list, not Apple's expression: no replacement message, no nullability, no prose is
+copied — a version token and a `-`. That is the same rule §2.1 states for names, and the same one that makes the
+manifest committable at all.
 
 That grammar growth is why the 10.6 manifests still load: neither kind appears in them, and `api-ledger`'s selftest
 pins that a 10.6-style manifest loads with empty exemption sets.
@@ -231,25 +236,35 @@ failure that reads as drift and is actually progress. Total in-scope doors: 111 
 
 ### 3.4 Annotations — the layer that is not there
 
-| Annotation | Apple 10.11 | local | note |
+Measured by `api-ledger availability`, after the macros became real (W1a):
+
+| Fact | Apple 10.11 | local | note |
 |---|---:|---:|---|
-| `NS_AVAILABLE`/`NS_CLASS_AVAILABLE` | 1,290 | **10** | macros are inert (`NSObjCRuntime.h:293`) |
-| `NS_DEPRECATED` | 213 | **14** | idem (`:308`) |
+| declarations Apple annotates that this tree also declares | **802** | **0** | the sweep's denominator, pinned in `tests/api-10.11-annotations.txt` |
+| `NS_AVAILABLE`/`NS_CLASS_AVAILABLE` occurrences in the headers | 1,290 | 0 | no declaration uses them yet |
+| `NS_DEPRECATED` occurrences | 213 | 0 | idem |
 | `nullable` | 1,372 | 2,368 | already ahead |
 | `NS_DESIGNATED_INITIALIZER` | 182 | **0** | macro exists, never used |
 | `__kindof` | 3 | 1 | |
-| `NS_UNAVAILABLE` | 12 | 1 | (`:307`) |
+| `NS_UNAVAILABLE` | 12 | 0 | the one 10.6 count was the macro definition, not a use |
 | `NS_RETURNS_RETAINED` | 8 | 1 | |
 | `NS_SWIFT_NAME` | 6 | 40 | already ahead (Swift-name pass) |
 
-The macros are inert **by decision** — `NSObjCRuntime.h` cites D12, "the bodies do nothing". That was defensible
-with no reference version; at 10.11 it is not, because a client cannot tell a 10.0 door from a 10.11 one and the
-Swift importer sees no availability at all. The repair is already half-built: `libagora-core/include/CFAvailability.h`
-defines `CF_AVAILABLE(_mac, _ios)` as `__attribute__((availability(macosx,introduced=_mac)))` behind
-`__has_feature(attribute_availability_with_version_underscores)`, and Apple's own `NSObjCRuntime.h` line 249 is
-`#define NS_AVAILABLE(_mac, _ios) CF_AVAILABLE(_mac, _ios)`. The Foundation macros should say the same thing;
-`NSURLSESSION_AVAILABLE` (`:304`, empty) must become `10_9`, with the stream half at `10_10`/`10_11` as Apple's
-header does.
+The macros were inert **by decision** — `NSObjCRuntime.h` cited D12, "the bodies do nothing". That was defensible
+with no reference version; at 10.11 it is not, because a client cannot tell a 10.0 door from a 10.11 one, no
+deprecation warning can fire on this tree, and the Swift importer sees no availability at all. The repair was already
+half-built: `libagora-core/include/CFAvailability.h` defines `CF_AVAILABLE(_mac, _ios)` as
+`__attribute__((availability(macosx,introduced=_mac)))` behind `__has_feature(attribute_availability_with_version_underscores)`,
+and Apple's own header aliases `NS_AVAILABLE` onto exactly that. **W1a replaced the empty bodies with those aliases**
+and made `NSURLSESSION_AVAILABLE` `10_9`; the whole library rebuilds with no availability diagnostic, and clang 19 is
+measured to record the attribute in the AST — including `macosx_app_extension` for `NS_EXTENSION_UNAVAILABLE`, where
+collapsing it into "unavailable on macOS" would have hidden working doors.
+
+**The 802 is the work list, and the instrument that holds it is two numbers with different meanings:** a declaration
+stating a version Apple does not (`annotations-wrong`) fails the gate outright, because it looks finished; a
+declaration stating none (`annotations-missing`) is the sweep, pinned so that progress is a deliberate edit. The
+versions themselves are committed in the manifest as `class-era`/`selector-era` facts, which is what lets the gate run
+without an SDK checkout — a sweep annotated from memory is the drift §4.12 forbids.
 
 ### 3.5 Headers and categories
 
@@ -447,17 +462,21 @@ Sizes are order-of-magnitude.
   `selectors-missing` reads **111** rather than the first pass's 86 — the gap is *larger*, because the extractor was
   hiding 299 property accessors — and no implementation was written to move either number.
 
-### W1 — the availability layer · L (mechanical, wide)
+### W1 — the availability layer · L (mechanical, wide) — **in progress (W1a done)**
 
-- `NSObjCRuntime.h`: the inert block (`:293`–`:330`) delegates to `CF_AVAILABLE`/`CF_DEPRECATED` as Apple's own
-  header does; `NSURLSESSION_AVAILABLE` becomes `10_9` (`10_10`/`10_11` for the stream half).
-- Sweep the 196 public headers: `NS_AVAILABLE`/`NS_DEPRECATED` from Apple's versions, 182
-  `NS_DESIGNATED_INITIALIZER`, `__kindof`, `NS_RETURNS_RETAINED`, `NS_UNAVAILABLE`, and the
-  `NS_RETURNS_INNER_POINTER` annotations that retire the 7 artifacts.
-- `AGORA_EXTENSION` for the post-10.11 classes (§4.13).
-- **Acceptance:** the new `availability-check` (AST) and `header-compile` gates pass; every annotated declaration
-  carries Apple's version; and `methods-declared-not-implemented` stays at 0 — a trailing annotation the reader did
-  not learn to strip would surface there, which is the trap W0's shared-reader fix exists to close.
+- **Done:** `NSObjCRuntime.h`'s inert block now delegates to `CF_AVAILABLE`/`CF_DEPRECATED` as Apple's own header
+  does; `NSURLSESSION_AVAILABLE` is `10_9`; `NS_EXTENSION_UNAVAILABLE` names `macosx_app_extension` instead of being
+  empty. The library rebuilds with no availability diagnostic, and clang 19 is measured to record the attribute.
+- **Done:** the reference's versions are committed (`class-era`/`selector-era`), `api-ledger availability` compares
+  local declarations against them, and `tests/api-10.11-annotations.txt` pins 802 candidates / 0 annotated / 0 wrong.
+  The gate fails on a wrong version and on drift.
+- **Remaining:** the sweep itself — 802 declarations, header by header, each turning `annotations-missing` down and
+  `annotations-present` up in the same commit; `NS_DESIGNATED_INITIALIZER` (182), `__kindof`, `NS_RETURNS_INNER_POINTER`,
+  and `AGORA_EXTENSION` for the post-10.11 classes (§4.13); then `header-compile` with
+  `-Wnullability-completeness` over the swept headers.
+- **Acceptance:** `annotations-missing` reaches 0 with `annotations-wrong` still 0; the header-compile gate passes;
+  `methods-declared-not-implemented` stays at 0 — a trailing annotation the reader did not learn to strip would
+  surface there, which is the trap W0's shared-reader fix exists to close.
 
 ### W2 — the spine and the formatters · M
 
@@ -533,7 +552,7 @@ with no body anywhere is the one thing `methods-declared-not-implemented` is pin
 | `foundation-api-10.11-census` | does a 10.11 door arrive or vanish | **exists**, W0 |
 | `api-ledger-selftest` | do the extractor's own regressions still fail toward the right number | **exists**, W0 |
 | `functions-declared-not-defined` (inside the census) | is a declaration a link error for a caller | exists, must stay 0 |
-| `availability-check` (AST) | is the introduction/deprecation version Apple's | **new**, W1 |
+| `foundation-api-availability` | is the introduction/deprecation version Apple's | **exists**, W1 |
 | `header-compile` (ObjC, ObjC++, ARC, `-Wnullability-completeness`) | does a header stand alone | **new**, W1/W7 |
 | `runtime-surface` (objc probe) | superclass, adopted protocols, `respondsToSelector:` | **new**, W3 |
 | `refusal-census` (`claims_census`) | does a refusal exist unrecorded | **new**, W5 |

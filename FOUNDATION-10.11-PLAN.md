@@ -476,9 +476,18 @@ Sizes are order-of-magnitude.
   local declarations against them, and `api-ledger annotate` performs the sweep reproducibly (idempotent, dry-run by
   default, inserting only at terminators). `tests/api-10.11-annotations.txt` pins 767 candidates / 767 annotated /
   0 missing / 0 wrong. The gate fails on a wrong version and on drift.
-- **Remaining:** `NS_DESIGNATED_INITIALIZER` (182 declarations), `__kindof`, `NS_RETURNS_INNER_POINTER`, and
-  `AGORA_EXTENSION` for the post-10.11 classes (§4.13); then the `header-compile` gate with
-  `-Wnullability-completeness` over the headers the sweep touched.
+- **Done:** the `header-compile` gate — 196 headers compiled ALONE in Objective-C, Objective-C++ and ARC, plus the
+  umbrella once per mode (591 compilations). It found five headers that had never been asked to stand alone: two that
+  imported nothing at all (`NSFastEnumeration.h`, `FNKeyedWire.h`), a category whose host class was only
+  forward-declared (`FNDistantObjectRequest.h`), an ivar type nobody declared (`NSMutableArray` in
+  `NSOperationQueue.h`), and a protocol conformance with no protocol (`FNStringFormat.h`). Also done in this wave:
+  `NS_RETURNS_INNER_POINTER` on the seven doors Apple marks that way (`bytes`, `mutableBytes`, `objCType` twice,
+  `UTF8String`, `methodReturnType`, `getArgumentTypeAtIndex:`, `aeDesc`) and `__kindof` on the two the tree has
+  (`NSOperationQueue -operations`, `NSXMLNode -nodesForXPath:error:`).
+- **Remaining:** `NS_DESIGNATED_INITIALIZER` (182 declarations — it needs its own committed facts, since it is a
+  marker rather than an era), `AGORA_EXTENSION` for the post-10.11 classes (§4.13), and **411 `-Wnullability-completeness`
+  warnings across 194 of the 196 headers** (measured, objc mode), which is the S2 residue: the annotations are right
+  where they exist, and a pointer without one is a fact the header still refuses to state.
 - **Acceptance, availability met:** `annotations-missing` is 0 with `annotations-wrong` 0, the library builds clean,
   and all 23 tests pass. Remaining for the wave: the header-compile gate and
   `methods-declared-not-implemented` staying at 0 — a trailing annotation the reader did not learn to strip would
@@ -559,7 +568,7 @@ with no body anywhere is the one thing `methods-declared-not-implemented` is pin
 | `api-ledger-selftest` | do the extractor's own regressions still fail toward the right number | **exists**, W0 |
 | `functions-declared-not-defined` (inside the census) | is a declaration a link error for a caller | exists, must stay 0 |
 | `foundation-api-availability` | is the introduction/deprecation version Apple's | **exists**, W1 |
-| `header-compile` (ObjC, ObjC++, ARC, `-Wnullability-completeness`) | does a header stand alone | **new**, W1/W7 |
+| `foundation-header-compile` (ObjC, ObjC++, ARC, umbrella) | does a header stand alone | **exists**, W1 |
 | `runtime-surface` (objc probe) | superclass, adopted protocols, `respondsToSelector:` | **new**, W3 |
 | `refusal-census` (`claims_census`) | does a refusal exist unrecorded | **new**, W5 |
 | Swift import probe | can the importer see the class | existing tier's, extend W7 |

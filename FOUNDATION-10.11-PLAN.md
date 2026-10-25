@@ -244,7 +244,7 @@ Measured by `api-ledger availability`, after the macros became real (W1a):
 | `NS_AVAILABLE`/`NS_CLASS_AVAILABLE` occurrences in the headers | 1,290 | 0 | no declaration uses them yet |
 | `NS_DEPRECATED` occurrences | 213 | 0 | idem |
 | `nullable` | 1,372 | 2,368 | already ahead |
-| `NS_DESIGNATED_INITIALIZER` | 182 | **0** | macro exists, never used |
+| `NS_DESIGNATED_INITIALIZER` | 178 facts (135 local candidates) | **0** | macro did not exist either; see below |
 | `__kindof` | 3 | 1 | |
 | `NS_UNAVAILABLE` | 12 | 0 | the one 10.6 count was the macro definition, not a use |
 | `NS_RETURNS_RETAINED` | 8 | 1 | |
@@ -259,6 +259,12 @@ and Apple's own header aliases `NS_AVAILABLE` onto exactly that. **W1a replaced 
 and made `NSURLSESSION_AVAILABLE` `10_9`; the whole library rebuilds with no availability diagnostic, and clang 19 is
 measured to record the attribute in the AST — including `macosx_app_extension` for `NS_EXTENSION_UNAVAILABLE`, where
 collapsing it into "unavailable on macOS" would have hidden working doors.
+
+`NS_DESIGNATED_INITIALIZER` is the one S2 fact that could not be swept yet, and the reason is measured rather than
+assumed: the marks are correct and the *bodies* are not — 208 distinct `-Wobjc-designated-initializers` warnings appear
+the moment they are placed. The macro itself did not exist in this tree at all (the plan's earlier table said "exists,
+never used"; the first attempted sweep failed to compile with "expected ':'" at the mark's own column, and it is now
+defined).
 
 **The sweep is done: 761 declarations in 108 headers, every one carrying Apple's version.** The instrument that made
 it reviewable is two numbers with different meanings — a declaration stating a version Apple does not
@@ -484,10 +490,17 @@ Sizes are order-of-magnitude.
   `NS_RETURNS_INNER_POINTER` on the seven doors Apple marks that way (`bytes`, `mutableBytes`, `objCType` twice,
   `UTF8String`, `methodReturnType`, `getArgumentTypeAtIndex:`, `aeDesc`) and `__kindof` on the two the tree has
   (`NSOperationQueue -operations`, `NSXMLNode -nodesForXPath:error:`).
-- **Remaining:** `NS_DESIGNATED_INITIALIZER` (182 declarations — it needs its own committed facts, since it is a
-  marker rather than an era), `AGORA_EXTENSION` for the post-10.11 classes (§4.13), and **411 `-Wnullability-completeness`
-  warnings across 194 of the 196 headers** (measured, objc mode), which is the S2 residue: the annotations are right
-  where they exist, and a pointer without one is a fact the header still refuses to state.
+- **Attempted and deliberately deferred: `NS_DESIGNATED_INITIALIZER`.** The facts are now committed (178
+  `designated-init` lines, 135 of them on declarations this tree makes) and pinned, and `api-ledger annotate` can
+  place the marks. Placing them is what revealed the cost: the library still builds, but clang emits **208 distinct
+  `-Wobjc-designated-initializers` warnings** — "designated initializer should only invoke a designated initializer on
+  'super'", "convenience initializer missing a 'self' call to another initializer". Those warnings are TRUE: this
+  tree's initializers do not follow the graph Apple's marks describe. Marking 135 headers would state a contract the
+  bodies break in 208 places, so the marks wait for the implementation pass — one slice, 135 constructors and the
+  warning count as its gate — and the pin holds at 135 missing in the meantime.
+- **Remaining:** `AGORA_EXTENSION` for the post-10.11 classes (§4.13), and **411 `-Wnullability-completeness` warnings
+  across 194 of the 196 headers** (measured, objc mode), which is the S2 residue: the annotations are right where they
+  exist, and a pointer without one is a fact the header still refuses to state.
 - **Acceptance, availability met:** `annotations-missing` is 0 with `annotations-wrong` 0, the library builds clean,
   and all 23 tests pass. Remaining for the wave: the header-compile gate and
   `methods-declared-not-implemented` staying at 0 — a trailing annotation the reader did not learn to strip would

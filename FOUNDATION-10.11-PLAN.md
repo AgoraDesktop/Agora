@@ -240,7 +240,7 @@ Measured by `api-ledger availability`, after the macros became real (W1a):
 
 | Fact | Apple 10.11 | local | note |
 |---|---:|---:|---|
-| declarations Apple annotates that this tree also declares | **802** | **0** | the sweep's denominator, pinned in `tests/api-10.11-annotations.txt` |
+| declarations Apple annotates that this tree also declares | **767** | **767** | the sweep, pinned in `tests/api-10.11-annotations.txt` |
 | `NS_AVAILABLE`/`NS_CLASS_AVAILABLE` occurrences in the headers | 1,290 | 0 | no declaration uses them yet |
 | `NS_DEPRECATED` occurrences | 213 | 0 | idem |
 | `nullable` | 1,372 | 2,368 | already ahead |
@@ -260,9 +260,14 @@ and made `NSURLSESSION_AVAILABLE` `10_9`; the whole library rebuilds with no ava
 measured to record the attribute in the AST — including `macosx_app_extension` for `NS_EXTENSION_UNAVAILABLE`, where
 collapsing it into "unavailable on macOS" would have hidden working doors.
 
-**The 802 is the work list, and the instrument that holds it is two numbers with different meanings:** a declaration
-stating a version Apple does not (`annotations-wrong`) fails the gate outright, because it looks finished; a
-declaration stating none (`annotations-missing`) is the sweep, pinned so that progress is a deliberate edit. The
+**The sweep is done: 761 declarations in 108 headers, every one carrying Apple's version.** The instrument that made
+it reviewable is two numbers with different meanings — a declaration stating a version Apple does not
+(`annotations-wrong`) fails the gate outright, because it looks finished; a declaration stating none
+(`annotations-missing`) was the work list, pinned so that progress was a deliberate edit, and it fell 802 → 0 in one
+commit whose diff is only annotations. The 802 → 767 difference in the denominator is two attribution faults the sweep
+exposed and fixed before it ran: a category's availability was being recorded as its class's (NSArray is not a 10.6
+class — Apple annotates the `NSExtendedArray` category), and a forward `@protocol X;` was read as a block, attributing
+NSXMLParser's doors to its delegate. The
 versions themselves are committed in the manifest as `class-era`/`selector-era` facts, which is what lets the gate run
 without an SDK checkout — a sweep annotated from memory is the drift §4.12 forbids.
 
@@ -468,14 +473,15 @@ Sizes are order-of-magnitude.
   does; `NSURLSESSION_AVAILABLE` is `10_9`; `NS_EXTENSION_UNAVAILABLE` names `macosx_app_extension` instead of being
   empty. The library rebuilds with no availability diagnostic, and clang 19 is measured to record the attribute.
 - **Done:** the reference's versions are committed (`class-era`/`selector-era`), `api-ledger availability` compares
-  local declarations against them, and `tests/api-10.11-annotations.txt` pins 802 candidates / 0 annotated / 0 wrong.
-  The gate fails on a wrong version and on drift.
-- **Remaining:** the sweep itself — 802 declarations, header by header, each turning `annotations-missing` down and
-  `annotations-present` up in the same commit; `NS_DESIGNATED_INITIALIZER` (182), `__kindof`, `NS_RETURNS_INNER_POINTER`,
-  and `AGORA_EXTENSION` for the post-10.11 classes (§4.13); then `header-compile` with
-  `-Wnullability-completeness` over the swept headers.
-- **Acceptance:** `annotations-missing` reaches 0 with `annotations-wrong` still 0; the header-compile gate passes;
-  `methods-declared-not-implemented` stays at 0 — a trailing annotation the reader did not learn to strip would
+  local declarations against them, and `api-ledger annotate` performs the sweep reproducibly (idempotent, dry-run by
+  default, inserting only at terminators). `tests/api-10.11-annotations.txt` pins 767 candidates / 767 annotated /
+  0 missing / 0 wrong. The gate fails on a wrong version and on drift.
+- **Remaining:** `NS_DESIGNATED_INITIALIZER` (182 declarations), `__kindof`, `NS_RETURNS_INNER_POINTER`, and
+  `AGORA_EXTENSION` for the post-10.11 classes (§4.13); then the `header-compile` gate with
+  `-Wnullability-completeness` over the headers the sweep touched.
+- **Acceptance, availability met:** `annotations-missing` is 0 with `annotations-wrong` 0, the library builds clean,
+  and all 23 tests pass. Remaining for the wave: the header-compile gate and
+  `methods-declared-not-implemented` staying at 0 — a trailing annotation the reader did not learn to strip would
   surface there, which is the trap W0's shared-reader fix exists to close.
 
 ### W2 — the spine and the formatters · M

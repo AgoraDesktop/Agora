@@ -549,9 +549,31 @@ Three things the batch taught that the recipe did not:
 - The marks are Apple's, and `-initWithString:` now behaves like `-initWithString:relativeToURL:nil` because that is the
   designated door Apple's graph says it must route to; its doc comment says so.
 
-`designated-present` moved 2 → 10 and `designated-missing` 135 → 127 in that commit. The remaining 192 sites keep the
-order below, chosen so that a superclass's marks are settled before its subclasses are measured:
-`NSXMLNode`/`NSXMLDocument`/`NSXMLDTD` (26, one family) → `NSDictionary`/`NSSet`/
+`designated-present` moved 2 → 10 and `designated-missing` 135 → 127 in that commit.
+
+**THE SECOND BATCH: the XML family, 26 sites → 0** (`NSXMLNode` 10, `NSXMLDTD` 9, `NSXMLDocument` 7). It cost more than
+`NSURL` did, and for reasons that generalise:
+
+- **A designated mark is REJECTED in a category** — "attribute only applies to init methods of interface or class
+  extension declarations" — so the private constructor's declaration had to move into the main `@interface`.
+- **The private constructor then had to stop being an initializer.** Marking it designated made every subclass owe an
+  override of it (and of the newly declared `-init`), which is a cascade of shadow doors. It is now
+  `+fnNodeWithKind:name:value:` (a factory) plus `-fnSetKind:name:value:` (a method), which is `NSURL`'s recipe in the
+  form a hierarchy needs: the storage is a method, and each class's designated doors call super and then it.
+- **A subclass that marks any initializer must RE-STATE the inherited designated doors it honours.** Clang reads an
+  unmarked override as convenience once the class has designated inits of its own, so `NSXMLElement`, `NSXMLDocument`,
+  `NSXMLDTD` and `NSXMLDTDNode` each declare `-init` and `-initWithKind:options:` with marks. Two of those
+  (`NSXMLElement`'s and `NSXMLDTD`'s kind doors) are facts Apple does not state, which is where `designated-extra: 2`
+  comes from — recorded rather than hidden, because each of them IS the constructor of the class.
+- **The cascade exposed a missing capability.** `NSXMLElement -initWithXMLString:error:` chained to the inherited door
+  that raises, so its error out-parameter was never written and a caller caught an exception from a door documented as
+  failing. It is now a designated constructor that refuses by name, and the fragment parser this tree does not have is
+  said out loud.
+
+`designated-present` 10 → 22, `designated-missing` 127 → 120, `designated-candidates` 137 → 142, `designated-extra`
+0 → 2, `methods-declared` 4,032 → 4,041; 31 of 31 suites green, including the document parser. The remaining 166 sites
+keep the order below, chosen so that a superclass's marks are settled before its subclasses are measured:
+`NSDictionary`/`NSSet`/
 `NSOrderedSet`/`NSCountedSet`/`NSArray`/`NSCharacterSet` (39, the collection family) → `NSString`/`NSFileWrapper`/`NSMachPort`/
 `NSSocketPort` (29) → the scripting six (14) → the 1–3-site tail (26) → the number cluster (57) last, because it is the
 only group whose disposition is a decision rather than a recipe.

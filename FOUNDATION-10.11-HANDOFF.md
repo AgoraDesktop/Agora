@@ -259,3 +259,25 @@ satisfy the checker.
 The next batch is the XML family (`NSXMLNode`/`NSXMLDocument`/`NSXMLDTD`, 26 sites, and the family shares a funnel the
 way `NSURL` did), then the collections (39), then `NSString`/`NSFileWrapper`/`NSMachPort`/`NSSocketPort` (29), the
 scripting six (14), the tail (26), and the number cluster (57) last — it still needs the (a)/(b) decision §4.15 records.
+
+## 12. Item 5, batch 2 — the XML family, and three rules the batch cost
+
+26 sites to 0 (`e19b252`): `NSXMLNode`, `NSXMLElement`, `NSXMLDocument`, `NSXMLDTD`, `NSXMLDTDNode`. The batch was
+three times the work of `NSURL`'s because a *hierarchy* is not a single class, and what it taught is now in §4.15:
+
+1. **A designated mark is rejected in a category**, so a private constructor's declaration has to live in the main
+   `@interface`.
+2. **A private constructor that is an initializer makes every subclass owe an override of it** (and of the newly
+   declared `-init`) — a cascade of shadow doors. Convert it to a factory plus a storage *method*, which is `NSURL`'s
+   recipe in the form a hierarchy needs.
+3. **A subclass that marks any initializer must re-state the inherited designated doors it honours**, or clang reads
+   its override as convenience. Two of those restatements are facts Apple does not state (`NSXMLElement`'s and
+   `NSXMLDTD`'s kind doors), which is the census's first `designated-extra`, 0 → 2, recorded rather than hidden.
+
+The batch also exposed a capability gap it did not create: `NSXMLElement -initWithXMLString:error:` had been chaining to
+the inherited door that RAISES, so its error out-parameter was never written. It now refuses by name and releases.
+
+State: `designated-present` 22, `missing` 120, `candidates` 142, `extra` 2; `methods-declared` 4,041; 31 of 31 suites
+green, including the `NSXMLDocument` parser. Next in §4.15's order: the collection family (`NSDictionary`/`NSSet`/
+`NSOrderedSet`/`NSCountedSet`/`NSArray`/`NSCharacterSet`, 39 sites) — one family, and by now the three rules above are
+the checklist rather than the surprise.

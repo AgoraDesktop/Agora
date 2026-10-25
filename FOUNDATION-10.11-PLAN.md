@@ -533,11 +533,25 @@ leave the 16 marks out and record `designated-missing` 16 with this paragraph as
 `-init` as designated, which is a fact Apple does not state (`designated-extra` 1) but which is TRUE of this class and
 clears the cluster. That is a decision to make before the batch that touches `NSNumber.m`, not during it.
 
-**WHY IT IS NOT IN THIS COMMIT.** The pass is 202 sites in 35 files, and the first batch alone (the number cluster, 57
-sites) needs the (a)/(b) decision. Landing the marks without the pass would state 135 contracts the bodies break 202
-times — the exact outcome the handoff refused — so the marks were reverted and the tree is green without them. The order I
-would take the batches in, chosen so that a superclass's marks are settled before its subclasses are measured:
-`NSURL` (11, and the pattern to copy) → `NSXMLNode`/`NSXMLDocument`/`NSXMLDTD` (26, one family) → `NSDictionary`/`NSSet`/
+**THE FIRST BATCH IS LANDED: `NSURL`, 11 sites → 0.** Its parse became `-fn_takePartsFromString:` answering YES/NO, and
+each of the eight marked doors is now its own constructor (`self = [super init]`, the parse, `[self release]` on
+failure) — which also closed the two failure paths on which the old funnel answered nil from an init without releasing.
+Three things the batch taught that the recipe did not:
+
+- **Routing the non-resolving convenience door through the resolving designated one created a CYCLE.** `FNURLResolveRelative`
+  used to finish with `[components URL]`, and `-URL` calls `+URLWithString:` — which resolves. The first build after the
+  edit recursed until the stack died; the resolver now finishes with `FNURLWithSpelling`, the parse alone, so
+  `+URLWithString:` resolves exactly once. A batch that turns a funnel into a constructor has to ask WHO ELSE calls the
+  door it routes to, and here the answer was the resolver itself.
+- **One door could not be made to comply and keeps its refusal**: `-initByResolvingBookmarkData:…` raises and has no
+  initializer to chain to, so it carries a local `#pragma clang diagnostic` with the reason (the precedent is
+  `NSTinyString.m`), rather than parsing something first to satisfy the checker.
+- The marks are Apple's, and `-initWithString:` now behaves like `-initWithString:relativeToURL:nil` because that is the
+  designated door Apple's graph says it must route to; its doc comment says so.
+
+`designated-present` moved 2 → 10 and `designated-missing` 135 → 127 in that commit. The remaining 192 sites keep the
+order below, chosen so that a superclass's marks are settled before its subclasses are measured:
+`NSXMLNode`/`NSXMLDocument`/`NSXMLDTD` (26, one family) → `NSDictionary`/`NSSet`/
 `NSOrderedSet`/`NSCountedSet`/`NSArray`/`NSCharacterSet` (39, the collection family) → `NSString`/`NSFileWrapper`/`NSMachPort`/
 `NSSocketPort` (29) → the scripting six (14) → the 1–3-site tail (26) → the number cluster (57) last, because it is the
 only group whose disposition is a decision rather than a recipe.

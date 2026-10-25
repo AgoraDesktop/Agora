@@ -238,3 +238,24 @@ partial placement would be a sweep whose pin reads a number nobody chose. Landin
 contracts the bodies break 202 times — what §2 refused. The plan's §4.15 now carries the per-file work list and the
 batch order (superclasses before subclasses: `NSURL` → the XML family → the collection family → … → the cluster last),
 so the next session can take one batch per commit and each commit moves `designated-present` by the batch's count.
+
+## 11. Item 5, first batch landed — and the rule is now a recipe
+
+`NSURL` is done: 11 sites → 0, `designated-present` 2 → 10, `designated-missing` 135 → 127 (`0259d46`). The parse is
+`-fn_takePartsFromString:` answering YES/NO, the eight marked doors are each their own constructor, and the two
+nil-returning failure paths in the old funnel now release.
+
+**The finding of the batch is a recursion, and it is written into §4.15 so the next batch looks for it first.** Routing
+the non-resolving `-initWithString:` through the resolving designated door made `+URLWithString:` resolve — and
+`FNURLResolveRelative` ended with `[components URL]`, whose `-URL` calls `+URLWithString:`. 174k frames deep and the
+crash surfaced in an unrelated test. The resolver now finishes with `FNURLWithSpelling`, the parse alone, declared
+beside `FNURLResolveRelative` in `NSURL.h`. **The rule for the next batch: when a funnel becomes a constructor, find
+every caller of the public door the constructors route to — the resolver was such a caller.**
+
+A second, smaller rule: a door whose whole body raises cannot be made to comply; it keeps its refusal and carries a
+local `#pragma clang diagnostic` with the reason (`NSTinyString.m`'s precedent), rather than parsing something first to
+satisfy the checker.
+
+The next batch is the XML family (`NSXMLNode`/`NSXMLDocument`/`NSXMLDTD`, 26 sites, and the family shares a funnel the
+way `NSURL` did), then the collections (39), then `NSString`/`NSFileWrapper`/`NSMachPort`/`NSSocketPort` (29), the
+scripting six (14), the tail (26), and the number cluster (57) last — it still needs the (a)/(b) decision §4.15 records.

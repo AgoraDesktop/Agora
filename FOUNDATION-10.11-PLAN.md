@@ -620,8 +620,25 @@ class, so a mutable answer stays mutable. The two `-initWithContentsOfURL:` door
 were answering a SUBSTITUTE object from an initializer with no self call; they parse and then route through the class's
 own `-initWithArray:`/`-initWithDictionary:`.
 
-`designated-present` 28 → 32, `designated-missing` 114 → 110. Two classes are left in the family — `NSOrderedSet` (6)
-and `NSArray` (5) — with their marks not placed, and then the 1–3-site tail. Order from here:
+`designated-present` 28 → 32, `designated-missing` 114 → 110.
+
+**THE THIRD BATCH, third part: arrays and ordered sets, 11 sites → 0.** The two coders were designated doors chaining
+to `-initWithArray:`; they call super and make the member storage themselves, and the convenience array doors turn the
+array into the C list. `NSMutableArray -initWithCapacity:` had been calling `[super init]`, which is not a designated door
+of `NSArray` — it calls the canonical constructor with an empty list, safe for the reason the dictionary's capacity door
+is: the empty substitution is keyed on the immutable concrete class. Both mutable classes owe a CONVENIENCE override of
+the immutable's designated constructor, and `AGArraySmall` starts from the super's designated constructor with an empty
+list before filling its inline storage. The collection family is closed.
+
+`designated-present` 32 → 40, `designated-missing` 110 → 102. **The measured residue, from `annotate`'s dry run rather
+than from the earlier estimate (which undercounted it):** 102 unmarked facts, of which 16 are `NSNumber`'s refused
+constructors and 2 more are `NSDecimalNumber`'s (unreachable for the same cluster reason) — so **84 facts on 54–18
+headers remain**, producing roughly 70 diagnostics. The size order is the batch order: the scripting family
+(`NSScriptObjectSpecifiers.h` 8 warnings, `NSScriptWhoseTests.h` 8, `NSScriptCommand.h` 2), `NSFileWrapper` (7),
+`NSMachPort` + `NSSocketPort` (14), `NSString` (8), then the 1–2-site classes (`NSValue`, `NSIndexSet`, `NSIndexPath`,
+`NSInputStream`, `NSOutputStream`, `NSHashTable`, `NSMapTable`, `NSNotification`, `NSPointerArray`, `NSScript…`,
+`NSArchiver`, `NSLocale`, `NSAppleEventDescriptor`, `NSComparisonPredicate`, `NSExpression`, `NSAppleScript`,
+`NSBundle`, `NSFileHandle`).
 `NSDictionary`/`NSSet`/
 `NSOrderedSet`/`NSCountedSet`/`NSArray`/`NSCharacterSet` (39, the collection family) → `NSString`/`NSFileWrapper`/`NSMachPort`/
 `NSSocketPort` (29) → the scripting six (14) → the 1–3-site tail (26) → the number cluster (57) last, because it is the

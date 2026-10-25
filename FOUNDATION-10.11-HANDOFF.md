@@ -343,3 +343,23 @@ and `annotate`'s dry run will keep offering the sixteen as the one refusal on th
 
 Remaining, in order: `NSOrderedSet` (6) and `NSArray` (5) — marks unplaced — then the 1–3-site tail (26). That is 37
 sites across 13 files; the rules are in §4.15 and every batch so far has been one family, one commit.
+
+## 16. Batch 3c, the family closed — and the residue re-measured
+
+11 sites to 0 (`24e7ca4`): `NSArray`, `NSMutableArray`, `NSOrderedSet`, `NSMutableOrderedSet`, plus `AGArraySmall`.
+The collection family is done: `designated-present` 40, `designated-missing` 102.
+
+**The plan's earlier "1–3-site tail (26)" was an undercount, and `annotate`'s dry run is the authority.** It now says 102
+unmarked declarations in 54 headers. Of those, 18 are refused by decision (`NSNumber` 16, `NSDecimalNumber` 2 — the same
+re-routing cluster), so **84 facts remain, producing roughly 70 diagnostics**, in this size order:
+
+| Group | Warnings |
+|---|---:|
+| scripting (`NSScriptObjectSpecifiers`, `NSScriptWhoseTests`, `NSScriptCommand`) | 18 |
+| `NSFileWrapper` | 7 |
+| `NSMachPort` + `NSSocketPort` | 14 |
+| `NSString` | 8 |
+| 1–2-site classes (values, indexes, streams, hash/map tables, notifications, pointer arrays, archivers, locale,  Apple events, predicate/expression, bundle, file handle, AppleScript) | ~23 |
+
+Nothing else about the pass changed: the four rules in §4.15 plus the pair lesson, one family per commit, the tree green
+and the diagnostic count at zero between batches.

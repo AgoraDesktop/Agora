@@ -527,8 +527,16 @@ Sizes are order-of-magnitude.
   every public setter now encodes — and each component encodes with its own RFC 3986 allow-list, because encoding `/`
   inside a path produced `%2Fa%20b`, one segment whose name contains a slash. `tests/foundation_10_11_url_components.m`
   pins the split (20 cases).
-- **Remaining:** the eight `rangeOf…` properties, `NSProgress` (+ `NSProgressReporting`), `NSByteCountFormatter`,
-  `NSPersonNameComponentsFormatter`, and the 11 predicate/evaluation doors.
+- **Done: `NSProgress` + `NSProgressReporting`** (10.9) — the wave's spine, and 31 of its 36 doors (the four
+  publish/subscriber doors are iOS-only in this SDK and are omitted with the reason in the header). The contract is
+  observation, so the probe measures announcements: a `completedUnitCount` write announces the count **and** the derived
+  fraction; `totalUnitCount` announces the fraction and a change of `indeterminate`; `+currentProgress` finds what a
+  thread became current with; a child's fraction moves its parent by the child's SHARE, not by its integers; and
+  `-cancel` reaches the leaves while the handler stays at the object cancelled. One bug found by the probe: the first
+  version bracketed `completedUnitCount` and `cancelled` MANUALLY, which announced them twice because KVO's automatic
+  wrapper already brackets a setter it observes — the manual pair is only for the DERIVED keys, which have no setter.
+- **Remaining:** the eight `rangeOf…` properties, `NSByteCountFormatter`, `NSPersonNameComponentsFormatter`, and the 11
+  predicate/evaluation doors.
 
 `NSProgress` + `NSProgressReporting`; `NSURLComponents` + `NSURLQueryItem`; `NSByteCountFormatter` and
 `NSPersonNameComponentsFormatter`; `unitStyle` on the three unit formatters; the predicate/expression evaluation

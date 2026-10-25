@@ -541,8 +541,15 @@ Sizes are order-of-magnitude.
   with non-numeric formatting off, and padded fraction digits. Two rendering rules fell out of the probe: a trailing
   `.0` is trimmed (1024 is `1 kB`, not `1.0 kB`) unless padding was asked for, and "Zero bytes" is a whole-string branch
   rather than a suffix decision. 19 cases.
-- **Remaining:** the eight `rangeOf…` properties, `NSPersonNameComponentsFormatter`, and the 11 predicate/evaluation
-  doors.
+- **Done: the evaluation sandbox and the metadata door** (5 of the 11 predicate/evaluation doors) — `-allowEvaluation` on
+  `NSExpression`, `NSPredicate` and `NSSortDescriptor`, `+expressionForAnyKey`, and
+  `+predicateFromMetadataQueryString:` (Spotlight's query syntax IS the predicate format this class already parses, so it
+  delegates rather than growing a second parser). One honest note at the header rather than a pretence: this tree never
+  sets Apple's "locked" flag, because its boundary is the secure-decoding allow-list, so the sandbox door records the
+  intent and answers.
+- **Remaining:** the `expressionWithFormat:` family (3), `expressionForConditional:trueExpression:falseExpression:` and
+  its two accessors (a conditional expression type this tree does not have yet), the eight `rangeOf…` properties, and
+  `NSPersonNameComponentsFormatter`.
 
 `NSProgress` + `NSProgressReporting`; `NSURLComponents` + `NSURLQueryItem`; `NSByteCountFormatter` and
 `NSPersonNameComponentsFormatter`; `unitStyle` on the three unit formatters; the predicate/expression evaluation

@@ -520,10 +520,15 @@ Sizes are order-of-magnitude.
   it was handed when the caller edits the original, and an archive round-trips through the secure-coding allow-list.
   `tests/foundation_10_11_url_query_item.m` pins them (16 cases). The 10.11 census moves to 194 of 219 classes, 3,306 of
   3,411 selectors.
-- **Remaining:** `NSURLComponents` (its 46 doors are the next slice — the internal `FNURLComponents` already implements
-  the surface, and the eight 10.11 `rangeOf…` properties plus `queryItems` are what is left), `NSProgress`
-  (+ `NSProgressReporting`), `NSByteCountFormatter`, `NSPersonNameComponentsFormatter`, and the 11 predicate/evaluation
-  doors.
+- **Done: `NSURLComponents`** (10.9) as a declaration over `FNURLComponents` (the plan's §4.3 decision), adding
+  `-init`, `-URLRelativeToURL:`, `-queryItems` and the six `percentEncoded…` setters. **38 of its 46 doors** are
+  answered; the eight 10.11 `rangeOf…` ranges are the residue and count as missing. The slice found the divergence that
+  mattered: the internal parser's plain setters took RAW text (correct for a parser) where Apple's take DECODED text, so
+  every public setter now encodes — and each component encodes with its own RFC 3986 allow-list, because encoding `/`
+  inside a path produced `%2Fa%20b`, one segment whose name contains a slash. `tests/foundation_10_11_url_components.m`
+  pins the split (20 cases).
+- **Remaining:** the eight `rangeOf…` properties, `NSProgress` (+ `NSProgressReporting`), `NSByteCountFormatter`,
+  `NSPersonNameComponentsFormatter`, and the 11 predicate/evaluation doors.
 
 `NSProgress` + `NSProgressReporting`; `NSURLComponents` + `NSURLQueryItem`; `NSByteCountFormatter` and
 `NSPersonNameComponentsFormatter`; `unitStyle` on the three unit formatters; the predicate/expression evaluation

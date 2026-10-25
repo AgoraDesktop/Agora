@@ -547,9 +547,14 @@ Sizes are order-of-magnitude.
   delegates rather than growing a second parser). One honest note at the header rather than a pretence: this tree never
   sets Apple's "locked" flag, because its boundary is the secure-decoding allow-list, so the sandbox door records the
   intent and answers.
+- **Done: the eight `rangeOf…` properties** (10.11) — a range in the RENDERED string, `{NSNotFound, 0}` when absent, and
+  `NSURLComponents` now answers **46 of its 46 doors**. One pass in grammar order: scheme up to a colon that precedes any
+  of `/ ? #`, then the authority (userinfo at `@`, host, port after the last colon inside the authority), then the path,
+  the query and the fragment. The probe slices the string for each range and checks three absences on a `mailto:` URL,
+  where a zero-length range at 0 would look plausible and be wrong.
 - **Remaining:** the `expressionWithFormat:` family (3), `expressionForConditional:trueExpression:falseExpression:` and
-  its two accessors (a conditional expression type this tree does not have yet), the eight `rangeOf…` properties, and
-  `NSPersonNameComponentsFormatter`.
+  its two accessors (needs a conditional expression type this tree does not have), and
+  `NSPersonNameComponentsFormatter` (8).
 
 `NSProgress` + `NSProgressReporting`; `NSURLComponents` + `NSURLQueryItem`; `NSByteCountFormatter` and
 `NSPersonNameComponentsFormatter`; `unitStyle` on the three unit formatters; the predicate/expression evaluation

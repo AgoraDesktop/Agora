@@ -506,7 +506,17 @@ Sizes are order-of-magnitude.
   `methods-declared-not-implemented` staying at 0 — a trailing annotation the reader did not learn to strip would
   surface there, which is the trap W0's shared-reader fix exists to close.
 
-### W2 — the spine and the formatters · M
+### W2 — the spine and the formatters · M — **in progress**
+
+- **Done: the unit style (10.10), and the enum values it reads.** `NSEnergyFormatter`, `NSLengthFormatter` and
+  `NSMassFormatter` gained `-unitStyle`/`-setUnitStyle:` (6 doors: short and medium render the SI symbol, long renders
+  the unit's name, pluralised unless the value is exactly one) and `NSFormattingUnitStyle` now carries Apple's values —
+  **1/2/3, where this tree counted from 0**, so a client comparing against Apple's constant read the wrong one. The
+  enum divergence was found by the first code to read the value, which is the argument for implementing in order of
+  dependency rather than in order of count. `tests/foundation_10_11_formatting.m` pins the constants, the medium
+  default, both styles and the singular/plural rule on all three families (23 cases).
+- **Remaining:** `NSProgress` (+ `NSProgressReporting`), `NSURLComponents`/`NSURLQueryItem`, `NSByteCountFormatter`,
+  `NSPersonNameComponentsFormatter`, and the 11 predicate/evaluation doors.
 
 `NSProgress` + `NSProgressReporting`; `NSURLComponents` + `NSURLQueryItem`; `NSByteCountFormatter` and
 `NSPersonNameComponentsFormatter`; `unitStyle` on the three unit formatters; the predicate/expression evaluation

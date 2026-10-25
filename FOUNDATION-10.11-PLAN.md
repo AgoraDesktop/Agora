@@ -486,6 +486,62 @@ table rather than a discovery — and it is stated in the header, where a caller
 it should not read the header as a promise that it will be. What the header promises is one documented order per
 language code, the default named, the boundaries published, and no silent third behaviour.
 
+### 4.15 The designated-initializer pass — measured, and the rule it has to obey
+
+W1's last residue is the constructor pass. It was attempted, measured, and **not landed**: the marks can be placed (the
+sweep is `api-ledger annotate --apply`), and with all 135 in place the library still builds, but clang emits **202
+distinct `-Wobjc-designated-initializers` diagnostics across 35 files**. (The handoff's 208 was a raw line count over an
+interleaved parallel build; 202 is the number of distinct declaration sites.) The distribution is the work plan:
+
+| File | Sites | | File | Sites |
+|---|---:|---|---|---:|
+| `NSNumber.m` | 35 | | `NSXMLDocument.m` | 7 |
+| `NSDecimalNumber.m` | 22 | | `NSOrderedSet.m` | 6 |
+| `NSURL.m` | 11 | | `NSScriptObjectSpecifiers.m` | 6 |
+| `NSXMLNode.m` | 10 | | `NSSet.m` | 6 |
+| `NSDictionary.m`, `NSXMLDTD.m` | 9 each | | `NSArray.m`, `NSCharacterSet.m` | 4 each |
+| `NSScriptWhoseTests.m`, `NSString.m` | 8 each | | 5 files | 3 each |
+| `NSCountedSet.m`, `NSFileWrapper.m`, `NSMachPort.m`, `NSSocketPort.m` | 7 each | | 11 files | 1–2 each |
+
+**THE RULE, MEASURED RATHER THAN REMEMBERED.** Four minimal compilations against `clang-19 -Wobjc-designated-initializers`
+establish what the warning set actually forbids, and the answer is not what the message text suggests:
+
+1. **A designated initializer may not chain to any initializer on `self`** — not even to another designated one. The
+   diagnostic is worded "should only invoke a designated initializer on 'super'", but a marked initializer that returns
+   `[self initWithParts:…]` triggers it, and so does the accompanying "missing a 'super' call".
+2. **`[super init]` is legal when the superclass declares NO designated initializers** (clang 19: no diagnostic), which
+   is why every marked door can call `NSObject`'s unmarked `-init` and say nothing more.
+3. **`[super init]` is illegal when the superclass DOES declare one** unless the callee is that designated init (this is
+   the 37-site "should only invoke a designated initializer on 'super'" group).
+4. **A class-extension mark does not rescue a self-chain** — the rule is about the chain, not about where the mark lives.
+
+**THE RECIPE THAT FOLLOWS.** A designated door is its own constructor: `self = [super init]`, then the work, and the
+convenience doors (the unmarked ones) route to a marked door. Every class in this tree funnels its constructors through
+ONE private initializer (`NSURL -initWithPartsFromString:`, `NSXMLNode -initWithKind:options:`, …), and that funnel is
+exactly what the rule forbids a designated door to call. So the pass converts each funnel into a **plain method** and
+makes each marked door a constructor that calls super and then the method. That is not a cosmetic edit: it is also where
+the existing funnels' failure paths leak (a funnel returning nil from an init does not release `self`), so the pass has to
+say what every door does when the parse fails, and that is the part worth reviewing.
+
+**ONE CLASS CANNOT OBEY IT AT ALL, AND THAT IS A FINDING.** `NSNumber` is a re-routing class cluster: the front's 16
+marked type constructors do `[self release]; return [[AGNumber… alloc] initWithX:value]`, and the five concrete
+subclasses override those same 16 selectors. Under rule 3 a concrete override must call a marked super init; under the
+cluster's design, calling `[super initWithInt:]` re-enters the front's re-router and recurses forever, so the only legal
+call it can make is `[super init]` — which is rule 3's violation. **Apple's marks describe a cluster whose storage lives
+in Core Foundation, where no clang rule applies; this cluster's storage lives here.** The honest dispositions are (a)
+leave the 16 marks out and record `designated-missing` 16 with this paragraph as the reason, or (b) mark `NSNumber`'s
+`-init` as designated, which is a fact Apple does not state (`designated-extra` 1) but which is TRUE of this class and
+clears the cluster. That is a decision to make before the batch that touches `NSNumber.m`, not during it.
+
+**WHY IT IS NOT IN THIS COMMIT.** The pass is 202 sites in 35 files, and the first batch alone (the number cluster, 57
+sites) needs the (a)/(b) decision. Landing the marks without the pass would state 135 contracts the bodies break 202
+times — the exact outcome the handoff refused — so the marks were reverted and the tree is green without them. The order I
+would take the batches in, chosen so that a superclass's marks are settled before its subclasses are measured:
+`NSURL` (11, and the pattern to copy) → `NSXMLNode`/`NSXMLDocument`/`NSXMLDTD` (26, one family) → `NSDictionary`/`NSSet`/
+`NSOrderedSet`/`NSCountedSet`/`NSArray`/`NSCharacterSet` (39, the collection family) → `NSString`/`NSFileWrapper`/`NSMachPort`/
+`NSSocketPort` (29) → the scripting six (14) → the 1–3-site tail (26) → the number cluster (57) last, because it is the
+only group whose disposition is a decision rather than a recipe.
+
 ---
 
 ## 5. The waves
@@ -524,14 +580,15 @@ Sizes are order-of-magnitude.
   `NS_RETURNS_INNER_POINTER` on the seven doors Apple marks that way (`bytes`, `mutableBytes`, `objCType` twice,
   `UTF8String`, `methodReturnType`, `getArgumentTypeAtIndex:`, `aeDesc`) and `__kindof` on the two the tree has
   (`NSOperationQueue -operations`, `NSXMLNode -nodesForXPath:error:`).
-- **Attempted and deliberately deferred: `NS_DESIGNATED_INITIALIZER`.** The facts are now committed (178
+- **Attempted, measured and deferred: `NS_DESIGNATED_INITIALIZER`.** The facts are now committed (178
   `designated-init` lines, 135 of them on declarations this tree makes) and pinned, and `api-ledger annotate` can
-  place the marks. Placing them is what revealed the cost: the library still builds, but clang emits **208 distinct
-  `-Wobjc-designated-initializers` warnings** — "designated initializer should only invoke a designated initializer on
-  'super'", "convenience initializer missing a 'self' call to another initializer". Those warnings are TRUE: this
-  tree's initializers do not follow the graph Apple's marks describe. Marking 135 headers would state a contract the
-  bodies break in 208 places, so the marks wait for the implementation pass — one slice, 135 constructors and the
-  warning count as its gate — and the pin holds at 135 missing in the meantime.
+  place the marks. Placing them is what revealed the cost: the library still builds, but clang emits **202 distinct
+  `-Wobjc-designated-initializers` diagnostics across 35 files** (§4.15 has the per-file counts and the measured rule
+  clang actually enforces). They are TRUE: this tree's initializers do not follow the graph Apple's marks describe.
+  Marking 135 headers would state a contract the bodies break 202 times, so the marks wait for the implementation pass
+  — one slice whose gate is that count — and the pin holds at 135 missing in the meantime. §4.15 also records that the
+  pass is a real refactor (each funnel initializer becomes a plain method so a marked door can be its own
+  constructor), and that `NSNumber`'s re-routing cluster cannot obey the graph at all without a decision.
 - **Remaining:** `AGORA_EXTENSION` for the post-10.11 classes (§4.13), and **411 `-Wnullability-completeness` warnings
   across 194 of the 196 headers** (measured, objc mode), which is the S2 residue: the annotations are right where they
   exist, and a pointer without one is a fact the header still refuses to state.

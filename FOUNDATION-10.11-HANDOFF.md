@@ -208,3 +208,33 @@ with the class they belong to, which is what a slice that starts at the input ty
 W2 is closed. What remains in the plan is the W1 residue (the constructor pass, `AGORA_EXTENSION`, the 411
 nullability warnings) and W3 onward (`URLSession`, notifications/extensions, XPC refusals, the 70-door tail, the 26
 header names).
+
+## 10. Item 5, attempted and handed back — with the rule it needs
+
+The constructor pass was started, measured and reverted. Nothing is half-applied; the tree is green at `3b67dec` plus
+the documentation commits.
+
+**What the attempt produced, which the plan did not have:**
+
+- The accurate size: **202 distinct `-Wobjc-designated-initializers` sites across 35 files** (the 208 in §2 was a raw
+  line count over an interleaved parallel build). The distribution is in the plan's §4.15 and it is the batch plan.
+- **The rule clang actually enforces**, established by four minimal compilations rather than by reading the message
+  text: a designated initializer may not chain to ANY initializer on `self` (not even another designated one); `[super
+  init]` is legal when the superclass declares no designated initializers (so the unmarked `NSObject -init` is fine);
+  it is illegal when the superclass declares one unless that callee is the designated one; and a class-extension mark
+  does not rescue a self-chain.
+- **The recipe that follows**: every class here funnels its constructors through one private initializer, and that is
+  precisely what a designated door may not call. So the pass converts each funnel into a plain method and makes each
+  marked door its own constructor — which also fixes the funnels' existing failure paths (a funnel returning nil from
+  an init does not release `self`). The behaviour of every failure path is the part to review, not the marks.
+- **One class cannot obey it at all**: `NSNumber`'s re-routing cluster. A concrete override must call a marked super
+  init; calling one re-enters the front's re-router and recurses, so the only legal call is `[super init]`, which the
+  rule forbids. Apple's marks describe a CF-backed cluster where no clang rule applies. Two dispositions are written
+  down (leave 16 marks out, or mark `NSNumber -init` and record `designated-extra` 1); it is a decision, and it is why
+  the number cluster (57 sites) is the LAST batch and not the first.
+
+**Why not land it partially.** The marks are a binary statement per declaration and the sweep places them by class, so a
+partial placement would be a sweep whose pin reads a number nobody chose. Landing them without the pass would state 135
+contracts the bodies break 202 times — what §2 refused. The plan's §4.15 now carries the per-file work list and the
+batch order (superclasses before subclasses: `NSURL` → the XML family → the collection family → … → the cluster last),
+so the next session can take one batch per commit and each commit moves `designated-present` by the batch's count.

@@ -571,8 +571,28 @@ Three things the batch taught that the recipe did not:
   said out loud.
 
 `designated-present` 10 → 22, `designated-missing` 127 → 120, `designated-candidates` 137 → 142, `designated-extra`
-0 → 2, `methods-declared` 4,032 → 4,041; 31 of 31 suites green, including the document parser. The remaining 166 sites
-keep the order below, chosen so that a superclass's marks are settled before its subclasses are measured:
+0 → 2, `methods-declared` 4,032 → 4,041; 31 of 31 suites green, including the document parser.
+
+**THE THIRD BATCH, first half: the set family and `NSCharacterSet`, 17 sites → 0.** This is the first batch with a
+MUTABLE/IMMUTABLE PAIR, and the pair is where the cascade becomes visible:
+
+- `NSSet` kept **three copies of the construction rules** (dedup, the empty-set substitution, the class choice):
+  `-initWithObjects:count:`, `-initWithArray:` and `-initWithCoder:`. Only the designated door may build, so
+  `-initWithArray:` became the convenience that turns an array into the C list and `-initWithCoder:` calls super and
+  takes the snapshot itself. One behaviour changed and is written down: an **empty decoded set is no longer the shared
+  empty instance**, because the class-choosing rule belongs to the constructor and a decoder has data, not a
+  constructor argument.
+- `NSMutableSet` owes an override of the immutable's designated constructor the moment it marks `-initWithCapacity:`.
+  It is a CONVENIENCE override — route through the capacity door and add — rather than a pass-through with a second
+  tree-local mark, which keeps `designated-extra` at 2.
+- `NSCountedSet` has exactly ONE designated door in Apple's header, so `-initWithObjects:count:` became the convenience
+  one and `-initWithCapacity:` establishes the count array aligned with the inherited members. Its coder override is
+  new and does work the set's coder cannot: the wire carries MEMBERS, not multiplicities.
+- `NSCharacterSet`'s only marked door is `-initWithCoder:`, so its two constructors start from `-init`.
+
+`designated-present` 22 → 28, `designated-missing` 120 → 114. The rest of the family is 21 sites (`NSDictionary` 9,
+`NSOrderedSet` 6, `NSArray` 5, `NSPropertyListSerialization` 1) and its marks are not placed yet — the next commit is
+one batch, in the order below (a superclass's marks settled before its subclasses are measured):
 `NSDictionary`/`NSSet`/
 `NSOrderedSet`/`NSCountedSet`/`NSArray`/`NSCharacterSet` (39, the collection family) → `NSString`/`NSFileWrapper`/`NSMachPort`/
 `NSSocketPort` (29) → the scripting six (14) → the 1–3-site tail (26) → the number cluster (57) last, because it is the

@@ -281,3 +281,24 @@ State: `designated-present` 22, `missing` 120, `candidates` 142, `extra` 2; `met
 green, including the `NSXMLDocument` parser. Next in §4.15's order: the collection family (`NSDictionary`/`NSSet`/
 `NSOrderedSet`/`NSCountedSet`/`NSArray`/`NSCharacterSet`, 39 sites) — one family, and by now the three rules above are
 the checklist rather than the surprise.
+
+## 13. Item 5, batch 3a — the pair is where the cascade shows
+
+17 sites to 0 (`6cbe7d4`): `NSSet`, `NSMutableSet`, `NSCountedSet`, `NSCharacterSet`. Four lessons, all from the
+mutable/immutable pair rather than from any single class:
+
+- **One designated door per class means the FUNNEL becomes the convenience one.** `NSSet` had three copies of its
+  construction rules (`-initWithObjects:count:`, `-initWithArray:`, `-initWithCoder:`); only the designated door may
+  build, so the array and coder doors changed shape rather than gaining an override.
+- **A mutable subclass owes an override of the immutable's designated constructor** as soon as it marks one of its
+  own. Make it a CONVENIENCE override (route through its own designated door and add) and `designated-extra` stays put;
+  make it a pass-through and it needs a second tree-local mark.
+- **A coder override is where a subclass's extra storage has to be rebuilt.** `NSCountedSet`'s counts are aligned with
+  the members it inherits, and the wire carries members only: the override rebuilds one count per member instead of
+  leaving `_counts` nil for the first `-countForObject:`.
+- **A behaviour change worth writing down**: an empty DECODED set is a plain instance now, not the shared empty one —
+  the class-choosing rule belongs to the constructor, and a decoder has data rather than a constructor argument.
+
+State: `designated-present` 28, `missing` 114, `candidates` 142, `extra` 2; 31 of 31 suites green. Remaining in the
+family: `NSDictionary` 9, `NSOrderedSet` 6, `NSArray` 5, `NSPropertyListSerialization` 1 — 21 sites, marks not yet
+placed, next commit.

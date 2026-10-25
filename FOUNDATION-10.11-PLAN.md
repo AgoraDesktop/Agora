@@ -590,9 +590,19 @@ MUTABLE/IMMUTABLE PAIR, and the pair is where the cascade becomes visible:
   new and does work the set's coder cannot: the wire carries MEMBERS, not multiplicities.
 - `NSCharacterSet`'s only marked door is `-initWithCoder:`, so its two constructors start from `-init`.
 
-`designated-present` 22 → 28, `designated-missing` 120 → 114. The rest of the family is 21 sites (`NSDictionary` 9,
-`NSOrderedSet` 6, `NSArray` 5, `NSPropertyListSerialization` 1) and its marks are not placed yet — the next commit is
-one batch, in the order below (a superclass's marks settled before its subclasses are measured):
+**THE THIRD BATCH, second half: the dictionaries and the property-list doors, 10 sites → 0.** `NSDictionary` is the
+first class whose designated door is the CODER, and it shows the same three habits as its siblings: the convenience
+doors start from `-init`, the coder calls super and replays the pairs through the primitive setter instead of chaining
+to the canonical constructor, and `NSMutableDictionary` owes a CONVENIENCE override of the immutable's designated
+constructor (capacity door, then the setter) rather than a second tree-local mark. One detail is worth keeping: the
+mutable capacity door must call a DESIGNATED super door — the canonical constructor with a zero count — because
+`[super init]` is not one, and the canonical constructor's empty substitution fires only for the immutable concrete
+class, so a mutable answer stays mutable. The two `-initWithContentsOfURL:` doors in `NSPropertyListSerialization.m`
+were answering a SUBSTITUTE object from an initializer with no self call; they parse and then route through the class's
+own `-initWithArray:`/`-initWithDictionary:`.
+
+`designated-present` 28 → 32, `designated-missing` 114 → 110. Two classes are left in the family — `NSOrderedSet` (6)
+and `NSArray` (5) — with their marks not placed, and then the 1–3-site tail. Order from here:
 `NSDictionary`/`NSSet`/
 `NSOrderedSet`/`NSCountedSet`/`NSArray`/`NSCharacterSet` (39, the collection family) → `NSString`/`NSFileWrapper`/`NSMachPort`/
 `NSSocketPort` (29) → the scripting six (14) → the 1–3-site tail (26) → the number cluster (57) last, because it is the

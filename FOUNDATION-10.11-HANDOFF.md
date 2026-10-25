@@ -302,3 +302,23 @@ mutable/immutable pair rather than from any single class:
 State: `designated-present` 28, `missing` 114, `candidates` 142, `extra` 2; 31 of 31 suites green. Remaining in the
 family: `NSDictionary` 9, `NSOrderedSet` 6, `NSArray` 5, `NSPropertyListSerialization` 1 — 21 sites, marks not yet
 placed, next commit.
+
+## 14. Item 5, batch 3b — the coder as a designated door
+
+10 sites to 0 (`5b16759`): `NSDictionary`, `NSMutableDictionary`, and the two `-initWithContentsOfURL:` doors that live
+in `NSPropertyListSerialization.m`. The dictionary is the first class whose designated door is the **coder**, and it
+behaved exactly like its siblings:
+
+- convenience doors start from `-init`; the coder calls super and replays the decoded pairs through the primitive
+  setter instead of chaining to the canonical constructor;
+- the mutable subclass owes a CONVENIENCE override of the immutable's designated constructor (capacity door, then the
+  setter), which keeps `designated-extra` at 2;
+- **the mutable capacity door must call a DESIGNATED super door** — the canonical constructor with a zero count, not
+  `[super init]` — and that is safe because the canonical constructor's empty substitution fires only for
+  `isMemberOfClass:[AGDictionaryItems class]`, so a mutable answer stays mutable;
+- the two property-list doors were answering a SUBSTITUTE object from an initializer that made no self call; they parse
+  and route through the class's own `-initWithArray:`/`-initWithDictionary:`.
+
+State: `designated-present` 32, `missing` 110, `candidates` 142, `extra` 2; 31 of 31 suites green. Left in the
+collection family: `NSOrderedSet` (6) and `NSArray` (5), marks not placed — then the 1–3-site tail (26) and the number
+cluster (57), which still needs the (a)/(b) decision §4.15 records.

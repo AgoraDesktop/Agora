@@ -862,10 +862,33 @@ family; `+predicateFromMetadataQueryString:`.
   an RFC 3986 table test including the malformed-escape raise, byte-count and person-name output per style and
   locale, and unit-style formatting against `NSNumberFormatter` behaviour.
 
-### W3 — URLSession · XL
+### W3 — URLSession · XL — **in progress (W3a done)**
 
 7 classes, 5 protocols, the 12 task-scoped doors on cache/credential/cookie/protocol — two of them being
 `NSURLProtocol`'s task-initialised entry points.
+
+**DONE: W3a, `NSURLSessionConfiguration` — all 47 doors.** The options object, and with it the piece every other
+class in the family takes as an argument. There is no transport in it, so the contract is entirely observable and the
+batch is a class rather than a stub: the defaults table is Apple's (protocol cache policy, 60 s/7 day timeouts, the
+default service type, cellular on, discretionary off, launch events on, EMPTY proxy/header dictionaries rather than
+nil, `kSSLProtocolUnknown` at both TLS ends, pipelining off, cookies on and accepted always, six connections per host,
+the three shared stores), the three factories differ only where Apple says (ephemeral swaps in private in-memory
+cookie/credential stores and a zero-disk cache), nil means "no store", and the copy a session depends on deep-copies
+the mutable values and retains the stores. `SSLProtocol` is declared in the header for want of a Security framework —
+SecureTransport's values read from the 10.11 SDK header, TLS still performed by libcurl — and the test pins the
+numbers. `tests/foundation_10_11_session_configuration.m` is 48 cases. Census: classes 198 → 199, selectors 3,422 →
+3,469, `methods-declared` 4,046 → 4,093, availability candidates/present 800 → 809. The class is deliberately NOT in
+`Foundation.h`: W7 takes the family into the umbrella when all seven exist.
+
+**REMAINING: W3b–W3d.** W3b is the spine — `NSURLSession` (31), `NSURLSessionTask` (17) and `NSURLSessionDataTask`
+(no own doors) over the `NSURLProtocol` machinery `NSURLConnection` already drives, plus the delegate protocols
+(`NSURLSessionDelegate`, `…TaskDelegate`, `…DataDelegate`), the session's copy of its configuration, and the
+completion-handler forms. W3c is download (its one door is a refusal: no resume data) and upload (no own doors) to a
+destination URL and from data/file. W3d is `NSURLSessionStreamTask` (7, over a socket pair) and the task-scoped doors
+on `NSURLCache` (3), `NSURLCredentialStorage` (4), `NSHTTPCookieStorage` (3) and `NSURLProtocol` (3) — the last being
+`+canInitWithTask:` and the task-initialised entry points. The wave's acceptance (a loopback server driving data,
+download and upload, a redirect with a cookie, an authentication challenge, task-scoped cookies, cancellation and a
+stream task) belongs to W3d.
 
 - **Moves:** 7 classes, 5 protocols, 13 shared selectors, and the 103 the family declares itself (31 `NSURLSession`,
   47 `NSURLSessionConfiguration`, 17 `NSURLSessionTask`, 7 `NSURLSessionStreamTask`, 1 `NSURLSessionDownloadTask`).

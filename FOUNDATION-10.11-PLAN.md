@@ -880,15 +880,31 @@ numbers. `tests/foundation_10_11_session_configuration.m` is 48 cases. Census: c
 3,469, `methods-declared` 4,046 → 4,093, availability candidates/present 800 → 809. The class is deliberately NOT in
 `Foundation.h`: W7 takes the family into the umbrella when all seven exist.
 
-**REMAINING: W3b–W3d.** W3b is the spine — `NSURLSession` (31), `NSURLSessionTask` (17) and `NSURLSessionDataTask`
-(no own doors) over the `NSURLProtocol` machinery `NSURLConnection` already drives, plus the delegate protocols
-(`NSURLSessionDelegate`, `…TaskDelegate`, `…DataDelegate`), the session's copy of its configuration, and the
-completion-handler forms. W3c is download (its one door is a refusal: no resume data) and upload (no own doors) to a
-destination URL and from data/file. W3d is `NSURLSessionStreamTask` (7, over a socket pair) and the task-scoped doors
-on `NSURLCache` (3), `NSURLCredentialStorage` (4), `NSHTTPCookieStorage` (3) and `NSURLProtocol` (3) — the last being
-`+canInitWithTask:` and the task-initialised entry points. The wave's acceptance (a loopback server driving data,
-download and upload, a redirect with a cookie, an authentication challenge, task-scoped cookies, cancellation and a
-stream task) belongs to W3d.
+**DONE: W3b, the spine — `NSURLSession` (18 of its 31 doors), `NSURLSessionTask` (17) and `NSURLSessionDataTask`,
+plus all five delegate protocols.** A TASK IS AN `NSURLProtocolClient` over the engine `NSURLConnection` already
+drives: the transport's doors become the session delegate's messages, and what the slice adds is what a session has
+that a connection does not — a task identifier and state machine, byte counts, a delegate QUEUE (a nil queue becomes a
+serial one the session owns), completion handlers, and invalidation. The response door BLOCKS the payload until the
+disposition answers (data arriving is held in order); redirects are the delegate's, with `currentRequest` moving only
+when one is followed; cancellation ends with `NSURLErrorCancelled`; authentication asks the task door before the
+session door and maps the dispositions onto the challenge sender's actions; a background configuration is refused at
+session creation with the `FOUNDATION-REFUSE` line W5's census will read. `tests/foundation_10_11_url_session.m` is
+62 cases over a loopback server: the completion form, the delegate form on a serial queue (and none of it on the
+calling thread), a POST with upload progress, a redirect followed and one refused, cancellation, the task lists, the
+task's own doors, and the background refusal. Census: classes 199 → 202, protocols 31 → 36, selectors 3,469 → 3,504;
+`selectors-offered` 3,568 → 3,616 and `selectors-missing` 99 → 112 — MORE honest, not worse: a class that did not exist
+offered nothing, and the 13 download/upload/stream factories are now counted as missing. `methods-declared` 4,100 →
+4,135; availability 809 → 815.
+
+**REMAINING: W3c–W3d.** W3c is `NSURLSessionDownloadTask` (its one door is a refusal: no resume data) and
+`NSURLSessionUploadTask` (no own doors) plus the ELEVEN factories that return them (six download, five upload) — a
+download writes the body to a temporary file and delivers `URLSession:downloadTask:didFinishDownloadingToURL:` before
+the completion; an upload takes its body from data or a file (`uploadTaskWithStreamedRequest:` must refuse by name
+until the transport gains a body-stream read). W3d is `NSURLSessionStreamTask` (7, over a socket pair) and the
+task-scoped doors on `NSURLCache` (3), `NSURLCredentialStorage` (4), `NSHTTPCookieStorage` (3) and `NSURLProtocol` (3)
+— the last being `+canInitWithTask:` and the task-initialised entry points. The wave's acceptance (a loopback server
+driving data, download and upload, a redirect with a cookie, an authentication challenge, task-scoped cookies,
+cancellation and a stream task) belongs to W3d.
 
 - **Moves:** 7 classes, 5 protocols, 13 shared selectors, and the 103 the family declares itself (31 `NSURLSession`,
   47 `NSURLSessionConfiguration`, 17 `NSURLSessionTask`, 7 `NSURLSessionStreamTask`, 1 `NSURLSessionDownloadTask`).

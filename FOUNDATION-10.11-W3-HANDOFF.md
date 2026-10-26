@@ -1,24 +1,28 @@
-# W3 — URLSession — handoff (W3a landed)
+# W3 — URLSession — handoff (W3a and W3b landed)
 
-*State at the end of the session that began W3 and completed its first slice: **`NSURLSessionConfiguration`, all 47
-doors**, in the tree, tested, and pinned. The wave is XL and the other six classes are still to write; this handoff is
-the place a continuation starts. Everything below was measured; §7 reproduces every number.*
+*State at the end of the session that completed the wave's first two slices: **`NSURLSessionConfiguration` (all 47
+doors)** and **the spine — `NSURLSession`, `NSURLSessionTask`, `NSURLSessionDataTask` and the five delegate protocols**
+— in the tree, tested, and pinned. The wave is XL: the download/upload half and the stream task are still to write,
+and this handoff is the place a continuation starts. Everything below was measured; §7 reproduces every number.*
 
 ---
 
 ## 1. Where the tree is
 
-34 suites green in the committed state (the tree's 33, plus W3a's own test). All API gates green.
+37 suites green in the committed state. All API gates green.
 
 | Gate | Reads |
 |---|---|
-| `foundation-api-10.11-census` | **199 of 219 classes**, **3,469 of 3,568 selectors** (99 missing), 31 of 40 protocols, 182 of 182 functions |
-| `foundation-api-census` (10.6) | `methods-declared` **4,093**, not-implemented 0 |
-| `foundation-api-availability` | annotations **809/809**, 0 wrong · designated 125/143 present, 18 missing (the refused number cluster), extra 2 |
+| `foundation-api-10.11-census` | **202 of 219 classes**, **3,504 of 3,616 selectors** (112 missing), **36 of 40 protocols**, 182 of 182 functions |
+| `foundation-api-census` (10.6) | `methods-declared` **4,135**, not-implemented 0 |
+| `foundation-api-availability` | annotations **815/815**, 0 wrong · designated 125/143 present, 18 missing (the refused number cluster), extra 2 |
 | `foundation-header-compile` / `-nullability` / `-strict-surface` | 202 headers alone × 3 modes · 0 nullability sites · 6 extension declarations hidden under the strict define |
 
-The 20 missing classes and 99 missing selectors are the rest of the 10.11 surface: W3b–W3d (URLSession),
-W4 (notifications/extensions/item provider), W5 (XPC and script-task refusals).
+The 17 missing classes and 112 missing selectors are the rest of the 10.11 surface: W3c/W3d (URLSession's
+download/upload/stream half), W4 (notifications/extensions/item provider), W5 (XPC and script-task refusals). The
+missing-selector number went UP from 99 with W3b, which is the measurement getting more honest rather than worse: a
+class that does not exist offers nothing, and the 13 factories that return the not-yet-written download/upload/stream
+tasks are now counted.
 
 ---
 
@@ -63,6 +67,36 @@ factory, the identifier factory, the discretionary pair, the shared-container pa
 
 ---
 
+## 2b. What landed: W3b, the spine (35 selectors, 5 protocols)
+
+`NSURLSession.h` + `.m` + `tests/foundation_10_11_url_session.m` (62 cases), commit `676625d` in `libagora-base`.
+
+**A task is an `NSURLProtocolClient`.** `+fnProtocolClassForRequest:` names the class that claims the request, one
+instance is made with the task as its client, and `-startLoading` begins the transfer on the transport's own thread.
+The client doors become the session delegate's messages, so the bytes, redirects and challenges are the ones
+`FNCURLURLProtocol` already produces. What the slice adds:
+
+| Shape | Rule |
+|---|---|
+| birth | a task is **suspended**; `-resume` starts it; `-suspend` stops the transfer and a later resume **restarts** it (the engine has no resumable transfer — the documented deviation) |
+| lifetime | the session **retains itself per outstanding task**, which is also what keeps a task's unretained session pointer valid |
+| delegate delivery | always on the session's queue; a nil queue becomes a serial queue the session owns, so completion handlers run even with no delegate |
+| response | `-didReceiveResponse:completionHandler:` **blocks** the payload; data arriving meanwhile is held and delivered in order on Allow; Cancel ends the task; the two conversions are refused by name |
+| redirects | the delegate decides; `currentRequest` moves only when followed; a refused redirect makes the 3xx the final response; the new protocol is in place before the old is autoreleased (the old frame is on the stack) |
+| cancellation | `NSURLErrorCancelled`, state Canceling then Completed, `-error` set |
+| authentication | task door before session door, mapped onto the challenge sender's actions; no delegate ⇒ default handling **without waiting**, so the transport never hangs |
+| background | refused at session creation with the `FOUNDATION-REFUSE` line W5's census will read |
+| task lists | `getTasks…` answers the outstanding tasks of each kind (upload/download arrays are empty until W3c); `-flush…` is a documented no-op; `reset…` empties the configuration's three stores |
+| copies | `-copy` is a new **suspended** task on the same session — not a second handle on a running transfer |
+
+Declared: `NSURLSession` with **18 of its 31 doors** (the data half), `NSURLSessionTask` (17), `NSURLSessionDataTask`
+(0 own), and all five delegate protocols. The 13 download/upload/stream factories are **not declared**: their classes
+are W3c/W3d, and a factory that cannot make its object is the stub §4.3 forbids.
+
+Pin movements: classes 199 → 202, protocols 31 → 36, selectors 3,469 → 3,504; `selectors-offered` 3,568 → 3,616 and
+`methods-declared` 4,100 → 4,135; availability 809 → 815 (`NSURLSession`/`NSURLSessionTask` at
+`NSURLSESSION_AVAILABLE`, `NSURLSessionDataTask` at **10.10**, `getAllTasks…` 10.11, the `priority` pair 10.10).
+
 ## 3. The design the remaining slices follow (§4.1 of the plan)
 
 URLSession is a **task state machine over the transfer engine that is already here**, not a second HTTP stack:
@@ -86,17 +120,18 @@ URLSession is a **task state machine over the transfer engine that is already he
 
 ## 4. What remains, in the order I would take it
 
-1. **W3b — the spine.** `NSURLSession` (31 doors), `NSURLSessionTask` (17), `NSURLSessionDataTask` (0 own),
-   `NSURLSessionDelegate`, `NSURLSessionTaskDelegate`, `NSURLSessionDataDelegate`, the completion-handler forms, and the
-   session's configuration copy. Test: a loopback HTTP server (the existing `foundation_behaviour_3` runs one) driving a
-   GET and a POST with delegate callbacks and a completion handler.
-2. **W3c — download and upload.** `NSURLSessionDownloadTask` (1 door: the resume-data refusal), `NSURLSessionUploadTask`
-   (0 own), download to a destination URL, upload from `NSData` and from a file.
-3. **W3d — stream and the task-scoped doors.** `NSURLSessionStreamTask` (7, over a socket pair), `NSURLSessionStreamDelegate`,
-   and the task-scoped additions to `NSURLCache` (3), `NSURLCredentialStorage` (4), `NSHTTPCookieStorage` (3) and
-   `NSURLProtocol` (3 — `+canInitWithTask:`, `-initWithTask:cachedResponse:client:`, `-task`). Then the wave's
-   acceptance test (redirect with a cookie, authentication challenge, task-scoped cookies, cancellation, stream task).
-4. **W4 / W5** after the family, per the plan.
+1. **W3c — download and upload.** `NSURLSessionDownloadTask` (1 door: the resume-data refusal),
+   `NSURLSessionUploadTask` (0 own), and the ELEVEN factories that return them (six download, five upload). A download
+   writes the body to a temporary file, delivers `URLSession:downloadTask:didFinishDownloadingToURL:` (and the
+   `didWriteData:…` progress door) before the completion, and removes the file when the delegate returns — Apple's
+   rule. An upload takes its body from data or a file; `uploadTaskWithStreamedRequest:` must refuse by name, because
+   the transport has no body-stream read door yet (the same limitation §4.1 records for re-sends).
+2. **W3d — stream and the task-scoped doors.** `NSURLSessionStreamTask` (7, over a socket pair),
+   `NSURLSessionStreamDelegate`, and the task-scoped additions to `NSURLCache` (3), `NSURLCredentialStorage` (4),
+   `NSHTTPCookieStorage` (3) and `NSURLProtocol` (3 — `+canInitWithTask:`, `-initWithTask:cachedResponse:client:`,
+   `-task`). Then the wave's acceptance test (redirect with a cookie, authentication challenge, task-scoped cookies,
+   cancellation, stream task).
+3. **W4 / W5** after the family, per the plan.
 
 Every slice must keep `methods-declared-not-implemented` at 0: a declared selector needs a body, and a refusal is a
 body that names itself (`FOUNDATION-REFUSE`), which is W5's census instrument.
@@ -135,8 +170,8 @@ editing. What was done about it:
 ```sh
 cd libagora-base
 
-# the class's own test
-cd build && ctest -R foundation_10_11_session_configuration -V
+# the two slices' own tests
+cd build && ctest -R 'foundation_10_11_session_configuration|foundation_10_11_url_session' -V
 
 # the census position
 python3 ../libagora-app/tools/api-ledger census api/10.11/foundation-manifest.txt . --library build/libagora-base.so
@@ -147,6 +182,6 @@ python3 ../libagora-app/tools/api-ledger missing api/10.11/foundation-manifest.t
 python3 ../libagora-app/tools/api-ledger availability api/10.11/foundation-manifest.txt . \
         --pin tests/api-10.11-annotations.txt
 
-# the whole suite (34 in the committed state; a concurrent run-loop test may make it 35)
+# the whole suite (37 in the committed state)
 cd build && ctest
 ```

@@ -995,6 +995,19 @@ The remaining 70 doors of §4.11 (100 minus W2's 17 and W3's 13), the eleven `NS
 `NS_UNAVAILABLE` declarations on `NSProxy` — **declared with a refusing body**, not bodiless, because a declaration
 with no body anywhere is the one thing `methods-declared-not-implemented` is pinned at zero for.
 
+**DONE: W6a — the two `NSProxy` `NS_UNAVAILABLE` doors.** `-allowsWeakReference` and `-retainWeakReference` are
+declared with Apple's attribute AND with bodies that refuse by name (a declaration with no body is the one thing
+`methods-declared-not-implemented` forbids, and a runtime caller deserves a reason); the two sites join the refusal
+census (48 → 50). The manifest lists them as `unavailable-selector`, so they were never part of the 86-selector
+denominator: `methods-declared` 4,287 → 4,289 and the census 48 → 50, with `selectors-missing` still 86.
+
+**REMAINING: the 86-selector tail**, by class: `NSAppleEventDescriptor` 12, `NSOrderedSet` 7, `NSMetadataQuery` 6,
+`NSFileVersion` 6, `NSProgress` 5, `NSOperation` 5, `NSXMLParser` 4, `NSPointerArray` 4, `NSOperationQueue` 4,
+`NSLinguisticTagger` 4, `NSUserActivity` 3, `NSRegularExpression` 3, and singles across the scripting and XML
+families; plus the eleven `NSCoding` conformances. `FOUNDATION-10.11-W6-HANDOFF.md` carries the order and the
+acceptance tests the wave names (ordered-set predicate/enumeration, JSON stream, `NSFileVersion` replacement through
+`NSFileAccessIntent`, `NSLinguisticTagger` against `FNTextBreaking`, regex replacement, the scripting archive).
+
 - **Moves:** `selectors-missing` to 0.
 - **Acceptance:** an ordered-set predicate/enumeration test; a JSON stream round-trip; a `NSFileVersion` replacement
   through `NSFileAccessIntent`; `NSLinguisticTagger` against `FNTextBreaking`; a regex escape/replacement test; the

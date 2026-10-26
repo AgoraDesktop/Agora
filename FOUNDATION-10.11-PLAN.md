@@ -946,6 +946,20 @@ wave is not read as finished where it is not.
 7 classes, 3 protocols; notification state with delivery refused; item loading over file/data/string/pasteboard with
 type identifiers; `NSExtensionItem` secure coding.
 
+**DONE: W4a — the extension half, 4 classes and 1 protocol (24 selectors).** `NSExtensionItem` is a copyable,
+securely-codable four-part value whose archive round-trips through the allow-list; `NSExtensionContext` is the host side
+with no extension behind it, so its three request doors REFUSE BY NAME and still answer their handlers with NO;
+`NSItemProvider` maps type identifiers to load handlers (the file form registers `public.data` and hands back the file's
+bytes) with "conforms" meaning "is registered" — there is no UTI hierarchy here, and the header says so; and
+`NSFileAccessIntent` is the URL-and-kind value, declared where 10.11 puts it, in `NSFileCoordinator.h`. Census: classes
+205 → 209, protocols 36 → 37, selectors 3,538 → 3,562; offered 3,624 → 3,648, missing unchanged at 86; methods-declared
+4,169 → 4,193; availability 831 → 838. 38 suites green; the test is 17 cases.
+
+**REMAINING: the notification family** (`NSUserNotification`, `NSUserNotificationCenter`, `NSUserNotificationAction`
+and `NSUserNotificationCenterDelegate`) — 3 classes, 1 protocol, 53 selectors. The plan's shape stands: an in-process
+centre that keeps scheduled and delivered state, refuses delivery BY NAME (this system has no notification daemon),
+and consults its delegate (the three optional doors) before deciding whether to present.
+
 - **Moves:** 7 classes, 3 protocols, 77 class-owned selectors.
 - **Acceptance:** the in-process centre keeps state and refuses delivery by name; the delegate is consulted; the
 extension request refuses by name; an archive round-trip of `NSExtensionItem` passes the allow-list suite.

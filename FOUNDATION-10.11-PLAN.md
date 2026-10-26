@@ -974,6 +974,16 @@ XPC (4 classes, 2 protocols), the three script-task classes, and the **refusal c
 copied or shared from `libagora-app`, `-DNEEDLE='(FOUNDATION-REFUSE|fn_refuse_[a-z]+)'`, `tests/refusal_census.txt`
 pinned per file.
 
+**DONE: W5 — the XPC family and the script tasks, all refusals, and the refusal census.** Seven classes and two
+protocols: `NSXPCConnection` (20 doors), `NSXPCInterface` (7), `NSXPCListener` (9), `NSXPCListenerEndpoint` (0),
+`NSUserScriptTask`, `NSUserAppleScriptTask`, `NSUserAutomatorTask`, plus `NSXPCProxyCreating` and
+`NSXPCListenerDelegate`. Every door REFUSES BY NAME — constructors answer nil, and the doors that take a handler call
+it with `NSFeatureUnsupportedError` or the script-task error rather than leaving a caller waiting. The census is
+`tests/refusal_census.txt` (48 sites, per file, both directions) checked by `foundation-refusal-census`, which SHARES
+libagora-app's `claims_census.cmake` by path (GPL tool, LGPL component; the plan said "copied or shared"). **THE
+CENSUS FALLS TO ZERO MISSING CLASSES: 219 of 219, and 40 of 40 protocols.** Census: selectors 3,615 → 3,658 of 3,744
+(86 missing — method fill, not classes); `methods-declared` 4,246 → 4,287; availability 853 → 860; designated 129/147.
+
 - **Moves:** 7 classes, 2 protocols, 43 class-owned selectors (XPC 36 + script tasks 7); the refusal table appears.
 - **Acceptance:** every refusal site is in the table; a new refusal without a census line fails; a test asserts each
   named failure (XPC connect, AppleScript run, Automator run, extension request, background session, progress publish,

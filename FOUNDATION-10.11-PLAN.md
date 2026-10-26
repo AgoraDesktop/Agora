@@ -955,10 +955,14 @@ bytes) with "conforms" meaning "is registered" — there is no UTI hierarchy her
 205 → 209, protocols 36 → 37, selectors 3,538 → 3,562; offered 3,624 → 3,648, missing unchanged at 86; methods-declared
 4,169 → 4,193; availability 831 → 838. 38 suites green; the test is 17 cases.
 
-**REMAINING: the notification family** (`NSUserNotification`, `NSUserNotificationCenter`, `NSUserNotificationAction`
-and `NSUserNotificationCenterDelegate`) — 3 classes, 1 protocol, 53 selectors. The plan's shape stands: an in-process
-centre that keeps scheduled and delivered state, refuses delivery BY NAME (this system has no notification daemon),
-and consults its delegate (the three optional doors) before deciding whether to present.
+**DONE: W4b — the notification family; W4 is complete.** `NSUserNotification` is a copied value (every object door
+copies; `contentImage` is retained and typed `id` because Apple's type is AppKit's NSImage), with Apple's activation
+constants 0–4 and the 10.9/10.10 doors annotated; `NSUserNotificationAction` is the identifier/title pair; and
+`NSUserNotificationCenter` is an IN-PROCESS LEDGER whose `-deliverNotification:` consults the delegate's
+`-shouldPresentNotification:`, REPORTS its answer, and then refuses by name — nothing is recorded as delivered, because
+this system has no notification daemon. Census: classes 209 → 212, protocols 37 → 38, selectors 3,562 → 3,615, missing
+unchanged at 86; `methods-declared` 4,193 → 4,246; availability 838 → 853; designated 127/145 present. 39 suites green;
+the test is 16 cases. **W4's 7 classes, 3 protocols and 77 selectors are all in the tree.**
 
 - **Moves:** 7 classes, 3 protocols, 77 class-owned selectors.
 - **Acceptance:** the in-process centre keeps state and refuses delivery by name; the delegate is consulted; the

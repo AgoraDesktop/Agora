@@ -1,4 +1,6 @@
-# W7 — headers, categories, umbrella, the client gates — COMPLETE (M2 is next)
+# W7 — headers, categories, umbrella, the client gates — COMPLETE (M2 followed and is also complete)
+
+*M2 is done: see `FOUNDATION-10.11-M2-HANDOFF.md`. The "what M2 inherits" section below is the state at W7's end.*
 
 *The surface is complete (W6) and it now has Apple's names, Apple's categories, one umbrella and three client gates
 (W7). This file records what moved, what was measured, the one deliberate deviation, and what M2 inherits.*

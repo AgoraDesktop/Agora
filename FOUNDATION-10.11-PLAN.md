@@ -44,7 +44,7 @@ Two milestones, as the Cocoa plan states them:
 - **M1 — declared.** Every macOS 10.11 Foundation name exists, is annotated with Apple's introduction/deprecation
   facts, is implemented or **refuses by name**, and a committed census pins the result.
 - **M2 — behavioural.** The doors URLSession, `NSProgress` and the new formatters expose do the documented thing,
-  measured by callers, with the remaining refusals documented and tested.
+  measured by callers, with the remaining refusals documented and tested. **DONE — see §7.**
 
 ---
 
@@ -927,12 +927,12 @@ instances through the TASK door. Census: classes 204 → 205, selectors 3,516 �
 3,617 → 3,624; `methods-declared` 4,147 → 4,169; availability 815 → 831. The 116-case test covers stream read/write,
 captureStreams and every task-scoped category.
 
-**TWO ACCEPTANCE ITEMS ARE NOT YET END-TO-END, and they are honest debts rather than omissions.** (1) The transport
-keeps cookies in the PROCESS-WIDE `NSHTTPCookieStorage` (FNCURLURLProtocol §62.x), not the session's configured store;
-the task-scoped doors exist, but the transfer does not yet consult them. (2) The authentication-challenge dispatch is
-implemented (task door before session door, the four dispositions mapped onto the sender's actions) but has no
-loopback test. Both belong to the transport↔session seam rather than to the classes, and both are recorded here so the
-wave is not read as finished where it is not.
+**TWO ACCEPTANCE ITEMS WERE NOT END-TO-END, AND M2 PAID BOTH** (they are kept here as the record of the debt rather
+than deleted): (1) the transport kept cookies in the PROCESS-WIDE `NSHTTPCookieStorage`; it now asks the task for the
+session's configured store, and the session suite asserts isolation and sending. (2) the authentication-challenge
+dispatch was implemented but had no loopback test — because the transport read its answer before the session's
+asynchronous delegate could give one, so a session 401 never retried; the transport now waits on the sender's
+continuation (bounded), and the suite drives 401 → credential → one re-issue → 200.
 
 - **Moves:** 7 classes, 5 protocols, 13 shared selectors, and the 103 the family declares itself (31 `NSURLSession`,
   47 `NSURLSessionConfiguration`, 17 `NSURLSessionTask`, 7 `NSURLSessionStreamTask`, 1 `NSURLSessionDownloadTask`).
@@ -1115,19 +1115,37 @@ header diff and fails a client.
 
 ---
 
-## 7. Behavioural tests (M2)
+## 7. Behavioural tests (M2) — DONE
 
 The 10.6 tier's rule holds — **a complete surface is not a behavioural claim** — so each wave lands with a caller.
-Following the existing suite naming (`core_values`, `foundation_behaviour_1..4`):
+**M2 is complete: all six suites exist and pass**, and two acceptance items W3 recorded as honest debts are closed
+end to end.
 
-| Test | Pins |
-|---|---|
-| `foundation_10_11_url_session` | data/download/upload tasks, redirect + cookie, auth challenge, cancellation, task-scoped cookies, background refusal |
-| `foundation_10_11_progress` | the tree, `fractionCompleted` KVO, indeterminate, cancel propagation, `becomeCurrent` per thread |
-| `foundation_10_11_url_components` | RFC 3986 parse/encode, query items, malformed escapes, relative resolution |
-| `foundation_10_11_formatting` | byte count and person-name components, the three unit styles, locale changes |
-| `foundation_10_11_notifications` | centre state, delivery refusal, delegate consultation, removal doors |
-| `foundation_10_11_refusals` | every `FOUNDATION-REFUSE` site asserts its named failure and its documented return |
+| Test | Pins | State |
+|---|---|---|
+| `foundation_10_11_url_session` | data/download/upload tasks, redirect + cookie, auth challenge, cancellation, task-scoped cookies, background refusal | **133 cases** |
+| `foundation_10_11_progress` | the tree, `fractionCompleted` KVO, indeterminate, cancel propagation, `becomeCurrent` per thread | 19 cases |
+| `foundation_10_11_url_components` | RFC 3986 parse/encode, query items, malformed escapes, relative resolution | 32 cases |
+| `foundation_10_11_formatting` | byte count and person-name components, the three unit styles, locale changes | 19 cases, with `foundation_10_11_byte_count` (19) and `foundation_10_11_person_name` (39) |
+| `foundation_10_11_notifications` | centre state, delivery refusal, delegate consultation, removal doors | exists as `foundation_10_11_user_notification`, 16 cases |
+| `foundation_10_11_refusals` | every `FOUNDATION-REFUSE` site asserts its named failure and its documented return | **53 cases over 52 doors** |
+
+**THE TWO W3 DEBTS ARE PAID, AND ONE OF THEM WAS A REAL DEFECT RATHER THAN A MISSING TEST.**
+(1) *Cookies:* a session's `-HTTPCookieStorage` was configuration nothing consulted. The transport now asks its client
+(the task) for the store through the same first-party private seam it already uses for body-stream re-sends, so a
+Set-Cookie lands in the session's store, a seeded cookie is sent, and the process-wide store is untouched — asserted
+by the session suite against a private store.
+(2) *Authentication:* the dispatch was implemented but had no loopback test **because it could not have passed one**.
+The transport asked the client and read its two locals the instant the ask returned, while a session answers the
+challenge on its DELEGATE QUEUE — asynchronously. So a 401 through a session never retried. The fix is the wait the
+transport's own comment already described: the sender's continuation signals a condition, the transfer thread waits
+for it (bounded at thirty seconds, a timeout read as "no answer"), and the test drives 401 → Basic credential → one
+re-issue carrying `Authorization` → 200.
+
+**AND THE REFUSAL CENSUS WAS CORRECTED BY TWO.** The needle counts the token anywhere in a file, and two COMMENTS had
+been counted as doors (NSURLSession's `#include` comment and NSXPCConnection's header sentence). Both now say what they
+mean without spelling the token, `tests/refusal_census.txt` is 52, and `foundation_10_11_refusals` asserts exactly 52
+doors — failing if its count drifts from the census. That is the instrument's two directions turned on itself.
 
 ---
 

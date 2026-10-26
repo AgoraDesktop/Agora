@@ -896,15 +896,29 @@ task's own doors, and the background refusal. Census: classes 199 → 202, proto
 offered nothing, and the 13 download/upload/stream factories are now counted as missing. `methods-declared` 4,100 →
 4,135; availability 809 → 815.
 
-**REMAINING: W3c–W3d.** W3c is `NSURLSessionDownloadTask` (its one door is a refusal: no resume data) and
-`NSURLSessionUploadTask` (no own doors) plus the ELEVEN factories that return them (six download, five upload) — a
-download writes the body to a temporary file and delivers `URLSession:downloadTask:didFinishDownloadingToURL:` before
-the completion; an upload takes its body from data or a file (`uploadTaskWithStreamedRequest:` must refuse by name
-until the transport gains a body-stream read). W3d is `NSURLSessionStreamTask` (7, over a socket pair) and the
-task-scoped doors on `NSURLCache` (3), `NSURLCredentialStorage` (4), `NSHTTPCookieStorage` (3) and `NSURLProtocol` (3)
-— the last being `+canInitWithTask:` and the task-initialised entry points. The wave's acceptance (a loopback server
-driving data, download and upload, a redirect with a cookie, an authentication challenge, task-scoped cookies,
-cancellation and a stream task) belongs to W3d.
+**DONE: W3c — the download and upload classes, and the eleven factories that make them.** A DOWNLOAD writes the
+body to a temporary file, hands the file's URL to the delegate (or the completion block), reports the
+`didWriteData:…` progress door, and REMOVES the file when that call or block returns — Apple's rule, and the reason the
+removal is inside the dispatched block. An error or a cancellation removes the half-written file and hands nothing
+over. An UPLOAD takes its body from data or a file; the streamed form refuses by name because the transport has no
+body-stream read door, and a file that cannot be read refuses with the path named. RESUME DATA IS REFUSED IN BOTH
+DIRECTIONS (`downloadTaskWithResumeData:` answers nil by name; `-cancelByProducingResumeData:` calls its handler with
+nil and cancels). The task lists now partition by kind. Census: classes 202 → 204, the session's own doors 18 → 29,
+selectors 3,504 → 3,516; `selectors-offered` 3,616 → 3,617 and `selectors-missing` 112 → **101** — only the two stream
+factories remain missing from this class. `methods-declared` 4,135 → 4,147; availability unmoved at 815 (Apple
+annotates neither subclass).
+
+**AND W3c's stricter test found a real W3b ORDERING BUG, fixed in the same commit.** A finish arriving on the
+transport's thread while a response disposition's flush was enqueuing held data could put the completion BEHIND the
+data it completed with, so a delegate saw "completed" before its last chunks (or never saw them). The pending flag,
+the held chunks and the enqueue are now one locked region, and a finish that races a disposition waits behind it; the
+93-case test passed four consecutive runs afterwards.
+
+**REMAINING: W3d.** `NSURLSessionStreamTask` (7 doors over a socket pair, with `streamTaskWithHostName:port:` and the
+`NSNetService` form) and the thirteen task-scoped doors, declared in `NSURLSession.h` where Apple puts them: on
+`NSURLCache` (3), `NSURLCredentialStorage` (4), `NSHTTPCookieStorage` (3) and `NSURLProtocol` (3 — `+canInitWithTask:`,
+`-initWithTask:cachedResponse:client:`, `-task`). The wave's acceptance (a redirect with a cookie, an authentication
+challenge, task-scoped cookies, a stream task over a socket pair) belongs there.
 
 - **Moves:** 7 classes, 5 protocols, 13 shared selectors, and the 103 the family declares itself (31 `NSURLSession`,
   47 `NSURLSessionConfiguration`, 17 `NSURLSessionTask`, 7 `NSURLSessionStreamTask`, 1 `NSURLSessionDownloadTask`).

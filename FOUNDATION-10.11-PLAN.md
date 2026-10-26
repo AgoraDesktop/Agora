@@ -646,12 +646,49 @@ stays at 2. `NSFileWrapper` + `NSMachPort` (14 sites) closed the other shapes: a
 `-initRegularFileWithContents:nil`, an inherited coder door needed a HEADER DECLARATION to carry its mark (candidates
 142 → 143), and the port's two `initWithMachPort:` refusals keep the local pragma.
 
-**THE MEASURED POSITION NOW, AND THE RESIDUE.** `designated-present` 63, `designated-missing` 80, candidates 143,
+**THE MEASURED POSITION AT THE FIRST HANDOFF.** `designated-present` 63, `designated-missing` 80, candidates 143,
 `designated-extra` 2, `methods-declared` 4,045. With every remaining mark placed the library emits **98 diagnostics in 21
 files**; 56 of them are the number cluster's (`NSNumber` 34, `NSDecimalNumber` 22 — §4.15 refuses the marks). The scope
 is therefore 146, **104 are closed**, and **42 remain in 19 files**: `NSSocketPort` 8, `NSString` 5, `NSDate` 4,
 `NSDataDetector` 3, and fifteen 1–2-site classes. `DESIGNATED-INITIALIZER-HANDOFF.md` reproduces that table and the
-order to take it in; the marks for the residue are reverted so the tree stays warning-free.
+order to take it in; the marks for the residue were reverted so the tree stayed warning-free.
+
+**BATCHES 5b–9: THE TAIL IS CLOSED.** The handoff was picked up in five commits, and the residue is now zero
+diagnostics with **every** mark placed except the number cluster:
+
+- **Batch 5b, `NSSocketPort` 8 → 0.** The three Apple-marked doors are marked; `-init` and `-initWithTCPPort:` build
+  their sockaddr and route to the designated local address door (the ephemeral-pick rule stays where it was), and
+  `initRemoteWithTCPPort:host:` keeps its `getaddrinfo` walk, then hands the descriptor that connected to the designated
+  socket door and takes ownership the way `NSMachPort -init` does. Two corrections fell out: the designated remote door
+  now closes a failed connect's socket, and both remote paths set `-address` from `getpeername` (the PEER) as the header
+  says, where the old code read `getsockname`. The two older spellings the header had always declared
+  (`initWithRemote…`, which §63.217 had left beside Apple's `initRemote…` doors) are now aliases — deleting them left
+  the header's declarations unimplemented, which the census caught as `selphantom:NSSocketPort 2`.
+- **Batch 6, `NSString` + `NSDate` + `NSDataDetector` 12 → 0.** `NSDate`'s reference-date door became the constructor
+  that installs the storage, so 1970 is a convenience route. `NSString` marked `-init`/`-initWithCoder:`, kept `-init`
+  self-returning for the measured recursion reason (now with `[super init]`), and each re-routing convenience door
+  delegates to the designated `-init` before releasing the front and answering `NSOwnedString`. The initializer-shaped
+  funnel `fn_initWithValidatedFormat:` became validation inside the four doors, which also stopped a validation failure
+  from leaking the receiver.
+- **Batch 7, the route-to-a-marked-door group 11 → 0.** `NSIndexPath`, `NSIndexSet`, `NSInputStream`, `NSOutputStream`
+  and `NSBundle` route through their designated doors (`NSBundle`'s empty path now MEANS the bare bundle, and its nil
+  path releases the receiver). `NSAppleEventDescriptor` is the one surface addition: Apple's marked door can only refuse
+  here, so that header RESTATES and marks `-init` as this tree's constructor — `methods-declared` 4,045 → 4,046.
+- **Batch 8, the extract-or-flip group 11 → 0.** Seven classes have TWO designated doors that used to chain to each
+  other; the shared install became a plain method and each door states it. `NSExpression`'s coder door routes through
+  the designated type door; `NSFileHandle`'s coder door is a raise-only refusal and keeps the local pragma.
+- **Batch 9, the last 29 marks, 0 diagnostics.** They were declarations whose bodies already conformed, with one
+  knock-on the measurement found: marking `NSRegularExpression`'s designated pattern door obliged its subclass
+  `NSDataDetector` to override it. A detector has no pattern, so that override refuses with an error naming
+  `-initWithTypes:error:`, and the detector's designated door chains to the super's with the empty pattern — state every
+  matching door on the class bypasses through its own `-matchesInString:…`.
+
+**THE MEASURED POSITION NOW.** `designated-present` **125**, `designated-missing` **18** — exactly `NSNumber`'s 16 and
+`NSDecimalNumber`'s 2, the refusal this section records — candidates 143, `designated-extra` 2, `methods-declared`
+4,046. The library emits **zero** `-Wobjc-designated-initializers` diagnostics with every mark placed, so the pass is
+finished except for the cluster that is refused by decision. The remaining W1 residue is the nullability sweep
+(`-Wnullability-completeness`, 411 warnings across 194 headers), which is mechanical and now has a precedent for how to
+measure, batch and pin it. `DESIGNATED-INITIALIZER-HANDOFF-2.md` records the batches and reproduces every number.
 
 ---
 
@@ -691,15 +728,16 @@ Sizes are order-of-magnitude.
   `NS_RETURNS_INNER_POINTER` on the seven doors Apple marks that way (`bytes`, `mutableBytes`, `objCType` twice,
   `UTF8String`, `methodReturnType`, `getArgumentTypeAtIndex:`, `aeDesc`) and `__kindof` on the two the tree has
   (`NSOperationQueue -operations`, `NSXMLNode -nodesForXPath:error:`).
-- **Attempted, measured and deferred: `NS_DESIGNATED_INITIALIZER`.** The facts are now committed (178
-  `designated-init` lines, 135 of them on declarations this tree makes) and pinned, and `api-ledger annotate` can
-  place the marks. Placing them is what revealed the cost: the library still builds, but clang emits **202 distinct
-  `-Wobjc-designated-initializers` diagnostics across 35 files** (§4.15 has the per-file counts and the measured rule
-  clang actually enforces). They are TRUE: this tree's initializers do not follow the graph Apple's marks describe.
-  Marking 135 headers would state a contract the bodies break 202 times, so the marks wait for the implementation pass
-  — one slice whose gate is that count — and the pin holds at 135 missing in the meantime. §4.15 also records that the
-  pass is a real refactor (each funnel initializer becomes a plain method so a marked door can be its own
-  constructor), and that `NSNumber`'s re-routing cluster cannot obey the graph at all without a decision.
+- **`NS_DESIGNATED_INITIALIZER`: attempted, measured, and now DONE except the refused cluster.** The facts are
+  committed (178 `designated-init` lines, 143 of them on declarations this tree makes) and pinned, and `api-ledger
+  annotate` places the marks. Placing all of them was what revealed the cost — **202 distinct
+  `-Wobjc-designated-initializers` diagnostics across 35 files** — and they were TRUE: this tree's initializers did
+  not follow the graph Apple's marks describe. Nine batches later (§4.15 has the per-file history and the measured
+  rule clang enforces) every mark is placed and the library emits **zero** diagnostics: `designated-present` 125,
+  `designated-missing` 18, and those 18 are exactly `NSNumber`'s 16 and `NSDecimalNumber`'s 2, the re-routing cluster
+  that §4.15 refuses by decision. The pass was a real refactor rather than an annotation sweep: each initializer-shaped
+  funnel became a plain method so a marked door could be its own constructor, and the failure paths it rewrote were
+  leaking.
 - **Remaining:** `AGORA_EXTENSION` for the post-10.11 classes (§4.13), and **411 `-Wnullability-completeness` warnings
   across 194 of the 196 headers** (measured, objc mode), which is the S2 residue: the annotations are right where they
   exist, and a pointer without one is a fact the header still refuses to state.

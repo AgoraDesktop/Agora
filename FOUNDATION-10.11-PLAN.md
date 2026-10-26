@@ -452,6 +452,28 @@ version they really arrived in, behind an `AGORA_EXTENSION` spelling that a `-DA
 from the surface check. The consensus with `COCOA-10.11-SURFACE-PLAN.md` §4.1 is that removing a working door to
 satisfy an older reference is a regression.
 
+**DONE, AND THE MECHANISM IS MEASURED.** `AGORA_EXTENSION` is defined in `NSObjCRuntime.h` beside `NS_UNAVAILABLE`:
+it expands to nothing in the normal build, and under `-DAG_TARGET_OS_X_10_11` to
+`__attribute__((unavailable("this declaration postdates the 10.11 surface")))`. That is deliberately different from the
+availability spellings next to it, which are inert here (D12): clang on this host cannot warn about a macOS version,
+but it can act on `unavailable`, so a strict client is told WHICH declaration is later than the target by name rather
+than by a missing-name error. The marked declarations are:
+
+| Declaration | Version |
+|---|---|
+| `NSDateInterval` | 10.12 |
+| `NSISO8601DateFormatter` | 10.12 |
+| `NSRelativeDateTimeFormatter` | 10.15 |
+| `NSSecureUnarchiveFromDataTransformer` | 10.14 |
+| `NSFileProviderService` | **none, on purpose** — Apple's 10.11 Foundation headers do not declare it and this tree has no sourced minor version, so no token is invented |
+| `NSDateIntervalFormatter -stringFromDateInterval:` | 10.12; the one post-10.11 SELECTOR that names an extension type, and without it the strict umbrella does not compile |
+
+The versions are copied from the 10.12/10.14/10.15 SDK header facts (the same regeneration source `api/10.11/README.md`
+names), not from memory. `NSSecureUnarchiveFromDataTransformer` is declared in `NSValueTransformer.h` in those SDKs, which
+is why a header of its own name is not found. The gate is `foundation-strict-surface`: the umbrella compiles under
+`-DAG_TARGET_OS_X_10_11`, each of the six declarations is genuinely unavailable there, and each use still compiles
+without the define — a marker that HID a door would be the removal §4.1 forbids.
+
 ### 4.14 `NSPersonNameComponentsFormatter` — the locale policy, written before the code
 
 The one thing that makes a name's rendering locale-specific is ORDER: whether the family name precedes the given name.
@@ -686,9 +708,8 @@ diagnostics with **every** mark placed except the number cluster:
 **THE MEASURED POSITION NOW.** `designated-present` **125**, `designated-missing` **18** — exactly `NSNumber`'s 16 and
 `NSDecimalNumber`'s 2, the refusal this section records — candidates 143, `designated-extra` 2, `methods-declared`
 4,046. The library emits **zero** `-Wobjc-designated-initializers` diagnostics with every mark placed, so the pass is
-finished except for the cluster that is refused by decision. The remaining W1 residue is the nullability sweep
-(`-Wnullability-completeness`, 411 warnings across 194 headers), which is mechanical and now has a precedent for how to
-measure, batch and pin it. `DESIGNATED-INITIALIZER-HANDOFF-2.md` records the batches and reproduces every number.
+finished except for the cluster that is refused by decision. `DESIGNATED-INITIALIZER-HANDOFF-2.md` records the batches
+and reproduces every number.
 
 ---
 
@@ -738,11 +759,17 @@ Sizes are order-of-magnitude.
   that §4.15 refuses by decision. The pass was a real refactor rather than an annotation sweep: each initializer-shaped
   funnel became a plain method so a marked door could be its own constructor, and the failure paths it rewrote were
   leaking.
-- **Remaining:** `AGORA_EXTENSION` for the post-10.11 classes (§4.13), and **411 `-Wnullability-completeness` warnings
-  across 194 of the 196 headers** (measured, objc mode), which is the S2 residue: the annotations are right where they
-  exist, and a pointer without one is a fact the header still refuses to state.
+- **Done: `AGORA_EXTENSION` and the nullability sweep (§4.13).** The five post-10.11 classes and the one selector that
+  names one are marked, and `foundation-strict-surface` proves the marker hides them only under `-DAG_TARGET_OS_X_10_11`.
+  The nullability residue was recorded as **411 `-Wnullability-completeness` warnings across 194 headers**, and that was
+  a WARNING-LINE count: the distinct declaration sites were **9 in 6 headers** (clang repeats an included header's
+  warning in every probe that reaches it, and the three modes repeat each other). They are annotated —
+  `NSObjCRuntime.h` 2, `FNZone.h` 2, `NSError.h` 2, `NSAttributedString.h` 1, `NSMetadata.h` 1 (four globals of one run),
+  `NSPersonNameComponentsFormatter.h` 1 (eight globals of one run) — and `foundation-header-nullability` pins the
+  distinct-site count at **0** over every public header in ObjC/ObjC++/ARC. The pin is
+  `tests/api-10.11-nullability.txt`, whose comment records the nine sites and the recipe.
 - **Acceptance, availability met:** `annotations-missing` is 0 with `annotations-wrong` 0, the library builds clean,
-  and all 23 tests pass. Remaining for the wave: the header-compile gate and
+  and all 33 tests pass. Remaining for the wave: the header-compile gate and
   `methods-declared-not-implemented` staying at 0 — a trailing annotation the reader did not learn to strip would
   surface there, which is the trap W0's shared-reader fix exists to close.
 

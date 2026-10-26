@@ -1,10 +1,10 @@
-# W3 — URLSession — handoff (W3a–W3c landed; W3d remains)
+# W3 — URLSession — handoff (W3a–W3d landed; surface COMPLETE)
 
-*State at the end of the session that completed three of the wave's four slices: **`NSURLSessionConfiguration` (47
-doors)**, **the spine (`NSURLSession`'s data half, `NSURLSessionTask`, `NSURLSessionDataTask`, the five delegate
-protocols)**, and **download + upload with their eleven factories**. The stream task and the thirteen task-scoped doors
-(W3d) remain; this handoff is the place a continuation starts. Everything below was measured; §7 reproduces every
-number.*
+*State at the end of the session that completed all four slices: `NSURLSessionConfiguration` (47 doors), the spine
+(`NSURLSession`'s data half, `NSURLSessionTask`, `NSURLSessionDataTask`, the five delegate protocols), download +
+upload with their eleven factories, and the **stream task with the thirteen task-scoped doors**. The wave's class and
+selector surface is complete; **two acceptance behaviours are still open** (§4a), and this is where a continuation
+starts. Everything below was measured; §7 reproduces every number.*
 
 ---
 
@@ -14,14 +14,14 @@ number.*
 
 | Gate | Reads |
 |---|---|
-| `foundation-api-10.11-census` | **204 of 219 classes**, **3,516 of 3,617 selectors** (101 missing), **36 of 40 protocols**, 182 of 182 functions |
-| `foundation-api-census` (10.6) | `methods-declared` **4,147**, not-implemented 0 |
-| `foundation-api-availability` | annotations **815/815**, 0 wrong · designated 125/143 present, 18 missing (the refused number cluster), extra 2 |
+| `foundation-api-10.11-census` | **205 of 219 classes**, **3,538 of 3,624 selectors** (86 missing), **36 of 40 protocols**, 182 of 182 functions |
+| `foundation-api-census` (10.6) | `methods-declared` **4,169**, not-implemented 0 |
+| `foundation-api-availability` | annotations **831/831**, 0 wrong · designated 125/143 present, 18 missing (the refused number cluster), extra 2 |
 | `foundation-header-compile` / `-nullability` / `-strict-surface` | 202 headers alone × 3 modes · 0 nullability sites · 6 extension declarations hidden under the strict define |
 
-The 15 missing classes and 101 missing selectors are the rest of the 10.11 surface: W3d (the stream task and the
-task-scoped doors), W4 (notifications/extensions/item provider), W5 (XPC and script-task refusals). Two of the 101 are
-the stream factories inside `NSURLSession`, which is otherwise complete.
+The 14 missing classes and 86 missing selectors are the rest of the 10.11 surface: W4 (notifications/extensions/item
+provider), W5 (XPC and script-task refusals) and their protocols. The URLSession family is complete: 7 classes, 5
+protocols, all doors with bodies.
 
 ---
 
@@ -118,6 +118,25 @@ behind it. Proved by four consecutive clean runs of the 93-case test.
 Pin movements: classes 202 → 204, `sel:NSURLSession` 18 → 29, selectors 3,504 → 3,516; offered 3,616 → 3,617 (the
 download task's own door), **missing 112 → 101**; `methods-declared` 4,135 → 4,147; availability unmoved at 815.
 
+## 2d. What landed: W3d, the stream task and the task-scoped doors (22 selectors, 1 class)
+
+Commit `7ab7ed8` in `libagora-base`.
+
+| Shape | Rule |
+|---|---|
+| stream task | a socket + a SERIAL `NSOperationQueue`: reads and writes run in the order asked; a read waits on `select(2)` for its timeout (0 = no limit) and answers data/atEOF/error on the delegate queue; a write writes all or reports the timeout |
+| closeRead / closeWrite | `shutdown(2)` the half, then the stream delegate's `readClosedForStreamTask:` / `writeClosedForStreamTask:` |
+| captureStreams | `dup` twice (each stream owns and closes its own descriptor), hand the pair to `URLSession:streamTask:didBecomeInputStream:outputStream:`, complete the task |
+| TLS doors | refused by name — this tree's TLS is libcurl's HTTP transfer, not a raw stream |
+| NetService factory | uses the service's resolved host; an unresolved service refuses by name (resolving needs a run loop) |
+| cache doors | the task's request through the cache's own request-based doors; completion on the session's queue |
+| cookie doors | the store's URL-based doors with the task's URL; the group-container factory refuses — no app groups |
+| credential doors | **per-task**, held on the task, never written to the shared store |
+| protocol doors | `+canInitWithTask:` (request-based default), `-initWithTask:cachedResponse:client:`, `-task`; the loader now makes instances through the TASK door |
+
+Pin movements: classes 204 → 205, selectors 3,516 → 3,538; offered 3,617 → 3,624, **missing 101 → 86**; `methods-declared`
+4,147 → 4,169; availability 815 → 831 (the class era, two factories, thirteen category facts). The test is 116 cases.
+
 ## 3. The design the remaining slices follow (§4.1 of the plan)
 
 URLSession is a **task state machine over the transfer engine that is already here**, not a second HTTP stack:
@@ -139,14 +158,28 @@ URLSession is a **task state machine over the transfer engine that is already he
 
 ---
 
-## 4. What remains, in the order I would take it
+## 4. What remains
 
-1. **W3d — stream and the task-scoped doors.** `NSURLSessionStreamTask` (7, over a socket pair, plus
-   `streamTaskWithHostName:port:` and the `NSNetService` form) and the thirteen task-scoped doors, declared in
-   `NSURLSession.h` where Apple puts them: `NSURLCache` (3), `NSURLCredentialStorage` (4), `NSHTTPCookieStorage` (3)
-   and `NSURLProtocol` (3 — `+canInitWithTask:`, `-initWithTask:cachedResponse:client:`, `-task`). Then the wave's
-   acceptance test (redirect with a cookie, authentication challenge, task-scoped cookies, stream task).
-2. **W4 / W5** after the family, per the plan.
+1. **W4 — notifications, extensions and item provider** (7 classes, 3 protocols, 77 selectors): the in-process
+   notification centre with delivery refused by name, `NSExtensionContext`/`NSExtensionItem` with secure coding, and
+   `NSItemProvider` over file/data/string.
+2. **W5 — refusals become measured** (XPC's four classes and two protocols, the three script-task classes, and the
+   refusal census `tests/claims_census.cmake` + `tests/refusal_census.txt`). The `FOUNDATION-REFUSE` lines this wave
+   added (background session, streamed upload, resume data, stream TLS, group container, unresolved NetService) are the
+   first entries.
+3. **W6 — the tail**: the remaining shared selectors and the `NSCoding` conformances.
+4. **W7 — the umbrella**: re-admit the session family in `Foundation.h` (replacing §63.159's comment), the header
+   splits and the client gates.
+
+### 4a. The two W3 acceptance debts (do these with W4 or in a W3 follow-up)
+
+- **Cookies at the transport.** `FNCURLURLProtocol` keeps cookies in the PROCESS-WIDE `NSHTTPCookieStorage`, not the
+  session's configured store; the task-scoped doors exist, but the transfer does not yet consult them. Wiring it means
+  the bridge taking a cookie store (and `HTTPShouldSetCookies`) from the task's session.
+- **An end-to-end authentication challenge.** The dispatch is implemented (task door before session door; the four
+  dispositions mapped onto the challenge sender's actions; no delegate ⇒ default handling without waiting) but no
+  loopback test answers a 401. The test needs a server that sends `WWW-Authenticate`, a delegate/credential store, and
+  an assertion that the retry succeeds.
 
 Every slice must keep `methods-declared-not-implemented` at 0: a declared selector needs a body, and a refusal is a
 body that names itself (`FOUNDATION-REFUSE`), which is W5's census instrument.

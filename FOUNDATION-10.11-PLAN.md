@@ -914,11 +914,25 @@ data it completed with, so a delegate saw "completed" before its last chunks (or
 the held chunks and the enqueue are now one locked region, and a finish that races a disposition waits behind it; the
 93-case test passed four consecutive runs afterwards.
 
-**REMAINING: W3d.** `NSURLSessionStreamTask` (7 doors over a socket pair, with `streamTaskWithHostName:port:` and the
-`NSNetService` form) and the thirteen task-scoped doors, declared in `NSURLSession.h` where Apple puts them: on
-`NSURLCache` (3), `NSURLCredentialStorage` (4), `NSHTTPCookieStorage` (3) and `NSURLProtocol` (3 — `+canInitWithTask:`,
-`-initWithTask:cachedResponse:client:`, `-task`). The wave's acceptance (a redirect with a cookie, an authentication
-challenge, task-scoped cookies, a stream task over a socket pair) belongs there.
+**DONE: W3d — the stream task and the thirteen task-scoped doors. W3's SURFACE IS COMPLETE.** `NSURLSessionStreamTask`
+is a socket and a serial queue: reads and writes run in the order they were asked for, a read waits on `select(2)` for
+its timeout, `closeRead`/`closeWrite` shutdown the half and tell the delegate, and `captureStreams` duplicates the
+socket twice, hands the pair over and completes the task. The TLS doors refuse by name (this tree's TLS is libcurl's
+HTTP transfer, not a raw stream), and a NetService that has not been resolved refuses too (resolving needs a run loop).
+The task-scoped categories are declared in `NSURLSession.h` where Apple puts them: the cache answers/stores/removes for
+the task's request, cookies use the store's URL-based doors with the task's URL (the group-container factory refuses —
+no app groups), credentials live ON THE TASK and never reach the shared store, and `NSURLProtocol` gains
+`+canInitWithTask:`, `-initWithTask:cachedResponse:client:` and `-task` — with the session's loader now making protocol
+instances through the TASK door. Census: classes 204 → 205, selectors 3,516 → 3,538, missing 101 → **86**, offered
+3,617 → 3,624; `methods-declared` 4,147 → 4,169; availability 815 → 831. The 116-case test covers stream read/write,
+captureStreams and every task-scoped category.
+
+**TWO ACCEPTANCE ITEMS ARE NOT YET END-TO-END, and they are honest debts rather than omissions.** (1) The transport
+keeps cookies in the PROCESS-WIDE `NSHTTPCookieStorage` (FNCURLURLProtocol §62.x), not the session's configured store;
+the task-scoped doors exist, but the transfer does not yet consult them. (2) The authentication-challenge dispatch is
+implemented (task door before session door, the four dispositions mapped onto the sender's actions) but has no
+loopback test. Both belong to the transport↔session seam rather than to the classes, and both are recorded here so the
+wave is not read as finished where it is not.
 
 - **Moves:** 7 classes, 5 protocols, 13 shared selectors, and the 103 the family declares itself (31 `NSURLSession`,
   47 `NSURLSessionConfiguration`, 17 `NSURLSessionTask`, 7 `NSURLSessionStreamTask`, 1 `NSURLSessionDownloadTask`).

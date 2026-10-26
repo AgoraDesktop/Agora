@@ -61,6 +61,13 @@ Two doors needed the runtime rather than the compiler: `NSProxy`'s `-allowsWeakR
 `NS_UNAVAILABLE`, so the suite calls them through the selector's IMP — which is exactly the caller the refusing body
 exists for.
 
+**And the session suite found a latent lifetime fault in itself while growing to 133 cases.** A section waits on ONE
+delegate message and then destroys its event; a later message can still be queued behind it (a stream's completion
+arrives after `-didBecomeInputStream:`, a cancelled task's completion after the response it reported), so the queued
+callback fired into a destroyed pthread mutex — one run in five. Every section that brings a caller queue now drains
+it before releasing it, and forty consecutive runs are clean. The lesson is the wave's own: a test that measures a
+callback's arrival must also own the callback's lifetime.
+
 ## 5. What the plan now says
 
 `FOUNDATION-10.11-PLAN.md` §5's W3 debt paragraph and §7 are records of completion; the milestone list's M2 line says

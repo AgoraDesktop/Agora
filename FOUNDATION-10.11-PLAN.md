@@ -1050,13 +1050,48 @@ green.
 
 ### W7 — headers, categories, umbrella, the client gates · M
 
-- The 26 header names: 11 new, 9 splits (the script and XML families), 6 organisation files.
-- The behavioural categories, declared where Apple declares them.
-- `Foundation.h`: re-admit the session family, **replace** the §63.159 comment that says the family is not in the
-  umbrella (it becomes false in the same commit), and record the 10.11 reference beside §11.0's baseline rule.
-- ARC and ObjC++ compile passes; a Swift import probe that names one class and one function per family.
+**DONE: W7a — Apple's header names, all 17 that were still absent.** Nine of the plan's 26 were written by earlier
+waves as part of their families; the rest are now files: `NSExtensionContext.h` and `NSExtensionRequestHandling.h` out of
+W4a's combined header; `NSScriptCommandDescription.h`, `NSScriptSuiteRegistry.h`,
+`NSScriptStandardSuiteCommands.h` (with `NSSaveOptions`), `NSScriptExecutionContext.h`,
+`NSScriptCoercionHandler.h`, `NSScriptKeyValueCoding.h` (with `NSOperationNotSupportedForKeyException`, which had been
+parked in `NSException.h`) and a real `NSObjectScripting.h`; `NSXMLNodeOptions.h`, `NSXMLElement.h` and
+`NSXMLDTDNode.h`; and the six organisation headers — `FoundationErrors.h` (the numeric Cocoa codes, out of
+`NSError.h`), `NSRange.h` (the range side of `NSValue`), `NSPathUtilities.h` (the search-path types and functions, out
+of `NSFileManager.h`, plus the `NSStringPathExtensions` category), `NSPropertyList.h` (the formats and options out of
+`NSPropertyListSerialization.h`), `NSHFSFileTypes.h` and `NSMetadataAttributes.h` (the kMDItem names, which had been
+private statics, are now public constants). Every declaration moved keeps its owner, its selector and its availability
+era, so no census metric moved.
+
+**DONE: W7b — the behavioural categories, where Apple declares them.** `NSValueGeometryExtensions` is in
+`NSGeometry.h` — and moving it there let `NSValue.h` drop its `NSGeometry.h` import, so the dependency now runs Apple's
+way (`NSGeometry.h` imports `NSValue.h`); `NSValueRangeExtensions` is in `NSRange.h`; `NSSortDescriptorSorting` names
+the five collection doors in `NSSortDescriptor.h`; `NSXMLParserLocatorAdditions` is in `NSXMLParser.h`; and
+`NSURLSessionTaskAdditions` was already Apple's shape from W3d.
+
+**DONE: W7c — the umbrella re-admits the 10.11 families, and §63.159 is reversed.** `Foundation.h` now imports the
+session family (with the removal's comment replaced by the two-denominator rule stated beside it: §11.0's 10.2 baseline
+governs what may be lost, `api/10.11` + the 10.11 census govern what the plan promises), the notification family, XPC,
+the three extension headers, `NSItemProvider`, the script tasks, and every header W7 created.
+
+**DONE: W7d — the client gates.** `foundation-header-compile` holds **226 headers alone in three modes plus the
+umbrella** — 681 compilations — and `foundation-header-nullability` holds the same set with 0 missing specifiers. The
+Swift tier's `agora-import-probe` (swift-interop-probe) now names one class and one C function (or the family's
+published constant) per family, including the four facts W7 created or published — `NSFileNoSuchFileError`,
+`NSPropertyListXMLFormat_v1_0`, `NSMetadataItemFSNameKey`, `NSOperationNotSupportedForKeyException` — and every
+10.11 family by class. All 22 family checks pass, and the probe's two measured notes are recorded in its source (this
+toolchain's type-checker crashes on `NSDecimalIsNotANumber`, so the decimal family is checked by class).
+
+**ONE DELIBERATE DEVIATION, RECORDED.** The plan listed `NSDeprecated` (7) among the behavioural categories. That
+partition is NOT carved out, for a reason that is a measurement rather than a preference: the seven headers Apple uses
+could not be re-derived without the SDK, and the deprecation facts are already carried by `NS_DEPRECATED_MAC` on every
+declaration and pinned by `foundation-api-availability`. Carving the categories would move text and change no fact a
+client can observe, while guessing the wrong seven would claim a fidelity this tree cannot check. What the plan asked
+for that IS observable — a client-facing category for doors a caller imports — is in W7b.
+
 - **Acceptance:** every public header compiles standalone in ObjC, ObjC++ and ARC; the umbrella compiles once; the
-  Swift probe imports; M2's behavioural suite is green.
+  Swift probe imports; M2's behavioural suite is green. **All four hold**: 681/681 header compilations, the umbrella in
+  each mode, 22/22 Swift family checks, and the 45 libagora-base suites (M2's behavioural tests among them).
 
 ---
 
@@ -1072,7 +1107,7 @@ green.
 | `foundation-header-compile` (ObjC, ObjC++, ARC, umbrella) | does a header stand alone | **exists**, W1 |
 | `runtime-surface` (objc probe) | superclass, adopted protocols, `respondsToSelector:` | **new**, W3 |
 | `refusal-census` (`claims_census`) | does a refusal exist unrecorded | **new**, W5 |
-| Swift import probe | can the importer see the class | existing tier's, extend W7 |
+| Swift import probe | can the importer see the class | **extended, W7** (one class and one function per family) |
 
 The runtime probe is not optional bookkeeping: §2.2 fault 4 showed that eleven doors hinge on a protocol the headers
 can claim and the runtime must confirm. A class that declares `<NSURLSessionDelegate>` and does not adopt it passes a

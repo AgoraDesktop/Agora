@@ -1001,12 +1001,47 @@ declared with Apple's attribute AND with bodies that refuse by name (a declarati
 census (48 → 50). The manifest lists them as `unavailable-selector`, so they were never part of the 86-selector
 denominator: `methods-declared` 4,287 → 4,289 and the census 48 → 50, with `selectors-missing` still 86.
 
-**REMAINING: the 86-selector tail**, by class: `NSAppleEventDescriptor` 12, `NSOrderedSet` 7, `NSMetadataQuery` 6,
-`NSFileVersion` 6, `NSProgress` 5, `NSOperation` 5, `NSXMLParser` 4, `NSPointerArray` 4, `NSOperationQueue` 4,
-`NSLinguisticTagger` 4, `NSUserActivity` 3, `NSRegularExpression` 3, and singles across the scripting and XML
-families; plus the eleven `NSCoding` conformances. `FOUNDATION-10.11-W6-HANDOFF.md` carries the order and the
-acceptance tests the wave names (ordered-set predicate/enumeration, JSON stream, `NSFileVersion` replacement through
-`NSFileAccessIntent`, `NSLinguisticTagger` against `FNTextBreaking`, regex replacement, the scripting archive).
+**DONE: W6b — `NSAppleEventDescriptor`'s twelve 10.11 doors.** The type factories and accessors are data (a double,
+a long-datetime date, a file URL, the two application-name forms, a process identifier, `+currentProcessDescriptor`,
+`-isRecordDescriptor`), and the send REFUSES BY NAME: there is no AppleEvents transport, so nil, an
+`NSFeatureUnsupportedError`, and a census line (50 -> 51). Missing 86 -> 74.
+
+**DONE: W6c — the ordered set's predicate and enumeration half.** The four options forms of the test searches, the two
+locale descriptions, and — in `NSPredicate.h` where Apple declares them — `-filteredOrderedSetUsingPredicate:` and the
+mutable `-filterUsingPredicate:`. Each options form is written over the class's own block walks, so the direction,
+the stop flag and the index-set rule are the ones those doors state. Missing 74 -> 66. `foundation_10_11_ordered_set`
+is its caller.
+
+**DONE: W6d — metadata, versions, and the coordinator's intent door.** `NSMetadataQuery`'s 10.9 doors (`searchItems`,
+`operationQueue`, the two block walks), `NSMetadataItem -initWithURL:` sharing one attribute builder with the walk, the
+six store-free `NSFileVersion` doors — the two flags STORED, the saving-computer name nil, and
+`-replaceItemAtURL:options:error:` a real copy/move of the version's own bytes — and `NSFileCoordinator`'s asynchronous
+`-coordinateAccessWithIntents:queue:byAccessor:`. Missing 66 -> 52. `foundation_10_11_metadata_version` drives the
+replacement through an intent accessor on a real queue, which is why W4 landed the intent.
+
+**DONE: W6e — the operation family, progress publishing, and JSON streams.** `NSOperation`'s name, service class and
+`-isAsynchronous`; `NSOperationQueue`'s service class and `-underlyingQueue`, which is REAL (each operation runs as a
+dispatch block on the queue the caller named, so a serial dispatch queue serializes them); `NSProgress`'s 10.9
+publishing half, IN-PROCESS and stated as such (a publish without `NSProgressFileURLKey` refuses by name, census
+51 -> 52), plus `-isOld`; and `NSJSONSerialization`'s two stream doors, unblocked now that NSStream exists. Missing
+52 -> 36. `foundation_10_11_operation_progress` is its caller.
+
+**DONE: W6f — the tail's singles.** `NSLinguisticTagger`'s 10.7 class door, batch tags, lattice and edit notice;
+`NSRegularExpression`'s two escapers and one result's replacement; `NSPointerArray`'s four 10.5 factories; Apple's
+`is`-prefixed getters on `NSUserActivity`, `NSDateComponents` and `NSProcessInfo`; `includesPeerToPeer` on the two
+NetServices classes; and the external-entity policy and allowed list on `NSXMLParser`. Missing 36 -> 11.
+`foundation_10_11_tail` measures the tagger against `FNTextBreaking` and the escapers by round-trip.
+
+**DONE: W6g — the eleven NSCoding conformances, and W6 is complete.** Every scripting specifier, the two whose-tests,
+the command and its description archive their own state; a standard command's key specifier travels with the command.
+`NSDistantObject` declares the conformance and REFUSES both coder doors by name (census 52 -> 54), because a
+connection cannot be rebuilt from bytes. Missing 11 -> **0**; `foundation_10_11_scripting_archive` is the caller.
+
+**W6's SURFACE IS COMPLETE: `selectors-missing` 86 -> 0 of 3,744.** methods-declared 4,289 -> 4,376; availability
+917/917 with 0 wrong; designated 140 of 158 present, and the 18 left are the number cluster's (W7). The handoff's
+acceptance tests are `foundation_10_11_ordered_set`, `foundation_10_11_metadata_version`,
+`foundation_10_11_operation_progress`, `foundation_10_11_tail` and `foundation_10_11_scripting_archive` — 45 suites
+green.
 
 - **Moves:** `selectors-missing` to 0.
 - **Acceptance:** an ordered-set predicate/enumeration test; a JSON stream round-trip; a `NSFileVersion` replacement
@@ -1256,8 +1291,11 @@ prints them as their own block.
 At M1 after W6:
 
 ```
-classes-missing 0 (219)   protocols-missing 0 (40)   selectors-missing 0 (3,754)   functions-missing 0
+classes-missing 0 (219)   protocols-missing 0 (40)   selectors-missing 0 (3,744)   functions-missing 0
 ```
+
+(The 3,744 is the tool's denominator: the exempt iOS-only class's ten selectors are outside it, which is why it is ten
+below the 3,754 "in scope" figure the arithmetic above derives. W6's last commit pins it.)
 
 Each class wave raises `selectors-offered` by that class's own declarations, so the pin is edited wave by wave — the
 deliberate act the census's two-directional check exists to force.

@@ -9,9 +9,15 @@
 #   demo/agora-webview.sh https://example.org   # a URL, if this machine has a network
 #   demo/agora-webview.sh --session             # plus Workspace and the Dock, so the desktop is there too
 #
-# Two environment variables exist for looking at the result rather than living in it:
+# Three environment variables exist for looking at the result rather than living in it:
 #   AGORA_SCREENSHOT=/tmp/page.ppm   the compositor writes the frame it composited when it stops
+#   AGORA_CAPTURE_AFTER=8            how long the page gets before that happens
 #   AGORA_SECONDS=20                 the application closes itself, so the run ends without a person
+#
+# **A CAPTURE STOPS THE COMPOSITOR FIRST, AND THAT IS NOT A DETAIL.** The frame is written on the compositor's exit path,
+# so an application that has already quit has no window in it — MEASURED as an empty desktop that looked exactly like a
+# window that never appeared. With AGORA_SCREENSHOT set, the application runs in the background and the compositor is
+# signalled while it is still drawing.
 #
 # **THIS IS THE SMALLEST SESSION THAT SHOWS THE CLASS WORKING**, and it is deliberately not part of
 # `agora-session.sh`: that script is the composition a login will start, and a browser is an application, not furniture.
@@ -131,8 +137,26 @@ if [ "$WANT_SESSION" = "1" ]; then
 	fi
 fi
 
-if [ -n "$URL" ]; then
-	"$WEBVIEW_BIN" "$URL" "${APP_ARGS[@]}"
+run_app() {
+	if [ -n "$URL" ]; then
+		"$WEBVIEW_BIN" "$URL" "${APP_ARGS[@]}"
+	else
+		"$WEBVIEW_BIN" "${APP_ARGS[@]}"
+	fi
+}
+
+if [ -n "${AGORA_SCREENSHOT:-}" ]; then
+	run_app &
+	APP_PID=$!
+	sleep "${AGORA_CAPTURE_AFTER:-8}"
+	# **THE COMPOSITOR GOES FIRST, SO ITS FRAME HAS A WINDOW IN IT.** Then the application, which has nothing left to do.
+	kill -TERM "$SERVER_PID" 2>/dev/null
+	wait "$SERVER_PID" 2>/dev/null
+	SERVER_PID=""
+	kill "$APP_PID" 2>/dev/null
+	wait "$APP_PID" 2>/dev/null
+	APP_PID=""
+	echo "the frame the compositor stopped on is ${AGORA_SCREENSHOT}"
 else
-	"$WEBVIEW_BIN" "${APP_ARGS[@]}"
+	run_app
 fi

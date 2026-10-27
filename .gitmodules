@@ -50,6 +50,10 @@
 	path = window-server
 	url = https://github.com/AgoraDesktop/window-server.git
 	branch = main
+[submodule "terminal"]
+	path = terminal
+	url = https://github.com/AgoraDesktop/terminal.git
+	branch = main
 [submodule "widget-zoo"]
 	path = widget-zoo
 	url = https://github.com/AgoraDesktop/widget-zoo.git

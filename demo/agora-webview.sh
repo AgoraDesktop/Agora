@@ -9,6 +9,12 @@
 #   demo/agora-webview.sh https://example.org   # a URL, if this machine has a network
 #   demo/agora-webview.sh --session             # plus Workspace and the Dock, so the desktop is there too
 #
+# **THE WINDOW IS 86% OF THE OUTPUT, AND A PAGE CAN WANT MORE THAN THAT.** The application sizes itself to the screen it
+# is on; a two-column page — osnews.com is the one this was measured on — lays its sidebar out beside the text and needs
+# about 1000 points before it stops. On a small output the sidebar is therefore CLIPPED BY THE PAGE'S OWN LAYOUT, not by
+# the view: the engine renders exactly the width it was given, the view draws all of it, and what is missing is width.
+# Give the session a bigger output when that matters: `demo/agora-webview.sh 1440x900 <url>`.
+#
 # Three environment variables exist for looking at the result rather than living in it:
 #   AGORA_SCREENSHOT=/tmp/page.ppm   the compositor writes the frame it composited when it stops
 #   AGORA_CAPTURE_AFTER=8            how long the page gets before that happens

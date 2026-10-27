@@ -18,6 +18,8 @@
 # Three environment variables exist for looking at the result rather than living in it:
 #   AGORA_SCREENSHOT=/tmp/page.ppm   the compositor writes the frame it composited when it stops
 #   AGORA_CAPTURE_AFTER=8            how long the page gets before that happens
+#   AGORA_WPE_PREFIX=~/Development/wpewebkit/agora/prefix
+#                                    use a locally built WPE WebKit (ENABLE_DRAG_SUPPORT=ON): real drags, not shift-clicks
 #   AGORA_SECONDS=20                 the application closes itself, so the run ends without a person
 #
 # **A CAPTURE STOPS THE COMPOSITOR FIRST, AND THAT IS NOT A DETAIL.** The frame is written on the compositor's exit path,
@@ -88,6 +90,14 @@ for d in "$ROOT"/libagora-*/build; do
 	[ -d "$d" ] && SESSION_BUILD_LIBS="${SESSION_BUILD_LIBS}${SESSION_BUILD_LIBS:+:}$d"
 done
 export LD_LIBRARY_PATH="${SESSION_BUILD_LIBS}${SESSION_BUILD_LIBS:+:}${AGORA_PREFIX:-$ROOT/build-prefix}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# **A LOCALLY BUILT WPE WEBKIT, WHEN ONE IS NAMED, AND THE DRAG THAT GOES WITH IT.** The system library is built with
+# `ENABLE_DRAG_SUPPORT=OFF`, so the view emulates a text selection with shift-clicks; a fork with it ON (see
+# `~/Development/wpewebkit`) selects the way a browser does. The library and the instruction have to travel together:
+# a real drag sent to the system library selects NOTHING — MEASURED, 0 characters where the emulation selects 29.
+if [ -n "${AGORA_WPE_PREFIX:-}" ]; then
+	export LD_LIBRARY_PATH="${AGORA_WPE_PREFIX}/lib:$LD_LIBRARY_PATH"
+	export AGWEBVIEW_REAL_DRAG=1
+fi
 export AGORA_ICON_THEME="${AGORA_ICON_THEME:-$ROOT/libagora-iconservices/themes/Frost}"
 export AGORA_CURSOR_THEME="${AGORA_CURSOR_THEME:-$ROOT/window-server/assets/cursors/Vimix}"
 

@@ -32,11 +32,19 @@ source edit (`arc.mm`, a small-object retain-count crash fix).
 | Asset | Where | Licence |
 |---|---|---|
 | **Frost** icon theme v0.3.1 (`84e3f873`), by Sayantan | `libagora-iconservices/themes/Frost/` | **MIT**, upstream `LICENSE` beside the art |
+| **Vimix** cursor theme, by vinceliuice | `window-server/assets/cursors/Vimix/` | **GPL-3.0**, upstream `COPYING` beside the art |
 | **Bootstrap Icons** v1.13.2, © 2019-2024 The Bootstrap Authors — restyled source for the platform's named images | `libagora-app/art/system-images/` → `SystemImageMasks.{c,h}` | **MIT**; notice must travel with the generated table |
 | **OS marks** — path data from **Simple Icons**; hamburger is original | `window-server/assets/system-menu-icons/` → `systemicon-data.c` | **CC0 1.0** path data; the marks remain their owners' trademarks |
 | Default font set — 28 families | `libagora-drawing/fonts/` | **SIL OFL 1.1**, except Source Serif 4 (**Apache-2.0**); each family carries its own licence file |
 
-All three art sets are **data**, not linked code, and each has a `PROVENANCE` record beside it.
+All four art sets are **data**, not linked code, and each has a `PROVENANCE` record beside it.
+
+> **Vimix is the one art set whose licence is not permissive, and its placement is the licence decision.** The cursor
+> theme is GPL-3.0 (version 3, not "or later"), so it lives in `window-server`, the tree's GPL-3.0-or-later program,
+> and nowhere else: the `libagora-*` libraries are LGPL and a GPL-3.0 asset must not add a term to them. The compositor
+> is also the only component that can use a cursor theme today — it composites the theme's pointer on a DRM output and
+> hands it to the host as the X cursor in the nested backend. A downstream that cannot ship GPL-3.0 artwork deletes
+> `assets/cursors/Vimix` and the compositor draws its own arrow.
 
 > **Generated files carry a compound identifier.** The two generated icon tables are
 > Agora code *combined with* this art, so their SPDX line is not the plain tree licence:
@@ -69,14 +77,51 @@ documentation* as a specification. Reading a specification is not copying source
 That claim was **tested rather than asserted** on 2026-10-22: the first-party tree was
 fingerprinted against `gnustep/libs-base`, `gnustep/libs-gui`,
 `swift-corelibs-foundation` and `swift-corelibs-libdispatch`, on both code tokens and
-comment prose. **No copied code and no copied prose were found.** The procedure and
-the recorded result are in [`audit/`](audit/).
+comment prose. **No copied code and no copied prose were found.** The corpus was
+extended with **Cocotron** (`cjwl/cocotron`, MIT, dormant since 2015 — the only other
+independent implementation of this API) and the audit re-run on 2026-10-23 with the
+same result. The procedure and both recorded results are in [`audit/`](audit/).
 
 Until that audit was run, every first-party file carried the line *"Portions of this
 file may derive from GNUstep"*. It was a hedge stated in advance, and it is now gone:
 with the audit in hand the sentence asserted something untrue of ~1,100 files, and an
 unfounded notice is worse than none — it makes a real match harder to spot later and
 dilutes the record it points at.
+
+**None of that comparison material is committed, here or in any repository of this project.** The trees the
+audit reads — `gnustep/libs-base`, `gnustep/libs-gui`, `cjwl/cocotron` and the two swift-corelibs — are
+cloned by `audit.py setup` at the revisions pinned in `audit/audit.py`'s `CORPUS` table, into `audit/corpus/`,
+which `audit/.gitignore` excludes. A checkout is 255 MB on a developer's disk and zero bytes in git. The audit's
+reproducibility comes from the pins, not from a vendored copy, which is also why a tree can be added by naming
+a URL and a SHA rather than by importing anything.
+
+**The one piece of GNUstep source this project does carry is `libagora-objc`, and the fork is kept.** It is
+the tree at upstream `v2.3` (`e877e78`) plus seven Agora patches — 227 added lines across eleven files, the ten
+source and build files (`objc/runtime.h`, `dtable.c`, `class_table.c`, `arc.mm`, `protocol.c`, `ivar.c`,
+`class.h`, `CMakeLists.txt`, `objc/objc-config.h.in`, `.gitignore`) and `PROVENANCE.md` — which is what makes
+the runtime answer Apple's `BOOL` encoding, survive a late-bound superclass, and support the class ABI the Swift
+toolchain needs.
+
+**Why a fork and not a pinned upstream plus a patch series** — considered, and decided against on three
+grounds, in this order:
+
+1. **The delta is load-bearing, not cosmetic.** Three of the seven patches change what the runtime *does*
+   (`dtable.c` building a missing superclass dtable instead of aborting, `arc.mm`'s small-object
+   `-retainCount`, `class_table.c`'s late-bound size). A patch applied at build time moves those failures out
+   of a commit and into whoever runs `cmake` next; a fork puts them where the rest of the runtime's history is,
+   next to the upstream code they must be read with.
+2. **Pinning is already exact, so "vendored" does not mean "floating".** `Agora` records this submodule at a
+   commit (`a589c38`), and `release` pins every component the same way. The audit's reproducibility rule — a
+   result is only meaningful against a stated revision — is satisfied by the gitlink, which is why the corpus
+   needs pins in `audit/audit.py` and this tree does not.
+3. **The drift stays measurable.** The delta is exactly `git log e877e78..HEAD` in `libagora-objc`, and
+   `PROVENANCE.md` there is the record of it. A fork that says what it changed is more honest than a patch
+   series that has to be applied successfully to be read.
+
+**What the decision does NOT license.** The fork is of the **MIT** runtime only. `gnustep/libs-base` and
+`gnustep/libs-gui` are LGPL-2.1-or-later and no part of either is present — that is the claim the audit tested,
+and keeping this fork does not change it. And the licence obligation travels with the copy: upstream's
+`COPYING` and `ANNOUNCE*` files are in the fork, and `PROVENANCE.md` names the revision the copy came from.
 
 ## If copied code is ever found
 

@@ -27,9 +27,10 @@ Agora is a desktop environment for Linux and BSD. It is three things that compos
 3. **Applications** — a reference set (document, text, grid/formula, presentation, canvas,
    image) written against the stack, shipped as the desktop's content.
 
-Everything is compiled from source, apart from the one piece of third-party *art* the desktop vendors — the
-MIT-licensed Frost icon theme (see the Conventions below). A single **release** repository composes a whole
-desktop by pinning, in a tagged release, one exact revision of every component.
+Everything is compiled from source, apart from the third-party *art* the desktop vendors — the MIT-licensed
+Frost icon theme, the open-licensed default fonts, and the GPL-3.0 Vimix cursor theme (see the Conventions
+below). A single **release** repository composes a whole desktop by pinning, in a tagged release, one exact
+revision of every component.
 
 ## Repository model — one component, one repository
 
@@ -81,7 +82,7 @@ The component repositories named below exist and build. This list will grow; fur
 
 | repository | what it is |
 |---|---|
-| `window-server` | the Wayland compositor: Agora's implementation of the Mac window server — outputs, seats, input routing, surface roles, layers |
+| `window-server` | the Wayland compositor: Agora's implementation of the Mac window server — outputs, seats, input routing, surface roles, layers, and the pointer (the vendored Vimix cursor theme) |
 | `libagora-watch` | the change stream — a path changed, and here is which way |
 | `libagora-iconservices` | Icon Services — the icon an item or a type is drawn with: the lookup, the representations, and the vendored Frost default theme |
 | `libagora-launchservices` | Launch Services — the type model (Uniform Type Identifiers), and what opens what |
@@ -194,7 +195,11 @@ location.
   set is **Frost** (MIT, v0.3.1), committed as its built PNGs in `libagora-iconservices/themes/Frost`
   with a provenance record and its own licence. It is data, not linked code, and the rule above still
   governs code. `AGORA_ICON_THEME` can replace it at run time, and Icon Services' drawn generics remain
-  the fallback. **The default font set is the same kind of asset**: `libagora-drawing/fonts/` carries
+  the fallback. **The pointer's artwork is the same kind of asset with a stricter licence**: the
+  **Vimix** cursor theme (GPL-3.0) is vendored in `window-server/assets/cursors/Vimix`, the only
+  component whose GPL-3.0-or-later licence it sits in without adding a term to another, and
+  `AGORA_CURSOR_THEME` replaces it at run time. A session with no theme at all falls back to the arrow
+  the compositor draws itself. **The default font set is the same kind of asset**: `libagora-drawing/fonts/` carries
   open-licensed faces (SIL OFL 1.1 and Apache 2.0, each with its licence beside it) that fill the roles
   macOS fills with its non-redistributable catalogue, plus a provenance record with upstream revisions
   and checksums. `FN_FONT_PATH` replaces the search path, `AGORA_UI_FONT`/`AGORA_MONO_FONT` replace the

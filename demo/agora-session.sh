@@ -18,6 +18,8 @@
 #         AGORA_WALLPAPER=/path/to/image.jpg demo/agora-session.sh
 #         AGORA_DOCK_POSITION=left demo/agora-session.sh     # the Dock's alternative side
 #         AGORA_DPI=57.97 demo/agora-session.sh              # force the output scale (dots per inch)
+#         AGORA_UI_SCALE=1.25 demo/agora-session.sh          # a comfort factor on top of it (1.0 is the default)
+#         AGORA_CURSOR_THEME=/path demo/agora-session.sh     # another Xcursor theme for the pointer
 # Ctrl-C stops everything.
 set -u
 
@@ -47,6 +49,12 @@ H="${GEOM#*x}"
 # **A MULTI-HEAD X SCREEN MAKES THE DERIVED SCALE WRONG, SO THE SESSION CAN FORCE IT.** `DisplayWidth` spans every
 # monitor while `DisplayWidthMM` describes one, so the derived dpi is not the panel's. AGORA_DPI states the real
 # number and is passed to the compositor as `--dpi`; it applies to the X11 backend only.
+#
+# **AND AGORA_UI_SCALE IS THE OTHER HALF OF THE QUESTION: NOT "WHAT IS THIS PANEL" BUT "WHAT SUITS THIS PERSON".** It
+# is a plain multiplier applied by the compositor AFTER the measured scale and after AGORA_DPI, so 1.25 is everything a
+# quarter larger than the panel's honest answer; 1.0 (the default) changes nothing. It needs no line here at all: the
+# compositor reads it from its own environment, which this script inherits and passes on, and its startup line in
+# /tmp/agora-session-server.log shows the factor whenever it is not 1.
 DPI=()
 if [ -n "${AGORA_DPI:-}" ]; then
 	DPI=(--dpi "${AGORA_DPI}")
@@ -61,6 +69,12 @@ for d in "$ROOT"/libagora-*/build; do
 done
 export LD_LIBRARY_PATH="${SESSION_BUILD_LIBS}${SESSION_BUILD_LIBS:+:}${AGORA_PREFIX:-$ROOT/build-prefix}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export AGORA_ICON_THEME="${AGORA_ICON_THEME:-$ROOT/libagora-iconservices/themes/Frost}"
+
+# **AND THE POINTER'S THEME, FROM THIS CHECKOUT RATHER THAN FROM AN INSTALL.** The compositor compiles in the prefix's
+# `share/cursors/Vimix` and falls back to the arrow it draws itself, so a developer who has built the trees and
+# never installed one would see that fallback — a pointer that is a session's own, not the desktop's design. Vimix
+# lives in the window server's assets, and an explicit AGORA_CURSOR_THEME still wins.
+export AGORA_CURSOR_THEME="${AGORA_CURSOR_THEME:-$ROOT/window-server/assets/cursors/Vimix}"
 
 # **AND WHERE THE APPLICATIONS ARE, BECAUSE IN A DEVELOPMENT SESSION THEY ARE NOT IN /Applications.** Launch
 # Services scans directories for `.app` bundles; the session's bundles live in the components' build trees, so
@@ -144,11 +158,14 @@ sleep 0.5
 # 3. THE WALLPAPER: ONE FRAME, THEN HOLD. It redraws on every frame callback, so a still picture asks for one frame
 #    rather than becoming a frame-rate generator.
 #
-#    **AND IT RENDERS AT THE COMPOSITOR'S OWN SCALE, BECAUSE IT IS THE ONE CLIENT THAT DOES NOT SPEAK `wl_output`.**
-#    Every AppKit application reads `wl_output.scale` and renders at that integer factor; the raw test client used as
-#    the wallpaper does not, so a 1x wallpaper on a 1.333x output is magnified by the compositor and looks soft. The
-#    factor is the scale the server just printed, rounded up — the same `ceil` the server advertises — and 1 (the
-#    client's own default) when the line cannot be read.
+#    **AND IT RENDERS AT THE COMPOSITOR'S OWN SCALE, BECAUSE IT IS THE ONE CLIENT THAT DOES NOT SPEAK THE EXTENSION.**
+#    An AppKit application hears `agora_output.preferred_scale` — the output's real fraction, whatever produced it —
+#    and rasterises at exactly that; the raw test client used as the wallpaper speaks neither that nor `wl_output`,
+#    so a 1x wallpaper on a 1.333x output is magnified by the compositor and looks soft. It is given the scale the
+#    server just printed, rounded up, and 1 (the client's own default) when the line cannot be read.
+#
+#    That printed number is the FINAL scale: the panel's own answer times AGORA_UI_SCALE, so a session at 1.25
+#    comfort on a 1.333 output asks the wallpaper for 2x and is composited from a big enough buffer either way.
 # ---------------------------------------------------------------------------------------------------------------
 OUTPUT_SCALE=$(sed -n 's/.*(scale \([0-9.]*\).*/\1/p' /tmp/agora-session-server.log | head -1)
 WALLPAPER_SCALE=$(awk -v s="${OUTPUT_SCALE:-1}" 'BEGIN { n = int(s); if (n < s) n++; if (n < 1) n = 1; print n }')
@@ -163,7 +180,9 @@ WALLPID=$!
 sleep 1
 
 echo "server=$SPID  workspace=$WPID  dock=$DOCKPID  wallpaper=$WALLPID"
-echo "  window server: ${W}x${H} on DISPLAY $DISPLAY"
+SCALE_NOTE="output scale ${OUTPUT_SCALE:-1}"
+[ -n "${AGORA_UI_SCALE:-}" ] && SCALE_NOTE="${SCALE_NOTE} = panel x ${AGORA_UI_SCALE} UI"
+echo "  window server: ${W}x${H} on DISPLAY $DISPLAY (${SCALE_NOTE})"
 echo "  Wayland socket: ${RUNTIME}/${SOCK}"
 echo "  desktop: ${DESK}"
 echo "  wallpaper: ${WALLPAPER}"

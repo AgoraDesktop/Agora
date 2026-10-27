@@ -22,6 +22,12 @@ Every first-party source file now carries `SPDX-FileCopyrightText` and
 (SIL OFL 1.1 / Apache-2.0) keep their upstream licences and their upstream notices. They
 are **not** covered by this change and must not be relabelled.
 
+The **Vimix** cursor theme (GPL-3.0, `window-server/assets/cursors/Vimix`) is the same
+kind of asset and arrived after the change; it is likewise covered by neither the old MIT
+grant nor this one, and keeps its upstream licence. It lives in `window-server` — the
+GPL-3.0-or-later program — rather than in an LGPL library, so it adds no term to anything
+else in the tree.
+
 ## Why
 
 Two reasons, in order of weight:
@@ -37,9 +43,10 @@ Two reasons, in order of weight:
    **That hedge has since been retired, on evidence.** The tree was audited on
    2026-10-22 against GNUstep Base, GNUstep GUI and Apple's swift-corelibs, on both
    code tokens and comment prose, and no copied code or prose was found — see `audit/`.
-   The blanket per-file derivation notice was therefore removed: a claim that every
-   file may derive from GNUstep is false for all of them, and an unfounded notice is
-   worse than none.
+   The audit was re-run on 2026-10-23 with Cocotron added to the corpus and reached the
+   same conclusion. The blanket per-file derivation notice was therefore removed: a
+   claim that every file may derive from GNUstep is false for all of them, and an
+   unfounded notice is worse than none.
 
 ## Why version 3, specifically
 

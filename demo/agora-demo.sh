@@ -16,6 +16,8 @@
 #
 # Usage:  demo/agora-demo.sh [WIDTHxHEIGHT]
 #         AGORA_DPI=92 demo/agora-demo.sh 1280x720   forces the compositor's scale (dots per inch)
+#         AGORA_UI_SCALE=1.25 demo/agora-demo.sh     a comfort factor on top of it (1.0 is the default)
+#         AGORA_CURSOR_THEME=/path demo/agora-demo.sh  another Xcursor theme for the pointer
 # Ctrl-C stops everything.
 set -u
 
@@ -44,6 +46,11 @@ H="${GEOM#*x}"
 # **A MULTI-HEAD X SCREEN MAKES THE DERIVED SCALE TOO LARGE, SO THE DEMO CAN FORCE IT.** `DisplayWidth` spans every
 # monitor while `DisplayWidthMM` describes one, so two 1080p panels side by side read as twice the dpi a single
 # panel has. AGORA_DPI states the panel's own number and is passed to the compositor as `--dpi`.
+#
+# AGORA_UI_SCALE is NOT a statement about the panel: it is the person's comfort factor, which the compositor applies
+# after the measured scale, so the demo can show a desktop at 125% of what the hardware asks for without telling the
+# compositor anything false about the screen. No line here passes it: the compositor reads it from its environment,
+# which this script inherits.
 DPI=()
 if [ -n "${AGORA_DPI:-}" ]; then
 	DPI=(--dpi "${AGORA_DPI}")
@@ -67,6 +74,12 @@ export LD_LIBRARY_PATH="${DEMO_BUILD_LIBS}${DEMO_BUILD_LIBS:+:}${AGORA_PREFIX:-$
 # prefix's share/icons/Frost; a developer running the build trees may never have installed it. An explicit
 # AGORA_ICON_THEME still wins, and an absent directory falls back to Icon Services' drawn generics.
 export AGORA_ICON_THEME="${AGORA_ICON_THEME:-$ROOT/libagora-iconservices/themes/Frost}"
+
+# **AND THE POINTER'S THEME, FROM THIS CHECKOUT RATHER THAN FROM AN INSTALL.** The compositor compiles in the prefix's
+# `share/cursors/Vimix` and falls back to the arrow it draws itself, so a developer who has built the trees and
+# never installed one would see that fallback — a pointer that is a session's own, not the desktop's design. Vimix
+# lives in the window server's assets, and an explicit AGORA_CURSOR_THEME still wins.
+export AGORA_CURSOR_THEME="${AGORA_CURSOR_THEME:-$ROOT/window-server/assets/cursors/Vimix}"
 RUNTIME="${XDG_RUNTIME_DIR:-/tmp}"
 SOCK="agora-demo"
 DESK="/tmp/agora-demo-desktop"

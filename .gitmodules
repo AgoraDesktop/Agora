@@ -80,3 +80,7 @@
 	path = libagora-data
 	url = https://github.com/AgoraDesktop/libagora-data.git
 	branch = main
+[submodule "libagora-webview"]
+	path = libagora-webview
+	url = https://github.com/AgoraDesktop/libagora-webview.git
+	branch = main

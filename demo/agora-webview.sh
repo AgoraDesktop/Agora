@@ -9,6 +9,10 @@
 #   demo/agora-webview.sh https://example.org   # a URL, if this machine has a network
 #   demo/agora-webview.sh --session             # plus Workspace and the Dock, so the desktop is there too
 #
+# Two environment variables exist for looking at the result rather than living in it:
+#   AGORA_SCREENSHOT=/tmp/page.ppm   the compositor writes the frame it composited when it stops
+#   AGORA_SECONDS=20                 the application closes itself, so the run ends without a person
+#
 # **THIS IS THE SMALLEST SESSION THAT SHOWS THE CLASS WORKING**, and it is deliberately not part of
 # `agora-session.sh`: that script is the composition a login will start, and a browser is an application, not furniture.
 # What this starts is one application whose window is a page — AppKit paints the engine's frames into a window's buffer
@@ -76,10 +80,15 @@ export AGORA_ICON_THEME="${AGORA_ICON_THEME:-$ROOT/libagora-iconservices/themes/
 export AGORA_CURSOR_THEME="${AGORA_CURSOR_THEME:-$ROOT/window-server/assets/cursors/Vimix}"
 
 cleanup() {
-	[ -n "${APP_PID:-}" ] && kill "$APP_PID" 2>/dev/null
-	[ -n "${WS_PID:-}" ] && kill "$WS_PID" 2>/dev/null
-	[ -n "${DOCK_PID:-}" ] && kill "$DOCK_PID" 2>/dev/null
+	# **THE SERVER IS KILLED AND WAITED FOR, IN THAT ORDER.** The screenshot is written on the server's ordinary exit
+	# path, so a cleanup that signalled it and went on to delete the socket would race the write it was waiting for.
+	for pid in "${APP_PID:-}" "${WS_PID:-}" "${DOCK_PID:-}"; do
+		[ -n "$pid" ] && kill "$pid" 2>/dev/null
+	done
 	[ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null
+	for pid in "${APP_PID:-}" "${WS_PID:-}" "${DOCK_PID:-}" "${SERVER_PID:-}"; do
+		[ -n "$pid" ] && wait "$pid" 2>/dev/null
+	done
 	rm -f "${XDG_RUNTIME_DIR:-/tmp}/${SOCK}" "${XDG_RUNTIME_DIR:-/tmp}/${SOCK}.lock"
 }
 trap cleanup EXIT INT TERM
@@ -88,8 +97,16 @@ DPI=()
 if [ -n "${AGORA_DPI:-}" ]; then
 	DPI=(--dpi "${AGORA_DPI}")
 fi
+SHOT=()
+if [ -n "${AGORA_SCREENSHOT:-}" ]; then
+	SHOT=(--screenshot "${AGORA_SCREENSHOT}")
+fi
+APP_ARGS=()
+if [ -n "${AGORA_SECONDS:-}" ]; then
+	APP_ARGS=(--seconds "${AGORA_SECONDS}")
+fi
 
-"$SERVER_BIN" --backend x11 --input host --socket "$SOCK" --frames 0 --width "$W" --height "$H" "${DPI[@]}" \
+"$SERVER_BIN" --backend x11 --input host --socket "$SOCK" --frames 0 --width "$W" --height "$H" "${DPI[@]}" "${SHOT[@]}" \
 	>"$ROOT/demo/.agora-webview-server.log" 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 100); do
@@ -115,7 +132,7 @@ if [ "$WANT_SESSION" = "1" ]; then
 fi
 
 if [ -n "$URL" ]; then
-	"$WEBVIEW_BIN" "$URL"
+	"$WEBVIEW_BIN" "$URL" "${APP_ARGS[@]}"
 else
-	"$WEBVIEW_BIN"
+	"$WEBVIEW_BIN" "${APP_ARGS[@]}"
 fi

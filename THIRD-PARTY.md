@@ -15,6 +15,7 @@ that makes it usable here. Each such tree carries its upstream licence file in p
 | `libagora-core` | [swiftlang/swift-corelibs-foundation](https://github.com/swiftlang/swift-corelibs-foundation), `Sources/CoreFoundation/` | see its `PROVENANCE.md` | **Apache-2.0 with the Runtime Library Exception** |
 | `libagora-dispatch` | [swiftlang/swift-corelibs-libdispatch](https://github.com/swiftlang/swift-corelibs-libdispatch) | `swift-6.4.0-RELEASE` — `024805abec6daa9cdda569fd736b9c7686dfd735` | **Apache-2.0** |
 | `libagora-lcms2` | [lcms2](https://github.com/mm2/Little-CMS) | see its `PROVENANCE.md` | **MIT**, © 2023 Marti Maria Saguer |
+| `libagora-tsm` | [kmscon/libtsm](https://github.com/kmscon/libtsm) | `c0733a5` — `vte: Fix XTQMODKEYS interpreted has SGR 4 underline`, 2026-10-15 (4.8.0) | **MIT**, © David Herrmann and contributors |
 
 Each has a `PROVENANCE.md` recording exactly what was copied, what was dropped, and
 what Agora changed. `libagora-objc` is the only place in the tree where the change is a

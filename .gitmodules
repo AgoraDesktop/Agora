@@ -10,6 +10,10 @@
 	path = libagora-lcms2
 	url = https://github.com/AgoraDesktop/libagora-lcms2.git
 	branch = main
+[submodule "libagora-tsm"]
+	path = libagora-tsm
+	url = https://github.com/AgoraDesktop/libagora-tsm.git
+	branch = main
 [submodule "libagora-objc"]
 	path = libagora-objc
 	url = https://github.com/AgoraDesktop/libagora-objc.git

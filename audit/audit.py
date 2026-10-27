@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Agora provenance audit — is any first-party source copied from GNUstep or
-from Apple's swift-corelibs?
+"""Agora provenance audit — is any first-party source copied from GNUstep, from
+Apple's swift-corelibs, or from Cocotron?
 
 Two modes, because they answer different questions:
 
@@ -20,7 +20,7 @@ swift-corelibs, so the control MUST light up. If it does not, the tool is broken
 and the clean result is meaningless.
 
 Usage
-  ./audit.py setup                     # clone the four comparison trees, pinned
+  ./audit.py setup                     # clone the comparison trees, pinned
   ./audit.py code   [--control]        # code-token audit
   ./audit.py prose  [--control]        # comment-prose audit
   ./audit.py explain AGORA CORPUS      # longest shared token run between two files
@@ -29,6 +29,7 @@ Corpus revisions are pinned in CORPUS in this file; `setup` checks them out.
 """
 
 import argparse
+import hashlib
 import os
 import re
 import subprocess
@@ -48,6 +49,10 @@ CORPUS = {
         "https://github.com/swiftlang/swift-corelibs-foundation.git", "28249ce"),
     "swift-corelibs-libdispatch": (
         "https://github.com/swiftlang/swift-corelibs-libdispatch.git", "ce1b4d3"),
+    # The other independent Cocoa implementation, MIT, dormant since 2015. It is
+    # here because a reimplementation this old is exactly the material a model
+    # could have absorbed into a "new" file without anyone noticing.
+    "cocotron": ("https://github.com/cjwl/cocotron.git", "9cda7d7"),
 }
 
 FIRST_PARTY = ["libagora-base", "libagora-app", "libagora-drawing", "libagora-text",
@@ -124,11 +129,30 @@ def comment_words(path):
     return words
 
 
+_TOKEN_HASHES = {}
+
+
+def token_hash(t):
+    """A process-independent 64-bit hash of one token.
+
+    Not hash(): CPython randomises string hashing per process, so winnowing
+    picked different minima on every run and two runs of the same corpus
+    reported different collision counts (98 vs 104 files on the same trees).
+    A recorded number has to be a number the next run reproduces.
+    """
+    h = _TOKEN_HASHES.get(t)
+    if h is None:
+        h = int.from_bytes(hashlib.blake2b(t.encode("utf-8", "surrogatepass"),
+                                           digest_size=8).digest(), "big")
+        _TOKEN_HASHES[t] = h
+    return h
+
+
 def shingles(toks, k):
     """Rolling 64-bit hashes over k-token shingles."""
     if len(toks) < k:
         return []
-    ints = [hash(t) & MASK for t in toks]
+    ints = [token_hash(t) for t in toks]
     bk = pow(B, k - 1, 1 << 64)
     h = 0
     for i in range(k):
@@ -154,6 +178,12 @@ def winnow(hs, w):
     return out
 
 
+def tree_counts(rels):
+    """Hits per corpus tree, so coverage of each upstream is visible, not implied."""
+    c = Counter(rel.split(os.sep)[0] for rel in rels)
+    return ", ".join(f"{t} {n}" for t, n in sorted(c.items(), key=lambda kv: -kv[1]))
+
+
 def walk(root, repos):
     files = []
     for repo in repos:
@@ -167,12 +197,31 @@ def walk(root, repos):
 
 
 def corpus_files():
-    return walk(CORPUS_DIR, sorted(os.listdir(CORPUS_DIR)))
+    """Every corpus file, with a guard against a corpus that is not there.
+
+    A missing tree used to be indistinguishable from a clean tree: os.walk
+    yields nothing and the audit prints NO COLLISIONS. Now that five upstreams
+    are pinned, that silence would be the easiest way to record a result that
+    compared against nothing.
+    """
+    present = set(os.listdir(CORPUS_DIR))
+    absent = [n for n in CORPUS if n not in present]
+    if absent:
+        sys.exit(f"corpus missing: {', '.join(absent)} — run `audit.py setup`")
+    files = []
+    for name in sorted(present):
+        got = walk(CORPUS_DIR, [name])
+        if not got:
+            sys.exit(f"corpus tree {name} has no source files: bad checkout")
+        print(f"  corpus {name:<32}{len(got):>5} files", flush=True)
+        files.extend(got)
+    return files
 
 
 def audit_code(repos, k, w, label):
     print(f"\n=== {label} (code tokens, k={k}, w={w}) ===", flush=True)
     afiles = walk(AGORA, repos)
+    cfiles = corpus_files()
     aset, index = {}, {}
     for i, (_rel, p) in enumerate(afiles):
         hs = winnow(shingles(tokens(p), k), w)
@@ -181,7 +230,7 @@ def audit_code(repos, k, w, label):
             index.setdefault(h, i)
     print(f"  Agora files {len(afiles)}, fingerprints {len(index)}", flush=True)
     hits = Counter()
-    for rel, p in corpus_files():
+    for rel, p in cfiles:
         for h in winnow(shingles(tokens(p), k), w):
             fid = index.get(h)
             if fid is not None:
@@ -196,6 +245,9 @@ def audit_code(repos, k, w, label):
             best[fid] = (frac, c)
     kind = Counter("header" if afiles[f][0].endswith(".h") else "source" for f in best)
     print(f"  files with any collision : {len(best)} of {len(afiles)}  {dict(kind)}")
+    trees = tree_counts(c for _f, c in hits)
+    if trees:
+        print("  collision pairs by corpus: " + trees)
     print(f"  {'agora file':<44}{'frac':>7}  corpus file")
     for fid, (frac, c) in sorted(best.items(), key=lambda kv: -kv[1][0])[:12]:
         print(f"  {afiles[fid][0]:<44}{frac*100:>6.1f}%  {c}")
@@ -205,6 +257,7 @@ def audit_code(repos, k, w, label):
 def audit_prose(repos, n, label):
     print(f"\n=== {label} (comment prose, {n}-word shingles) ===", flush=True)
     afiles = walk(AGORA, repos)
+    cfiles = corpus_files()
     index = {}
     for i, (_rel, p) in enumerate(afiles):
         w = comment_words(p)
@@ -215,7 +268,7 @@ def audit_prose(repos, n, label):
         print("  NO COMMENT PROSE TO INDEX")
         return []
     hits = Counter()
-    for rel, p in corpus_files():
+    for rel, p in cfiles:
         w = comment_words(p)
         c = Counter()
         for j in range(max(0, len(w) - n + 1)):
@@ -229,6 +282,9 @@ def audit_prose(repos, n, label):
         return []
     per = Counter(f for f, _ in hits)
     print(f"  Agora files sharing comment prose: {len(per)} of {len(afiles)}")
+    trees = tree_counts(c for _f, c in hits)
+    if trees:
+        print("  shared runs by corpus    : " + trees)
     for (fid, c), m in sorted(hits.items(), key=lambda kv: -kv[1])[:10]:
         print(f"    {afiles[fid][0]:<46}{m:>5} shared  {c}")
     return list(hits)
@@ -260,17 +316,42 @@ def explain(agora_rel, corpus_rel, k):
 
 
 def setup():
+    """Clone/check out every pinned tree, and refuse to report a pin it cannot reach.
+
+    The old version ignored fetch and checkout failures, so an unreachable pin
+    left the tree on whatever HEAD happened to be and the audit then produced a
+    result labelled with a revision it never read.
+    """
     os.makedirs(CORPUS_DIR, exist_ok=True)
+    bad = []
     for name, (url, rev) in CORPUS.items():
         dst = os.path.join(CORPUS_DIR, name)
         if not os.path.isdir(os.path.join(dst, ".git")):
             subprocess.run(["git", "clone", "--quiet", url, dst], check=True)
-        subprocess.run(["git", "-C", dst, "fetch", "--quiet", "origin", rev],
-                       check=False)
-        subprocess.run(["git", "-C", dst, "checkout", "--quiet", rev], check=False)
+
+        def have():
+            return subprocess.run(["git", "-C", dst, "cat-file", "-e", rev + "^{commit}"],
+                                  capture_output=True).returncode == 0
+
+        if not have():
+            print(f"  {name:<30}fetching {rev}", flush=True)
+            subprocess.run(["git", "-C", dst, "fetch", "--quiet", "origin", rev],
+                           check=False)
+        if not have():
+            print(f"  {name:<30}PIN MISSING: {rev}", flush=True)
+            bad.append(name)
+            continue
+
+        subprocess.run(["git", "-C", dst, "checkout", "--quiet", "--detach", rev],
+                       check=True)
         head = subprocess.run(["git", "-C", dst, "rev-parse", "--short", "HEAD"],
                               capture_output=True, text=True).stdout.strip()
-        print(f"  {name:<30}{head}")
+        dirty = subprocess.run(["git", "-C", dst, "status", "--porcelain"],
+                               capture_output=True, text=True).stdout.strip()
+        print(f"  {name:<30}{head}{'  MODIFIED (not the pin)' if dirty else ''}")
+    if bad:
+        sys.exit(f"could not check out: {', '.join(bad)} — the audit would not have "
+                 f"compared the pinned revision")
 
 
 def main():

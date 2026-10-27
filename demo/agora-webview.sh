@@ -1,0 +1,121 @@
+#!/bin/bash
+# Copyright © 2026 Kyle J. Cardoza.
+# SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# A web page on the Agora desktop: the window server, and one application with a WKWebView in it.
+#
+#   demo/agora-webview.sh                       # the built-in page
+#   demo/agora-webview.sh https://example.org   # a URL, if this machine has a network
+#   demo/agora-webview.sh --session             # plus Workspace and the Dock, so the desktop is there too
+#
+# **THIS IS THE SMALLEST SESSION THAT SHOWS THE CLASS WORKING**, and it is deliberately not part of
+# `agora-session.sh`: that script is the composition a login will start, and a browser is an application, not furniture.
+# What this starts is one application whose window is a page — AppKit paints the engine's frames into a window's buffer
+# and the compositor composites them, which is the hop every offscreen test stops short of.
+#
+# Ctrl-C stops everything.
+set -u
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+SERVER_BIN="$ROOT/window-server/build/window-server"
+WEBVIEW_BIN="$ROOT/libagora-webview/build/agora-webview"
+WORKSPACE_BIN="$(ls "$ROOT"/workspace/build/Workspace.app/Contents/*/*/Workspace 2>/dev/null | head -1)"
+DOCK_BIN="$(ls "$ROOT"/dock/build/Dock.app/Contents/*/*/Dock 2>/dev/null | head -1)"
+
+W=960
+H=720
+WANT_SESSION=0
+URL=""
+
+for arg in "$@"; do
+	case "$arg" in
+	--session)
+		WANT_SESSION=1
+		;;
+	[0-9]*x[0-9]*)
+		W="${arg%x*}"
+		H="${arg#*x}"
+		;;
+	--help|-h)
+		sed -n '5,15p' "$0" | sed 's/^# \{0,1\}//'
+		exit 0
+		;;
+	*)
+		URL="$arg"
+		;;
+	esac
+done
+
+for b in "$SERVER_BIN" "$WEBVIEW_BIN"; do
+	if [ ! -x "$b" ]; then
+		echo "the session needs $b" >&2
+		echo "build it first: window-server and libagora-webview each have a build/ directory" >&2
+		exit 1
+	fi
+done
+if [ "$WANT_SESSION" = "1" ] && [ ! -x "$WORKSPACE_BIN" ]; then
+	echo "--session needs Workspace at $WORKSPACE_BIN" >&2
+	exit 1
+fi
+
+export DISPLAY="${DISPLAY:-:1}"
+SOCK="agora-webview-session-$$"
+export WAYLAND_DISPLAY="$SOCK"
+
+# The AppKit's dependencies live in the install prefix, and DT_RUNPATH is not inherited by a dependency. The build trees
+# come first because the prefix also carries installed copies that may predate the tree.
+SESSION_BUILD_LIBS=""
+for d in "$ROOT"/libagora-*/build; do
+	[ -d "$d" ] && SESSION_BUILD_LIBS="${SESSION_BUILD_LIBS}${SESSION_BUILD_LIBS:+:}$d"
+done
+export LD_LIBRARY_PATH="${SESSION_BUILD_LIBS}${SESSION_BUILD_LIBS:+:}${AGORA_PREFIX:-$ROOT/build-prefix}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export AGORA_ICON_THEME="${AGORA_ICON_THEME:-$ROOT/libagora-iconservices/themes/Frost}"
+export AGORA_CURSOR_THEME="${AGORA_CURSOR_THEME:-$ROOT/window-server/assets/cursors/Vimix}"
+
+cleanup() {
+	[ -n "${APP_PID:-}" ] && kill "$APP_PID" 2>/dev/null
+	[ -n "${WS_PID:-}" ] && kill "$WS_PID" 2>/dev/null
+	[ -n "${DOCK_PID:-}" ] && kill "$DOCK_PID" 2>/dev/null
+	[ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null
+	rm -f "${XDG_RUNTIME_DIR:-/tmp}/${SOCK}" "${XDG_RUNTIME_DIR:-/tmp}/${SOCK}.lock"
+}
+trap cleanup EXIT INT TERM
+
+DPI=()
+if [ -n "${AGORA_DPI:-}" ]; then
+	DPI=(--dpi "${AGORA_DPI}")
+fi
+
+"$SERVER_BIN" --backend x11 --input host --socket "$SOCK" --frames 0 --width "$W" --height "$H" "${DPI[@]}" \
+	>"$ROOT/demo/.agora-webview-server.log" 2>&1 &
+SERVER_PID=$!
+for _ in $(seq 1 100); do
+	[ -S "${XDG_RUNTIME_DIR:-/tmp}/${SOCK}" ] && break
+	sleep 0.1
+done
+if [ ! -S "${XDG_RUNTIME_DIR:-/tmp}/${SOCK}" ]; then
+	echo "the window server never came up; see demo/.agora-webview-server.log" >&2
+	exit 1
+fi
+
+# **WORKSPACE MAPS FIRST WHEN IT IS ASKED FOR**, because the compositor gives the menu bar to the application that maps
+# first and the bar is Workspace's.
+if [ "$WANT_SESSION" = "1" ]; then
+	"$WORKSPACE_BIN" --seconds 1000000 >/dev/null 2>&1 &
+	WS_PID=$!
+	sleep 1
+	if [ -x "$DOCK_BIN" ]; then
+		"$DOCK_BIN" >/dev/null 2>&1 &
+		DOCK_PID=$!
+		sleep 0.5
+	fi
+fi
+
+if [ -n "$URL" ]; then
+	"$WEBVIEW_BIN" "$URL"
+else
+	"$WEBVIEW_BIN"
+fi

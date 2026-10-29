@@ -58,6 +58,11 @@
 	path = widget-zoo
 	url = https://github.com/AgoraDesktop/widget-zoo.git
 	branch = main
+[submodule "forge"]
+	path = forge
+	url = https://github.com/AgoraDesktop/forge.git
+	branch = main
+
 [submodule "release"]
 	path = release
 	url = https://github.com/AgoraDesktop/release.git

@@ -166,15 +166,19 @@ sleep 0.5
 #
 #    That printed number is the FINAL scale: the panel's own answer times AGORA_UI_SCALE, so a session at 1.25
 #    comfort on a 1.333 output asks the wallpaper for 2x and is composited from a big enough buffer either way.
+#
+#    **AND IT IS NOT AN APPLICATION, SO IT SAYS SO WITH `--no-app-id`.** A window that names an application id is an
+#    application to `NSWorkspace -runningApplications`, so the Dock grew a tile for the wallpaper — a grey ghost whose
+#    Quit is a close request a raw client never hears. Decoration is not an application.
 # ---------------------------------------------------------------------------------------------------------------
 OUTPUT_SCALE=$(sed -n 's/.*(scale \([0-9.]*\).*/\1/p' /tmp/agora-session-server.log | head -1)
 WALLPAPER_SCALE=$(awk -v s="${OUTPUT_SCALE:-1}" 'BEGIN { n = int(s); if (n < s) n++; if (n < 1) n = 1; print n }')
 if [ -f "$WALLPAPER" ]; then
 	WAYLAND_DISPLAY="$SOCK" "$CLIENT_BIN" --width "$W" --height "$H" --image "$WALLPAPER" --buffer-scale "$WALLPAPER_SCALE" \
-		--x 0 --y 0 --level $(( -2147483648 + 20 )) --frames 1 --hold >/dev/null 2>&1 &
+		--x 0 --y 0 --level $(( -2147483648 + 20 )) --frames 1 --hold --no-app-id >/dev/null 2>&1 &
 else
 	WAYLAND_DISPLAY="$SOCK" "$CLIENT_BIN" --width "$W" --height "$H" --colour 48240E --buffer-scale "$WALLPAPER_SCALE" \
-		--x 0 --y 0 --level $(( -2147483648 + 20 )) --frames 1 --hold >/dev/null 2>&1 &
+		--x 0 --y 0 --level $(( -2147483648 + 20 )) --frames 1 --hold --no-app-id >/dev/null 2>&1 &
 fi
 WALLPID=$!
 sleep 1

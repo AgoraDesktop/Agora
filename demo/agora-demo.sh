@@ -143,10 +143,10 @@ sleep 1.5
 #    that never change. A wallpaper is a still picture: one commit, and the buffer stays.
 if [ -f "$WALLPAPER" ]; then
 	WAYLAND_DISPLAY="$SOCK" "$CLIENT_BIN" --width "$W" --height "$H" --image "$WALLPAPER" --x 0 --y 0 \
-		--level $(( -2147483648 + 20 )) --frames 1 --hold >/dev/null 2>&1 &
+		--level $(( -2147483648 + 20 )) --frames 1 --hold --no-app-id >/dev/null 2>&1 &
 else
 	WAYLAND_DISPLAY="$SOCK" "$CLIENT_BIN" --width "$W" --height "$H" --colour 48240E --x 0 --y 0 \
-		--level $(( -2147483648 + 20 )) --frames 1 --hold >/dev/null 2>&1 &
+		--level $(( -2147483648 + 20 )) --frames 1 --hold --no-app-id >/dev/null 2>&1 &
 fi
 WALLPID=$!
 

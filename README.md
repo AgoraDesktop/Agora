@@ -1,7 +1,7 @@
 # Agora
 
-*An installable desktop environment for Linux and the BSDs: the Cocoa stack, a Mac-like desktop, and its
-applications — written in Objective-C, built from source.*
+*An installable desktop environment for Linux and the BSDs, built to stand beside GNOME and KDE: the Cocoa
+stack, a full desktop shell, and its applications — written in Objective-C, built from source.*
 
 **Status: working, pre-release.** The components are implemented and run together: Foundation,
 Core Graphics, Core Text and the Application Kit carry the Cocoa surface an application uses; the
@@ -16,16 +16,35 @@ component carries its own detail in its own repository.
 
 ## What Agora is
 
-Agora is a desktop environment for Linux and BSD. It is three things that compose into one whole:
+Agora is a desktop environment for Linux and the BSDs, and its goal is to be a **viable competitor to
+GNOME and KDE**: a full desktop that a person can install on a laptop or a workstation and use every
+day, not a compatibility layer, a skin, or a technical curiosity. Competing means being complete —
+the session, the shell, the application set, the tools, the packaging — and it means having something
+to offer that the incumbents do not.
+
+Agora is three things that compose into that whole:
 
 1. **The Cocoa stack** — Core Foundation, Foundation, Core Graphics, Core Text and the Application
    Kit — implemented in Objective-C. The goal is behavioural and API compatibility: an Objective-C
    program written against the documented Cocoa surface builds and runs against Agora's stack.
-2. **A Mac-like desktop** — a window server and shell whose behaviour matches Mac OS X's window
-   management: client-side window chrome, a system-owned menu bar, a dock, a desktop with icons,
-   sheets, and the drag-and-drop session.
+   **That compatibility is a means, not the product.** It is what lets a mature body of application
+   code and its authors arrive on Agora already working, so the desktop has a real application
+   ecosystem rather than a promise of one.
+2. **The desktop shell** — a window server and a Workspace shell that give the desktop its own model
+   of window management: client-side window chrome, a system-owned menu bar, a dock, a desktop with
+   icons, sheets, and the drag-and-drop session. The model follows the Mac window server's
+   documented behaviour because that behaviour is specified, coherent and battle-tested — a
+   deliberate engineering choice, made for the same reason the stack above reimplements Cocoa, and
+   **not a claim to be macOS or a wish to imitate it.** What ships is Agora's desktop, with its own
+   shell, its own configuration and its own applications.
 3. **Applications** — a reference set (document, text, grid/formula, presentation, canvas,
    image) written against the stack, shipped as the desktop's content.
+
+**Where the difference is.** Competition is decided by what a desktop refuses to inherit as much as
+by what it implements. Agora starts from no systemd anywhere (no logind, no `libudev`, no elogind),
+the same desktop on Linux, FreeBSD, NetBSD and OpenBSD, the platform's own ICU and OpenSSL rather
+than pinned copies, and one uniform application model from the shell down to the document classes —
+which is what lets a single application set serve every host Agora builds for.
 
 Everything is compiled from source, apart from the third-party *art* the desktop vendors — the MIT-licensed
 Frost icon theme, the open-licensed default fonts, and the GPL-3.0 Vimix cursor theme (see the Conventions
@@ -77,18 +96,20 @@ The component repositories named below exist and build. This list will grow; fur
 | `libagora-objc` | the Objective-C runtime (GNUstep libobjc2) — the runtime Foundation and the desktop are compiled against |
 | `libagora-dispatch` | libdispatch — Grand Central Dispatch and the blocks runtime, which Core Foundation and the rest of the stack build on |
 | `libagora-lcms2` | little CMS — the colour-management engine Core Graphics uses for colour spaces and colour conversion |
+| `libagora-tsm` | libtsm — the terminal-emulator state machine: the VT parser, the screens and their scrollback, the selection model, and the escape sequences a keystroke becomes (MIT, from kmscon) |
 
 ### The desktop
 
 | repository | what it is |
 |---|---|
-| `window-server` | the Wayland compositor: Agora's implementation of the Mac window server — outputs, seats, input routing, surface roles, layers, and the pointer (the vendored Vimix cursor theme) |
+| `window-server` | the Wayland compositor: the desktop's window server, on the Mac window server's model — outputs, seats, input routing, surface roles, layers, and the pointer (the vendored Vimix cursor theme) |
 | `libagora-watch` | the change stream — a path changed, and here is which way |
 | `libagora-iconservices` | Icon Services — the icon an item or a type is drawn with: the lookup, the representations, and the vendored Frost default theme |
 | `libagora-launchservices` | Launch Services — the type model (Uniform Type Identifiers), and what opens what |
 | `widget-zoo` | a demonstration application: the view and control classes and the menu system |
 | `workspace` | Workspace — the desktop surface (wallpaper, icons, menu bar) and the file-manager windows; an application, consuming the AppKit |
 | `dock` | the Dock — running applications as tiles, in a vertical strip on the right (or the left), at `NSDockWindowLevel` and reserving its edge; an application, a separate client of the window server |
+| `terminal` | Terminal — a window with a shell in it: the emulator's cells painted with the glyph cache, a login shell on a pty, and the AppKit's own key split (commanding keys to the escape table, typed keys through the input context); an application |
 
 ### Tooling
 
@@ -105,12 +126,12 @@ The component repositories named below exist and build. This list will grow; fur
 
 ## The installation
 
-**A complete Agora installation carries the usual Mac OS X directories**, because the Cocoa surface it
-implements NAMES its directories rather than searching for them: `/Applications`, `/Library`, `/System`,
-`/Users` and `/Volumes` at the root, and `~/Applications`, `~/Desktop`, `~/Library` and the folders beside
-them in every home. "As much as is needed for supporting Cocoa applications" is a checkable rule rather than
-a licence to copy a Mac's tree: the table below is the whole set, and every row names the code that reads
-it.
+**A complete Agora installation carries the directories Cocoa names**, because the surface Agora implements
+NAMES its directories rather than searching for them: `/Applications`, `/Library`, `/System`, `/Users` and
+`/Volumes` at the root, and `~/Applications`, `~/Desktop`, `~/Library` and the folders beside them in every
+home. Each row below exists because a caller asks for it by name — "as much as is needed for supporting Cocoa
+applications" is a checkable rule rather than a licence to reproduce another system's tree: the table is the
+whole set, and every row names the code that reads it.
 
 | directory | who names it |
 |---|---|

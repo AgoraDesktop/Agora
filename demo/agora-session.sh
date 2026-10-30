@@ -81,6 +81,10 @@ export AGORA_CURSOR_THEME="${AGORA_CURSOR_THEME:-$ROOT/window-server/assets/curs
 # without this the Dock can see an application's windows but not its bundle — which is a placeholder tile instead of
 # an icon and a name. `AGORA_APPLICATIONS` is the door Launch Services already has for exactly this (it is
 # colon-separated, and the code's comment names the case: "a test can point at a fixture tree").
+#
+# **AND IT ADDS TO THE STANDARD ROOTS RATHER THAN REPLACING THEM**, which is what makes it usable here: `/Applications`
+# and the account's own `~/Applications` are still scanned, so an application EXPORTED into `~/Applications` — Forge's
+# export does exactly that — has an icon and a name in a session that never named that directory.
 export AGORA_APPLICATIONS="$ROOT/workspace/build:$ROOT/dock/build${AGORA_APPLICATIONS:+:$AGORA_APPLICATIONS}"
 
 # **AND WHERE EVERY APPLICATION'S PREFERENCES LIVE, BECAUSE A LOGIN SETS THAT TOO.** `NSUserDefaults` keeps its files

@@ -89,12 +89,13 @@ export AGORA_APPLICATIONS="$ROOT/workspace/build:$ROOT/dock/build${AGORA_APPLICA
 
 # **AND WHERE EVERY APPLICATION'S PREFERENCES LIVE, BECAUSE A LOGIN SETS THAT TOO.** `NSUserDefaults` keeps its files
 # under a CONFIGURATION ROOT (`AGORA_CONFIG_ROOT`) rather than under `$HOME`: AN AGORA INSTALL LAYS DOWN THE Mac OS X
-# LIKE DIRECTORIES — `/System`, `/Library`, `/Users`, `/Applications` — so on an installed machine the root is `/` and
-# an account's file is `/Users/<name>/Configuration/<domain>.plist`. A development checkout has no such tree, and left
-# unset the store points into the root-owned `/Users` — where nothing is writable, so a preference would last only as
-# long as the process that set it (the Dock's PINNED TILES are the first one a person would notice). Pointing the
-# root at the account's own directory is the closest thing a session has to the login that would have created the
-# real one.
+# LIKE DIRECTORIES — `/System`, `/Library`, `/Applications` — so on an installed machine the root is `/` and an
+# account's file is `<home>/Configuration/<domain>.plist`, its home being wherever the HOST keeps accounts
+# (`/home/<name>` on Linux and the BSDs, `/Users/<name>` on a macOS-like system). A development checkout has no such
+# tree, and left unset the store points into the host's root-owned home parent — where nothing is writable, so a
+# preference would last only as long as the process that set it (the Dock's PINNED TILES are the first one a person
+# would notice). Pointing the root at the account's own directory is the closest thing a session has to the login that
+# would have created the real one; the account's home is placed inside that root.
 export AGORA_CONFIG_ROOT="${AGORA_CONFIG_ROOT:-$HOME/.agora}"
 
 RUNTIME="${XDG_RUNTIME_DIR:-/tmp}"

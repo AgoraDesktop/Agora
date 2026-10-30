@@ -82,10 +82,11 @@ export AGORA_ICON_THEME="${AGORA_ICON_THEME:-$ROOT/libagora-iconservices/themes/
 export AGORA_CURSOR_THEME="${AGORA_CURSOR_THEME:-$ROOT/window-server/assets/cursors/Vimix}"
 
 # **AND WHERE EVERY APPLICATION'S PREFERENCES LIVE.** `NSUserDefaults` keeps its files under a CONFIGURATION ROOT
-# (`AGORA_CONFIG_ROOT`) — an Agora install lays down the Mac OS X like directories (`/System`, `/Library`, `/Users`), so
-# there the root is `/` and an account's file is `/Users/<name>/Configuration/…` — and a development tree has no such
-# directory, so a preference set in a demo would live only as long as the process that set it. The Dock's pinned tiles
-# are the first one a person would notice.
+# (`AGORA_CONFIG_ROOT`) — an Agora install lays down the Mac OS X like directories (`/System`, `/Library`), so there
+# the root is `/` and an account's file is `<home>/Configuration/…`, the home being wherever the host keeps accounts
+# (`/home` on Linux, `/Users` on a macOS-like system) — and a development tree has no such directory, so a preference
+# set in a demo would live only as long as the process that set it. The Dock's pinned tiles are the first one a person
+# would notice.
 export AGORA_CONFIG_ROOT="${AGORA_CONFIG_ROOT:-$HOME/.agora}"
 RUNTIME="${XDG_RUNTIME_DIR:-/tmp}"
 SOCK="agora-demo"

@@ -88,13 +88,14 @@ export AGORA_CURSOR_THEME="${AGORA_CURSOR_THEME:-$ROOT/window-server/assets/curs
 export AGORA_APPLICATIONS="$ROOT/workspace/build:$ROOT/dock/build${AGORA_APPLICATIONS:+:$AGORA_APPLICATIONS}"
 
 # **AND WHERE EVERY APPLICATION'S PREFERENCES LIVE, BECAUSE A LOGIN SETS THAT TOO.** `NSUserDefaults` keeps its files
-# under a CONFIGURATION ROOT (`FNX_CONFIG_ROOT`) rather than under `$HOME`: an installed system's is `/`, so an
-# account's file is `/Users/<name>/Configuration/<domain>.plist`. A development session has no such tree, and left
+# under a CONFIGURATION ROOT (`AGORA_CONFIG_ROOT`) rather than under `$HOME`: AN AGORA INSTALL LAYS DOWN THE Mac OS X
+# LIKE DIRECTORIES — `/System`, `/Library`, `/Users`, `/Applications` — so on an installed machine the root is `/` and
+# an account's file is `/Users/<name>/Configuration/<domain>.plist`. A development checkout has no such tree, and left
 # unset the store points into the root-owned `/Users` — where nothing is writable, so a preference would last only as
 # long as the process that set it (the Dock's PINNED TILES are the first one a person would notice). Pointing the
 # root at the account's own directory is the closest thing a session has to the login that would have created the
 # real one.
-export FNX_CONFIG_ROOT="${FNX_CONFIG_ROOT:-$HOME/.agora}"
+export AGORA_CONFIG_ROOT="${AGORA_CONFIG_ROOT:-$HOME/.agora}"
 
 RUNTIME="${XDG_RUNTIME_DIR:-/tmp}"
 SOCK="${AGORA_SESSION_SOCKET:-agora-session}"

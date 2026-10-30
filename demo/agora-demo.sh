@@ -80,6 +80,12 @@ export AGORA_ICON_THEME="${AGORA_ICON_THEME:-$ROOT/libagora-iconservices/themes/
 # never installed one would see that fallback — a pointer that is a session's own, not the desktop's design. Vimix
 # lives in the window server's assets, and an explicit AGORA_CURSOR_THEME still wins.
 export AGORA_CURSOR_THEME="${AGORA_CURSOR_THEME:-$ROOT/window-server/assets/cursors/Vimix}"
+
+# **AND WHERE EVERY APPLICATION'S PREFERENCES LIVE.** `NSUserDefaults` keeps its files under a CONFIGURATION ROOT
+# (`FNX_CONFIG_ROOT`) — an installed system's is `/`, so an account's file is `/Users/<name>/Configuration/…` — and a
+# development tree has no such directory, so a preference set in a demo would live only as long as the process that
+# set it. The Dock's pinned tiles are the first one a person would notice.
+export FNX_CONFIG_ROOT="${FNX_CONFIG_ROOT:-$HOME/.agora}"
 RUNTIME="${XDG_RUNTIME_DIR:-/tmp}"
 SOCK="agora-demo"
 DESK="/tmp/agora-demo-desktop"

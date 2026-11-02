@@ -47,7 +47,7 @@ than pinned copies, and one uniform application model from the shell down to the
 which is what lets a single application set serve every host Agora builds for.
 
 Everything is compiled from source, apart from the third-party *art* the desktop vendors — the MIT-licensed
-Frost icon theme, the open-licensed default fonts, and the GPL-3.0 Vimix cursor theme (see the Conventions
+Tabler symbol theme, the open-licensed default fonts, and the GPL-3.0 Vimix cursor theme (see the Conventions
 below). A single **release** repository composes a whole desktop by pinning, in a tagged release, one exact
 revision of every component.
 
@@ -104,7 +104,7 @@ The component repositories named below exist and build. This list will grow; fur
 |---|---|
 | `window-server` | the Wayland compositor: the desktop's window server, on the Mac window server's model — outputs, seats, input routing, surface roles, layers, and the pointer (the vendored Vimix cursor theme) |
 | `libagora-watch` | the change stream — a path changed, and here is which way |
-| `libagora-iconservices` | Icon Services — the icon an item or a type is drawn with: the lookup, the representations, and the vendored Frost default theme |
+| `libagora-iconservices` | Icon Services — the icon an item or a type is drawn with: the lookup, the representations, and the theme default theme |
 | `libagora-launchservices` | Launch Services — the type model (Uniform Type Identifiers), and what opens what |
 | `widget-zoo` | a demonstration application: the view and control classes and the menu system |
 | `workspace` | Workspace — the desktop surface (wallpaper, icons, menu bar) and the file-manager windows; an application, consuming the AppKit |
@@ -213,7 +213,9 @@ location.
   of their own — `libagora-core` and `libagora-dispatch` are both extracted from upstream at a pinned
   revision, not vendored inside a consumer.
 - **Third-party *art* that is data may be vendored, pinned and attributed.** The interim default icon
-  set is **Frost** (MIT, v0.3.1), committed as its built PNGs in `libagora-iconservices/themes/Frost`
+  set is **Flat-Remix-Accent**, rendered into the install prefix by `demo/flat-remix-accent.sh` from a Flat-Remix
+  checkout — GPL-3.0, so it is never committed or installed by this tree (the compiled default names it, and a machine
+  without it falls back to the drawn generics)
   with a provenance record and its own licence. It is data, not linked code, and the rule above still
   governs code. `AGORA_ICON_THEME` can replace it at run time, and Icon Services' drawn generics remain
   the fallback. **The pointer's artwork is the same kind of asset with a stricter licence**: the

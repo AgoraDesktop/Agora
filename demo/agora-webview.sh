@@ -98,7 +98,7 @@ if [ -n "${AGORA_WPE_PREFIX:-}" ]; then
 	export LD_LIBRARY_PATH="${AGORA_WPE_PREFIX}/lib:$LD_LIBRARY_PATH"
 	export AGWEBVIEW_REAL_DRAG=1
 fi
-export AGORA_ICON_THEME="${AGORA_ICON_THEME:-$ROOT/libagora-iconservices/themes/Frost}"
+export AGORA_ICON_THEME="${AGORA_ICON_THEME:-${AGORA_PREFIX:-$ROOT/build-prefix}/share/icons/Flat-Remix-Accent}"
 export AGORA_CURSOR_THEME="${AGORA_CURSOR_THEME:-$ROOT/window-server/assets/cursors/Vimix}"
 
 cleanup() {

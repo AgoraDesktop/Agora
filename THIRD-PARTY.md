@@ -32,7 +32,7 @@ source edit (`arc.mm`, a small-object retain-count crash fix).
 
 | Asset | Where | Licence |
 |---|---|---|
-| **Frost** icon theme v0.3.1 (`84e3f873`), by Sayantan | `libagora-iconservices/themes/Frost/` | **MIT**, upstream `LICENSE` beside the art |
+| **Tabler Icons**, by Paweł Kuna — the UI's outline symbols, pre-rendered | `libagora-iconservices/themes/Tabler/` | **MIT**, upstream `LICENSE` beside the art |
 | **Vimix** cursor theme, by vinceliuice | `window-server/assets/cursors/Vimix/` | **GPL-3.0**, upstream `COPYING` beside the art |
 | **Bootstrap Icons** v1.13.2, © 2019-2024 The Bootstrap Authors — restyled source for the platform's named images | `libagora-app/art/system-images/` → `SystemImageMasks.{c,h}` | **MIT**; notice must travel with the generated table |
 | **OS marks** — path data from **Simple Icons**; hamburger is original | `window-server/assets/system-menu-icons/` → `systemicon-data.c` | **CC0 1.0** path data; the marks remain their owners' trademarks |

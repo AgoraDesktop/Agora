@@ -214,13 +214,14 @@ location.
   revision, not vendored inside a consumer.
 - **Third-party *art* that is data may be vendored, pinned and attributed.** The interim default icon
   set is **Flat-Remix-Accent**, rendered into the install prefix by `demo/flat-remix-accent.sh` from a Flat-Remix
-  checkout — GPL-3.0, so it is never committed or installed by this tree (the compiled default names it, and a machine
-  without it falls back to the drawn generics)
+  checkout and **vendored as its rendered PNGs** in `libagora-iconservices/themes/Flat-Remix-Accent` (GPL-3.0, like the
+  component that carries it), so an install has its desktop's icons without rendering anything first
   with a provenance record and its own licence. It is data, not linked code, and the rule above still
   governs code. `AGORA_ICON_THEME` can replace it at run time, and Icon Services' drawn generics remain
   the fallback. **The pointer's artwork is the same kind of asset with a stricter licence**: the
-  **Vimix** cursor theme (GPL-3.0) is vendored in `window-server/assets/cursors/Vimix`, the only
-  component whose GPL-3.0-or-later licence it sits in without adding a term to another, and
+  **Vimix** cursor theme (GPL-3.0) is vendored in `window-server/assets/cursors/Vimix,` as the default icon theme is in
+  `libagora-iconservices/themes/Flat-Remix-Accent` — the two GPL-3.0 art sets, each in a component whose own
+  GPL-3.0-or-later licence it sits in without adding a term to another, and
   `AGORA_CURSOR_THEME` replaces it at run time. A session with no theme at all falls back to the arrow
   the compositor draws itself. **The default font set is the same kind of asset**: `libagora-drawing/fonts/` carries
   open-licensed faces (SIL OFL 1.1 and Apache 2.0, each with its licence beside it) that fill the roles

@@ -15,8 +15,8 @@
 # ignored). Provenance: libagora-app/themes/PROVENANCE.
 /theme-greybird/
 
-# The Flat-Remix icon theme (GPL-3) — read at run time, never committed. demo/flat-remix-accent.sh
-# renders it into build-prefix/share/icons/Flat-Remix-Accent with the folders in Agora's accent.
+# Flat-Remix's UPSTREAM CHECKOUT (GPL-3) — the SVG sources, never committed: the render that ships is
+# libagora-iconservices/themes/Flat-Remix-Accent, which demo/flat-remix-accent.sh produces from this.
 /flat-remix-master/
 
 # The interface builder's own build tree (it is built like a component, not installed).

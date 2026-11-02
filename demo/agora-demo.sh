@@ -73,7 +73,7 @@ export LD_LIBRARY_PATH="${DEMO_BUILD_LIBS}${DEMO_BUILD_LIBS:+:}${AGORA_PREFIX:-$
 # **THE ICON THEME IS THE VENDORED FROST, EVEN UNINSTALLED.** The library's compiled default is the install
 # prefix's share/icons/Frost; a developer running the build trees may never have installed it. An explicit
 # AGORA_ICON_THEME still wins, and an absent directory falls back to Icon Services' drawn generics.
-export AGORA_ICON_THEME="${AGORA_ICON_THEME:-${AGORA_PREFIX:-$ROOT/build-prefix}/share/icons/Flat-Remix-Accent}"
+export AGORA_ICON_THEME="${AGORA_ICON_THEME:-$ROOT/libagora-iconservices/themes/Flat-Remix-Accent}"
 
 # **AND THE POINTER'S THEME, FROM THIS CHECKOUT RATHER THAN FROM AN INSTALL.** The compositor compiles in the prefix's
 # `share/cursors/Vimix` and falls back to the arrow it draws itself, so a developer who has built the trees and

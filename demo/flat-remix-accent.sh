@@ -2,10 +2,12 @@
 # Render the Flat-Remix icon theme into the PNG layout libagora-iconservices reads, with its folders in
 # Agora's accent colour, and say where the result is.
 #
-# Flat-Remix is GPL-3, so neither its SVG sources nor the PNGs rendered from them are committed — the sources
-# are the checkout beside this script and the theme is built into the gitignored install prefix, exactly as
-# theme-greybird is read at run time and never versioned. Nothing in this script is Flat-Remix's: it runs
-# upstream's own recolouring (`color-folder/generate-colors.sh` swaps these same two folder literals).
+# **THE RENDER IT PRODUCES IS WHAT THIS TREE SHIPS**, as `libagora-iconservices/themes/Flat-Remix-Accent`: the script
+# writes that directory (run it there to regenerate the vendored copy) and a session reads it from the checkout or from
+# the install prefix. Upstream's SVG SOURCES stay out of the tree — the checkout beside this script is gitignored —
+# because this stack has no SVG renderer. Both Flat-Remix and this render are GPL-3, which is the licence of the
+# component that carries it. Nothing in this script is Flat-Remix's own work beyond that: it runs upstream's own
+# recolouring (`color-folder/generate-colors.sh` swaps these same two folder literals).
 #
 # The accent is NSColor's `+cg_accentColor`: 164/154/255, the second tone 70% of it, the ratio upstream's own
 # violet uses. The theme reader asks for `<size>x<size>[@2x]/<context>/<name>.png` at the sizes Frost ships.

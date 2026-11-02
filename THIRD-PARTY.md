@@ -32,6 +32,7 @@ source edit (`arc.mm`, a small-object retain-count crash fix).
 
 | Asset | Where | Licence |
 |---|---|---|
+| **Flat-Remix-Accent** — Flat-Remix by Daniel Ruiz de Alegría, re-coloured with Agora's accent and pre-rendered (`places` and `mimetypes`) | `libagora-iconservices/themes/Flat-Remix-Accent/` | **GPL-3.0**, upstream `LICENSE` beside the art; the recolouring is a modified version |
 | **Tabler Icons**, by Paweł Kuna — the UI's outline symbols, pre-rendered | `libagora-iconservices/themes/Tabler/` | **MIT**, upstream `LICENSE` beside the art |
 | **Vimix** cursor theme, by vinceliuice | `window-server/assets/cursors/Vimix/` | **GPL-3.0**, upstream `COPYING` beside the art |
 | **Bootstrap Icons** v1.13.2, © 2019-2024 The Bootstrap Authors — restyled source for the platform's named images | `libagora-app/art/system-images/` → `SystemImageMasks.{c,h}` | **MIT**; notice must travel with the generated table |
@@ -40,9 +41,12 @@ source edit (`arc.mm`, a small-object retain-count crash fix).
 
 All four art sets are **data**, not linked code, and each has a `PROVENANCE` record beside it.
 
-> **Vimix is the one art set whose licence is not permissive, and its placement is the licence decision.** The cursor
-> theme is GPL-3.0 (version 3, not "or later"), so it lives in `window-server`, the tree's GPL-3.0-or-later program,
-> and nowhere else: the `libagora-*` libraries are LGPL and a GPL-3.0 asset must not add a term to them. The compositor
+> **Two art sets are GPL-3.0 rather than permissive, and their placement is the licence decision.** The Vimix cursor
+> theme is GPL-3.0 (version 3, not "or later"), so it lives in `window-server`; the default icon theme,
+> Flat-Remix-Accent, is GPL-3.0 too and lives in `libagora-iconservices`. Both are components whose own licence is
+> GPL-3.0-or-later, so neither adds a term to an LGPL library: a GPL-3.0 asset may not sit inside one, and
+> `libagora-base`, `libagora-app`, `libagora-drawing` and `libagora-text` are LGPL-3.0-or-later with no GPL-3.0-only art
+> in them. The compositor
 > is also the only component that can use a cursor theme today — it composites the theme's pointer on a DRM output and
 > hands it to the host as the X cursor in the nested backend. A downstream that cannot ship GPL-3.0 artwork deletes
 > `assets/cursors/Vimix` and the compositor draws its own arrow.

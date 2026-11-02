@@ -68,7 +68,7 @@ for d in "$ROOT"/libagora-*/build; do
 	[ -d "$d" ] && SESSION_BUILD_LIBS="${SESSION_BUILD_LIBS}${SESSION_BUILD_LIBS:+:}$d"
 done
 export LD_LIBRARY_PATH="${SESSION_BUILD_LIBS}${SESSION_BUILD_LIBS:+:}${AGORA_PREFIX:-$ROOT/build-prefix}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export AGORA_ICON_THEME="${AGORA_ICON_THEME:-${AGORA_PREFIX:-$ROOT/build-prefix}/share/icons/Flat-Remix-Accent}"
+export AGORA_ICON_THEME="${AGORA_ICON_THEME:-$ROOT/libagora-iconservices/themes/Flat-Remix-Accent}"
 
 # **AND THE POINTER'S THEME, FROM THIS CHECKOUT RATHER THAN FROM AN INSTALL.** The compositor compiles in the prefix's
 # `share/cursors/Vimix` and falls back to the arrow it draws itself, so a developer who has built the trees and

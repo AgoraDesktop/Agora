@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Builder.app's Info.plist. A program with an Info.plist beside it IS a bundle, and this one is what the launch path and
+  `libagora-launchservices` read: the identifier a window's `set_app_id` is grouped by, the name a Dock tile and the menu
+  bar show, and — the part a document application cannot do without — THE TYPE TABLE.
+
+  **`CFBundleDocumentTypes` IS THE DOCUMENT CONTROLLER'S WHOLE WORLD.** `NSDocumentController` reads it once, lazily, and
+  answers `-documentClassForType:`, `-typeFromFileExtension:` and its save/open panel filters out of it; it is why this
+  entry names `NSDocumentClass` and an extension rather than merely describing the type. The type NAME is the UTI, because
+  a type name is what a document carries around and an extension is a filesystem accident: `.agnib` is the text source a
+  person edits and what git merges, and the compiled `.nib` beside it is a build artifact that this application writes
+  rather than opens.
+
+  **`AGNib` IS THE SAME SUFFIX `NSNibSource` COMPILES**, and that is deliberate: the extension says which format's text it
+  is, not which program happens to own it today.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.agoradesktop.builder</string>
+	<key>CFBundleName</key>
+	<string>Builder</string>
+	<key>CFBundleExecutable</key>
+	<string>Builder</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@PROJECT_VERSION@</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>io.github.agoradesktop.agnib</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>NSDocumentClass</key>
+			<string>AGBuilderDocument</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>agnib</string>
+			</array>
+			<key>NSDocumentOldFileNames</key>
+			<array>
+				<string>nibsource</string>
+			</array>
+		</dict>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>io.github.agoradesktop.agnib</string>
+			<key>UTTypeDescription</key>
+			<string>Agora interface design</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.plain-text</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>agnib</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+</dict>
+</plist>

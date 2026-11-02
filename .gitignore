@@ -14,3 +14,10 @@
 # libagora-app, where the resolver's copy lives (libagora-app/themes/, also
 # ignored). Provenance: libagora-app/themes/PROVENANCE.
 /theme-greybird/
+
+# The Flat-Remix icon theme (GPL-3) — read at run time, never committed. demo/flat-remix-accent.sh
+# renders it into build-prefix/share/icons/Flat-Remix-Accent with the folders in Agora's accent.
+/flat-remix-master/
+
+# The interface builder's own build tree (it is built like a component, not installed).
+/builder/build/

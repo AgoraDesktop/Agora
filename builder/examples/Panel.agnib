@@ -1,0 +1,36 @@
+// A demo design: a panel with a title, a button and a slider.
+// A CONTROL STATES ITS CELL — that is the format's rule, and the reason a palette has to build two objects.
+{
+  version = 1;
+  objects = (
+    {
+      id = root;
+      class = NSView;
+      properties = { frame = "0 0 420 260"; };
+      subviews = (
+        {
+          id = title;
+          class = NSTextField;
+          properties = { frame = "20 205 380 24"; };
+          cell = { class = NSTextFieldCell;
+                   properties = { objectValue = "Hello from Builder"; editable = NO; bordered = NO; }; };
+        }
+        {
+          id = goButton;
+          class = NSButton;
+          properties = { frame = "20 20 120 32"; };
+          cell = { class = NSButtonCell; properties = { title = "Go"; bordered = YES; }; };
+        }
+        {
+          id = amount;
+          class = NSSlider;
+          properties = { frame = "170 20 220 32"; };
+          cell = { class = NSSliderCell; properties = { }; };
+        }
+      );
+    }
+  );
+  connections = (
+    { source = goButton; action = "go:"; destination = owner; }
+  );
+}

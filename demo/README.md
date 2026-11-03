@@ -6,8 +6,11 @@
 demo/agora-session.sh [WIDTHxHEIGHT]   # 1280x720 by default; Ctrl-C stops it
 ```
 
-The default session runs the three pieces a login session needs: the **window server**, the **wallpaper client**,
-and **Workspace** (desktop, icons and menu bar). It deliberately does not start the controls application. It uses
+The default session runs what a login session needs: the **window server**, the **wallpaper client**, **Workspace**
+(desktop, icons and menu bar) and the **Dock** (running applications and the Trash). It deliberately does not start the
+controls application. **The desktop and the Dock are in every session** — `agora-demo.sh` and `agora-webview.sh
+--session` add to the same scene rather than replacing part of it, and a launcher whose Dock fails to start stops with
+its log rather than leaving a scene that is quietly missing half of itself. It uses
 the same nested, non-grabbing X11 setup as the demo, defaults the desktop to `$HOME/Desktop`, and accepts
 `AGORA_DESKTOP`, `AGORA_WALLPAPER` and `AGORA_SESSION_SOCKET`.
 
@@ -19,13 +22,14 @@ window's cursor; on a DRM output the compositor composites the same image itself
 
 ## The demo
 
-One window server, three clients, and a menu bar that belongs to whichever of them is **active**.
+One window server, four clients — desktop, Dock, controls application and wallpaper — and a menu bar that belongs to
+whichever application is **active**.
 
 ```
 demo/agora-demo.sh [WIDTHxHEIGHT]      # 1280x720 by default; Ctrl-C stops it
 ```
 
-It needs `window-server`, `workspace` and `libagora-app` built (`build/` in each). Nothing is installed and
+It needs `window-server`, `workspace`, `dock` and `libagora-app` built (`build/` in each). Nothing is installed and
 nothing is grabbed: the compositor runs nested on your X11 desktop with `--input host`, so it receives the input
 **your** session gives its window and takes nothing else. It is safe to leave open.
 

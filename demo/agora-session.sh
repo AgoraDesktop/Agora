@@ -168,6 +168,13 @@ sleep 1.5
 WAYLAND_DISPLAY="$SOCK" "$DOCK_BIN" >/tmp/agora-session-dock.log 2>&1 &
 DOCKPID=$!
 sleep 0.5
+# **AND A DOCK THAT DIES IS A SESSION THAT IS MISSING HALF OF ITSELF**, so it fails here rather than leaving a
+# desktop with no strip and no Trash to explain itself later.
+if ! kill -0 "$DOCKPID" 2>/dev/null; then
+	echo "FAIL: the dock did not start; its log follows" >&2
+	cat /tmp/agora-session-dock.log >&2
+	exit 1
+fi
 
 # ---------------------------------------------------------------------------------------------------------------
 # 3. THE WALLPAPER: ONE FRAME, THEN HOLD. It redraws on every frame callback, so a still picture asks for one frame

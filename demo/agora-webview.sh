@@ -143,14 +143,19 @@ fi
 # **WORKSPACE MAPS FIRST WHEN IT IS ASKED FOR**, because the compositor gives the menu bar to the application that maps
 # first and the bar is Workspace's.
 if [ "$WANT_SESSION" = "1" ]; then
+	# **A SESSION IS THE DESKTOP AND THE DOCK.** The Dock used to be launched only if its bundle had been built,
+	# which made "–session" mean two different scenes depending on what a tree happened to contain; a missing one
+	# is refused by name instead.
+	if [ ! -x "$DOCK_BIN" ]; then
+		echo "--session needs the Dock at $DOCK_BIN" >&2
+		exit 1
+	fi
 	"$WORKSPACE_BIN" --seconds 1000000 >/dev/null 2>&1 &
 	WS_PID=$!
 	sleep 1
-	if [ -x "$DOCK_BIN" ]; then
-		"$DOCK_BIN" >/dev/null 2>&1 &
-		DOCK_PID=$!
-		sleep 0.5
-	fi
+	"$DOCK_BIN" >/dev/null 2>&1 &
+	DOCK_PID=$!
+	sleep 0.5
 fi
 
 run_app() {

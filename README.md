@@ -6,9 +6,10 @@ stack, a full desktop shell, and its applications — written in Objective-C, bu
 **Status: working, pre-release.** The components are implemented and run together: Foundation,
 Core Graphics, Core Text and the Application Kit carry the Cocoa surface an application uses; the
 window server is a Wayland compositor with client-side chrome, layers and input routing; the Workspace
-shell draws the desktop, icons, menu bar and file windows; `demo/agora-session.sh` starts the default session — the
-window server, the wallpaper client and Workspace — nested on an X11 desktop, and `demo/agora-demo.sh` adds the
-controls application to that scene. There is also a Swift toolchain that compiles Swift against this stack (the standard
+shell draws the desktop, icons, menu bar and file windows and the Dock draws the running applications and the Trash;
+`demo/agora-session.sh` starts the default session — the window server, the wallpaper client, Workspace and the Dock —
+nested on an X11 desktop, and `demo/agora-demo.sh` adds the controls application to that scene. Every session has the
+desktop and the Dock; the scripts differ in what they add. There is also a Swift toolchain that compiles Swift against this stack (the standard
 library, the Foundation overlay and the GNUstep class ABI). What is not there yet is an installable
 image: the `release` repository pins and builds the components, but no release is tagged. This
 document is the top-level record of what Agora is and how its repositories are organised; each
@@ -166,10 +167,10 @@ location.
 
 ## Where to start
 
-- **Run the default session.** `demo/agora-session.sh` starts the window server, the wallpaper client and
-  Workspace nested on an X11 desktop.
-- **Run the demo.** `demo/agora-demo.sh` adds the controls application to that scene to show two applications
-  sharing one menu bar (`demo/README.md`).
+- **Run the default session.** `demo/agora-session.sh` starts the window server, the wallpaper client, Workspace and
+  the Dock nested on an X11 desktop.
+- **Run the demo.** `demo/agora-demo.sh` adds the controls application to that same scene — desktop and Dock included —
+  to show two applications sharing one menu bar (`demo/README.md`).
 - **Build a component.** Each repository's `README.md` carries its build (CMake, into `build/`,
   installing into a shared SDK prefix). The dependency order is the one `release/components.conf`
   records, which the release driver checks.

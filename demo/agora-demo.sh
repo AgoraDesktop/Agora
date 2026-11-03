@@ -3,12 +3,17 @@
 # SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-### The Agora demo: one window server, Workspace's desktop and menu bar, and the AppKit controls window.
+### The Agora demo: the session, plus a second application so two menu bars can be seen taking turns.
 #
 #   window-server          nested on the X11 desktop, and it GRABS NOTHING: no XGrabPointer, no XGrabKeyboard
 #   Workspace              the desktop, its icons and the application menu bar
+#   Dock                   the strip of running applications and the Trash — EVERY SESSION HAS ONE
 #   appkit_controls_draw   the control layer, in a window of its own, with its own menu bar
 #   test client            the wallpaper (wallpaper.jpg by default), at the desktop level: ONE frame, then it holds
+#
+# **A SESSION IS THE DESKTOP AND THE DOCK, WHATEVER ELSE IT ADDS.** This script exists to add the controls window to
+# that scene; leaving the Dock out would make it a scene nobody could mistake for the desktop a person uses, and the
+# two scripts would disagree about what a session IS. The Dock is required here exactly as it is in the session.
 #
 # TWO APPLICATIONS, ONE MENU BAR, WHICH IS THE POINT OF THE SCENE: a menu bar belongs to the ACTIVE application.
 # Workspace maps first and so it owns the bar; click the controls window and ITS menus replace it. That is the
@@ -30,12 +35,14 @@ CLIENT_BIN="$ROOT/window-server/build/tests/window-server-test-client"
 # developer's build tree carries exactly one slice, so the glob is exact where a hand-written mapping
 # (Linux/FreeBSD/MacOS × amd64/arm64) would be a second copy of libagora-core's vocabulary.
 WORKSPACE_BIN="$(ls "$ROOT"/workspace/build/Workspace.app/Contents/*/*/Workspace 2>/dev/null | head -1)"
+# **THE DOCK IS PART OF THE SESSION, SO IT IS REQUIRED AND NOT OPTIONAL.** Same layout rule as Workspace's bundle.
+DOCK_BIN="$(ls "$ROOT"/dock/build/Dock.app/Contents/*/*/Dock 2>/dev/null | head -1)"
 CONTROLS_BIN="$ROOT/libagora-app/build/tests/appkit_controls_draw"
 
-for b in "$SERVER_BIN" "$CLIENT_BIN" "$WORKSPACE_BIN" "$CONTROLS_BIN"; do
+for b in "$SERVER_BIN" "$CLIENT_BIN" "$WORKSPACE_BIN" "$DOCK_BIN" "$CONTROLS_BIN"; do
 	if [ ! -x "$b" ]; then
 		echo "the demo needs $b" >&2
-		echo "build it first: window-server, workspace and libagora-app each have a build/ directory" >&2
+		echo "build it first: window-server, workspace, dock and libagora-app each have a build/ directory" >&2
 		exit 1
 	fi
 done
@@ -96,6 +103,7 @@ DESK="/tmp/agora-demo-desktop"
 WALLPAPER="${AGORA_WALLPAPER:-$ROOT/wallpaper.jpg}"
 
 pkill -f "Workspace.app/Contents/" 2>/dev/null
+pkill -f "Dock.app/Contents/" 2>/dev/null
 pkill -f "backend x11" 2>/dev/null
 pkill -f "appkit_controls_draw" 2>/dev/null
 pkill -f "window-server-test-client" 2>/dev/null
@@ -107,7 +115,7 @@ mkdir -p "$DESK/Photos" "$DESK/Projects"
 for n in hello.txt Notes.txt report.pdf README.txt Archive.zip Music; do printf 'x\n' > "$DESK/$n"; done
 
 cleanup() {
-	for pid in "${SPID:-}" "${WPID:-}" "${CPID:-}" "${WALLPID:-}"; do
+	for pid in "${SPID:-}" "${WPID:-}" "${DPID:-}" "${CPID:-}" "${WALLPID:-}"; do
 		[ -n "${pid:-}" ] && kill "$pid" 2>/dev/null
 	done
 	rm -f "${RUNTIME}/${SOCK}" "${RUNTIME}/${SOCK}.lock"
@@ -138,6 +146,19 @@ AGORA_DESKTOP="$DESK" WAYLAND_DISPLAY="$SOCK" "$WORKSPACE_BIN" --seconds 1000000
 	>/dev/null 2>/tmp/agora-demo-workspace.log &
 WPID=$!
 sleep 1.5
+
+# 2b. **THE DOCK, BECAUSE EVERY SESSION HAS ONE.** It maps after the desktop for the same reason Workspace goes
+#     first — the bar belongs to the application that maps first — and its window is not activatable, so it takes
+#     no keyboard and no menu bar. A Dock that dies on startup fails the demo here rather than leaving a scene that
+#     is quietly missing half of itself.
+WAYLAND_DISPLAY="$SOCK" "$DOCK_BIN" >/dev/null 2>/tmp/agora-demo-dock.log &
+DPID=$!
+sleep 0.5
+if ! kill -0 "$DPID" 2>/dev/null; then
+	echo "FAIL: the dock did not start; its log follows" >&2
+	cat /tmp/agora-demo-dock.log >&2
+	exit 1
+fi
 
 # 3. **THE CONTROLS DEMO, WITH NO `--seconds`.** That argument makes it pump its OWN loop, and a hand-pumped loop
 #    cannot drive a menu bar — `NSMenuView` fetches events only while the application is running. With no argument

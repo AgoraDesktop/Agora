@@ -40,10 +40,16 @@
 #import <Foundation/NSDictionary.h>
 #import <Foundation/NSProcessInfo.h>
 #import <Foundation/NSString.h>
+#import <Foundation/NSTimer.h>
 
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
+#include <unistd.h>
 
 #if defined(__linux__)
 #include <sys/sysinfo.h>
@@ -302,7 +308,13 @@ static NSDictionary *SYUTextAttributes(CGFloat size, BOOL bold, NSColor *colour)
  * ============================================================================================ */
 
 @interface SYUController : NSObject
+{
+	NSRect _square;
+	int _pendingOpen;
+}
 - (void)showAbout:(id)sender;
+- (void)systemMenuInvokedAt:(NSRect)square;
+- (void)openSystemMenu:(NSTimer *)timer;
 @end
 
 @implementation SYUController
@@ -326,6 +338,49 @@ static NSMenu *SYUSystemMenu(SYUController *controller)
 	[menu addItem:[NSMenuItem separatorItem]];
 	[menu addItemWithTitle:@"Log Out" action:NULL keyEquivalent:@""];
 	return menu;
+}
+
+/* **THE MENU OPENS ON THE NEXT PASS OF THE RUN LOOP, NOT INSIDE THE EVENT THAT SAID SO.** The square's click arrives as
+ * a protocol event, and the seam delivers it from inside a dispatch of the connection. A MENU TRACKS — its loop asks
+ * the application for events, and that ask waits on the same connection — so opening it there is a pump INSIDE a
+ * dispatch, which this tier refuses by design ("a second reader on the same display is a protocol error"). MEASURED
+ * with the direct call: the panel was drawn, `NSMenuView` tracked, and every event the loop saw was nil — the menu could
+ * not be hovered or chosen, and never closed. A zero-interval timer is one pass later, outside the dispatch, which is
+ * where every other menu in this desktop opens from. */
+- (void)systemMenuInvokedAt:(NSRect)square
+{
+	_square = square;
+	if (_pendingOpen) {
+		return;		/* one open per click, whatever else arrives before the pass runs */
+	}
+	_pendingOpen = 1;
+	[NSTimer scheduledTimerWithTimeInterval:0.0 target:self selector:@selector(openSystemMenu:) userInfo:nil
+					 repeats:NO];
+}
+
+- (void)openSystemMenu:(NSTimer *)timer
+{
+	NSScreen *screen = [NSScreen mainScreen];
+	NSMenu *menu;
+
+	(void)timer;
+	_pendingOpen = 0;
+	if (screen == nil) {
+		return;
+	}
+	/* **THE PANEL HANGS FROM THE SQUARE'S BOTTOM-LEFT**, and the compositor counts DOWN from the screen's top while
+	 * Cocoa counts UP from the bottom — so the point is the square's bottom edge converted, not the square's top. */
+	menu = SYUSystemMenu(self);
+	if (menu != nil) {
+		/* **THE CLICK THAT OPENED THIS MENU WAS THE SERVER'S.** The square's press is consumed by the compositor, so
+		 * this process never saw it — and the tracking loop's "swallow the release that opened me" rule would eat the
+		 * person's FIRST real click on a row. This says so, and the menu still drives its own loop. */
+		[menu cg_setOpenedWithoutPress:YES];
+		[menu popUpMenuPositioningItem:nil
+				    atLocation:NSMakePoint(_square.origin.x,
+							   [screen frame].size.height - NSMaxY(_square))
+				      inView:nil];
+	}
 }
 
 - (void)showAbout:(id)sender
@@ -370,6 +425,9 @@ static NSMenu *SYUSystemMenu(SYUController *controller)
 	}
 	[s_panel center];
 	[s_panel orderFront:nil];
+	fprintf(stderr, "systemui: the About panel is ordered front (%.0fx%.0f at %.0f,%.0f, %lu line(s))\n",
+		(double)[s_panel frame].size.width, (double)[s_panel frame].size.height,
+		(double)[s_panel frame].origin.x, (double)[s_panel frame].origin.y, (unsigned long)[SYUAboutLines() count]);
 }
 
 @end
@@ -381,30 +439,46 @@ static NSMenu *SYUSystemMenu(SYUController *controller)
 static void SYUSystemMenuInvoked(void *context, int x, int y, int width, int height)
 {
 	SYUController *controller = (SYUController *)context;
-	NSScreen *screen = [NSScreen mainScreen];
-	CGFloat screen_height;
-	NSMenu *menu;
 
-	(void)width;
-	if (screen == nil) {
-		return;
-	}
-	screen_height = [screen frame].size.height;
-	/* **THE PANEL HANGS FROM THE SQUARE'S BOTTOM-LEFT**, and the compositor counts DOWN from the screen's top while
-	 * Cocoa counts UP from the bottom — so the point is the square's bottom edge converted, not the square's top. */
-	{
-		NSPoint at = NSMakePoint((CGFloat)x, screen_height - (CGFloat)(y + height));
-
-		menu = SYUSystemMenu(controller);
-		if (menu != nil) {
-			[menu popUpMenuPositioningItem:nil atLocation:at inView:nil];
-		}
-	}
+	/* THE RECT IS KEPT IN THE COMPOSITOR'S OWN SPACE — top-down, from the square's top — and converted where the menu is
+	 * placed. Nothing is opened here: see `-systemMenuInvokedAt:`. */
+	[controller systemMenuInvokedAt:NSMakeRect((CGFloat)x, (CGFloat)y, (CGFloat)width, (CGFloat)height)];
 }
 
 /* ============================================================================================ *
  * THE PROGRAM                                                                                   *
  * ============================================================================================ */
+
+/* **ONE SYSTEM UI PER SESSION, AND THIS IS WHAT SAYS SO.** The square is one click and the menu that answers it is one
+ * menu, so a second copy of this process is a second thing that could open the same menu — and, before the server's
+ * single claimant, a second copy that the server would have to arbitrate. The Mac's answer to a second launch is that
+ * the first one is brought forward; here there is nothing to bring forward, so the second launch says so and leaves.
+ *
+ * **A LOCK RATHER THAN A PROTOCOL ANSWER**, because the claim is a statement and has no reply: the file is the session's
+ * own (`$XDG_RUNTIME_DIR`, where the Wayland socket lives), the kernel drops the lock when the holder dies, and a live
+ * holder is therefore exactly "another System UI is running". The server still refuses a second claim — the lock is the
+ * process's half, and the compositor does not trust a client to be the only one. */
+static int SYUTakeSingleInstanceLock(void)
+{
+	const char *runtime = getenv("XDG_RUNTIME_DIR");
+	char path[PATH_MAX];
+	int fd;
+
+	snprintf(path, sizeof path, "%s/agora-systemui.lock", (runtime != NULL) ? runtime : "/tmp");
+	fd = open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+	if (fd < 0) {
+		fprintf(stderr, "systemui: cannot open %s: %s\n", path, strerror(errno));
+		return -1;
+	}
+	if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+		fprintf(stderr, "systemui: another System UI is running (the lock is %s)\n", path);
+		close(fd);
+		return -1;
+	}
+	/* THE DESCRIPTOR IS DELIBERATELY KEPT: closing it would release the lock. It is one fd for the life of the
+	 * process, which is what holding a lock looks like. */
+	return fd;
+}
 
 int main(int argc, char **argv)
 {
@@ -412,6 +486,7 @@ int main(int argc, char **argv)
 	SYUController *controller;
 	AGWindowServer *server;
 	AGSystemMenuHandlers handlers;
+	int lock;
 	int i;
 
 	for (i = 1; i < argc; i++) {
@@ -427,6 +502,12 @@ int main(int argc, char **argv)
 			[pool drain];
 			return 0;
 		}
+	}
+	/* BEFORE THE CONNECTION, so a second copy fails for the reason it should and not for a missing display. */
+	lock = SYUTakeSingleInstanceLock();
+	if (lock < 0) {
+		[pool drain];
+		return 0;	/* a second launch is not an error — the System UI is already running */
 	}
 	[NSApplication sharedApplication];
 	controller = [[SYUController alloc] init];

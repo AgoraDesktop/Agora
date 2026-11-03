@@ -38,8 +38,11 @@ WORKSPACE_BIN="$(ls "$ROOT"/workspace/build/Workspace.app/Contents/*/*/Workspace
 # **THE DOCK IS PART OF THE SESSION, SO IT IS REQUIRED AND NOT OPTIONAL.** Same layout rule as Workspace's bundle.
 DOCK_BIN="$(ls "$ROOT"/dock/build/Dock.app/Contents/*/*/Dock 2>/dev/null | head -1)"
 CONTROLS_BIN="$ROOT/libagora-app/build/tests/appkit_controls_draw"
+# **AND THE PROCESS THAT DRAWS THE SYSTEM MENU** — a client of the compositor, not a part of it; see
+# `systemui/README.md` and `demo/agora-session.sh`'s 2c.
+SYSTEMUI_BIN="$(ls "$ROOT"/systemui/build/SystemUI.app/Contents/*/*/SystemUI 2>/dev/null | head -1)"
 
-for b in "$SERVER_BIN" "$CLIENT_BIN" "$WORKSPACE_BIN" "$DOCK_BIN" "$CONTROLS_BIN"; do
+for b in "$SERVER_BIN" "$CLIENT_BIN" "$WORKSPACE_BIN" "$DOCK_BIN" "$CONTROLS_BIN" "$SYSTEMUI_BIN"; do
 	if [ ! -x "$b" ]; then
 		echo "the demo needs $b" >&2
 		echo "build it first: window-server, workspace, dock and libagora-app each have a build/ directory" >&2
@@ -104,6 +107,7 @@ WALLPAPER="${AGORA_WALLPAPER:-$ROOT/wallpaper.jpg}"
 
 pkill -f "Workspace.app/Contents/" 2>/dev/null
 pkill -f "Dock.app/Contents/" 2>/dev/null
+pkill -f "SystemUI.app/Contents/" 2>/dev/null
 pkill -f "backend x11" 2>/dev/null
 pkill -f "appkit_controls_draw" 2>/dev/null
 pkill -f "window-server-test-client" 2>/dev/null
@@ -115,7 +119,7 @@ mkdir -p "$DESK/Photos" "$DESK/Projects"
 for n in hello.txt Notes.txt report.pdf README.txt Archive.zip Music; do printf 'x\n' > "$DESK/$n"; done
 
 cleanup() {
-	for pid in "${SPID:-}" "${WPID:-}" "${DPID:-}" "${CPID:-}" "${WALLPID:-}"; do
+	for pid in "${SPID:-}" "${WPID:-}" "${DPID:-}" "${SYSTEMUIPID:-}" "${CPID:-}" "${WALLPID:-}"; do
 		[ -n "${pid:-}" ] && kill "$pid" 2>/dev/null
 	done
 	rm -f "${RUNTIME}/${SOCK}" "${RUNTIME}/${SOCK}.lock"
@@ -159,6 +163,12 @@ if ! kill -0 "$DPID" 2>/dev/null; then
 	cat /tmp/agora-demo-dock.log >&2
 	exit 1
 fi
+
+# 2c. **THE SYSTEM UI.** It claims the System menu's square and maps nothing until that square is clicked, so it takes
+#     no menu bar and no keyboard from Workspace.
+WAYLAND_DISPLAY="$SOCK" "$SYSTEMUI_BIN" >/dev/null 2>/tmp/agora-demo-systemui.log &
+SYSTEMUIPID=$!
+sleep 0.5
 
 # 3. **THE CONTROLS DEMO, WITH NO `--seconds`.** That argument makes it pump its OWN loop, and a hand-pumped loop
 #    cannot drive a menu bar — `NSMenuView` fetches events only while the application is running. With no argument

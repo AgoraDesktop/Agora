@@ -25,8 +25,12 @@ that lands while a menu is already tracking is the menu's own dismissal and is *
 `system_menu_invoked` would ask this process to open a menu it is already tracking, which its tracking loop refuses.
 See `window-server/src/seat.c` and `src/shell.c`.
 
-One claimant at a time and the last one wins, so a restarted `SystemUI` takes over from the one that died; the claim is
-cleared when the claiming client goes away.
+**One claimant at a time, and only one instance of this process.** The server refuses a claim made while a live claimant
+holds the square (silently — the claim is a statement with no reply), and the process itself takes a `flock` on
+`$XDG_RUNTIME_DIR/agora-systemui.lock`, so a second launch says `another System UI is running` and exits 0 rather than
+sitting inert. The claim is cleared when the claiming client goes away, which is what makes a restart work: the process
+that died has gone away, so its successor's claim is the only one. `tests/check_single_instance.sh` proves both
+refusals are different ones.
 
 ## The menu
 

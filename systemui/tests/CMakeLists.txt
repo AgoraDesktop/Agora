@@ -8,3 +8,7 @@
 # still answers the title, which is why the first line is the one that is required.
 add_test(NAME systemui-about-lines
   COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/check_about.sh" "$<TARGET_FILE:SystemUI>")
+
+# **AND ONE SYSTEM UI PER SESSION, WHICH IS TWO REFUSALS THAT MUST NOT BE THE SAME ONE.** See the script.
+add_test(NAME systemui-single-instance
+  COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/check_single_instance.sh" "$<TARGET_FILE:SystemUI>")

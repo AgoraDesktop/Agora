@@ -34,8 +34,12 @@ WORKSPACE_BIN="$(ls "$ROOT"/workspace/build/Workspace.app/Contents/*/*/Workspace
 # **THE DOCK IS A CLIENT OF ITS OWN**, laid out the same way — Contents/<platform>/<arch>/Dock — and started AFTER
 # Workspace, because the compositor gives the menu bar to the application that maps first and the bar is Workspace's.
 DOCK_BIN="$(ls "$ROOT"/dock/build/Dock.app/Contents/*/*/Dock 2>/dev/null | head -1)"
+# **AND THE PROCESS THAT DRAWS THE SYSTEM MENU, WHICH IS A CLIENT AND NOT A PART OF THE COMPOSITOR.** The window server
+# owns the square and the mark inside it; a MENU is text, a hover chip and a tracking loop, which are the AppKit's — so
+# the menu is this process's window, and the server forwards the square's click to it. See `systemui/README.md`.
+SYSTEMUI_BIN="$(ls "$ROOT"/systemui/build/SystemUI.app/Contents/*/*/SystemUI 2>/dev/null | head -1)"
 
-for b in "$SERVER_BIN" "$CLIENT_BIN" "$WORKSPACE_BIN" "$DOCK_BIN"; do
+for b in "$SERVER_BIN" "$CLIENT_BIN" "$WORKSPACE_BIN" "$DOCK_BIN" "$SYSTEMUI_BIN"; do
 	if [ ! -x "$b" ]; then
 		echo "the session needs $b" >&2
 		echo "build it first: window-server, workspace and dock each have a build/ directory" >&2
@@ -85,7 +89,7 @@ export AGORA_CURSOR_THEME="${AGORA_CURSOR_THEME:-$ROOT/window-server/assets/curs
 # **AND IT ADDS TO THE STANDARD ROOTS RATHER THAN REPLACING THEM**, which is what makes it usable here: `/Applications`
 # and the account's own `~/Applications` are still scanned, so an application EXPORTED into `~/Applications` — Forge's
 # export does exactly that — has an icon and a name in a session that never named that directory.
-export AGORA_APPLICATIONS="$ROOT/workspace/build:$ROOT/dock/build${AGORA_APPLICATIONS:+:$AGORA_APPLICATIONS}"
+export AGORA_APPLICATIONS="$ROOT/workspace/build:$ROOT/dock/build:$ROOT/systemui/build${AGORA_APPLICATIONS:+:$AGORA_APPLICATIONS}"
 
 # **AND WHERE EVERY APPLICATION'S PREFERENCES LIVE, BECAUSE A LOGIN SETS THAT TOO.** `NSUserDefaults` keeps its files
 # under a CONFIGURATION ROOT (`AGORA_CONFIG_ROOT`) rather than under `$HOME`: AN AGORA INSTALL LAYS DOWN THE Mac OS X
@@ -125,7 +129,7 @@ fi
 rm -f "${RUNTIME}/${SOCK}.lock"
 
 cleanup() {
-	for pid in "${SPID:-}" "${WPID:-}" "${DOCKPID:-}" "${WALLPID:-}"; do
+	for pid in "${SPID:-}" "${WPID:-}" "${DOCKPID:-}" "${SYSTEMUIPID:-}" "${WALLPID:-}"; do
 		[ -n "${pid:-}" ] && kill "$pid" 2>/dev/null
 	done
 	rm -f "${RUNTIME}/${SOCK}" "${RUNTIME}/${SOCK}.lock"
@@ -168,6 +172,20 @@ sleep 1.5
 WAYLAND_DISPLAY="$SOCK" "$DOCK_BIN" >/tmp/agora-session-dock.log 2>&1 &
 DOCKPID=$!
 sleep 0.5
+
+# ---------------------------------------------------------------------------------------------------------------
+# 2c. **THE SYSTEM UI, WHICH OWNS THE SYSTEM MENU'S CLICK.** It has no windows of its own until the square is clicked,
+# so it maps nothing and takes nothing from the bar — Workspace mapped first and keeps it. It claims the square over the
+# protocol (`agora_shell.claim_system_menu`), and from then on the server forwards that click to it.
+# ---------------------------------------------------------------------------------------------------------------
+WAYLAND_DISPLAY="$SOCK" "$SYSTEMUI_BIN" >/tmp/agora-session-systemui.log 2>&1 &
+SYSTEMUIPID=$!
+sleep 0.5
+if ! kill -0 "$SYSTEMUIPID" 2>/dev/null; then
+	echo "FAIL: the System UI did not start; its log follows" >&2
+	cat /tmp/agora-session-systemui.log >&2
+	exit 1
+fi
 # **AND A DOCK THAT DIES IS A SESSION THAT IS MISSING HALF OF ITSELF**, so it fails here rather than leaving a
 # desktop with no strip and no Trash to explain itself later.
 if ! kill -0 "$DOCKPID" 2>/dev/null; then
@@ -205,7 +223,7 @@ fi
 WALLPID=$!
 sleep 1
 
-echo "server=$SPID  workspace=$WPID  dock=$DOCKPID  wallpaper=$WALLPID"
+echo "server=$SPID  workspace=$WPID  dock=$DOCKPID  systemui=$SYSTEMUIPID  wallpaper=$WALLPID"
 SCALE_NOTE="output scale ${OUTPUT_SCALE:-1}"
 [ -n "${AGORA_UI_SCALE:-}" ] && SCALE_NOTE="${SCALE_NOTE} = panel x ${AGORA_UI_SCALE} UI"
 echo "  window server: ${W}x${H} on DISPLAY $DISPLAY (${SCALE_NOTE})"
@@ -214,7 +232,7 @@ echo "  desktop: ${DESK}"
 echo "  wallpaper: ${WALLPAPER}"
 echo "  dock: ${AGORA_DOCK_POSITION:-right} (vertical, below the menu bar)"
 echo "  menu bar: Workspace"
-echo "  logs: /tmp/agora-session-{server,workspace,dock}.log"
+echo "  logs: /tmp/agora-session-{server,workspace,dock,systemui}.log"
 echo "Ctrl-C stops the session."
 
 # ---------------------------------------------------------------------------------------------------------------

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  SystemUI.app's Info.plist. A program with an Info.plist beside it IS a bundle, and this one is what the launch path
+  and `libagora-launchservices` read: the identifier a window's `set_app_id` is grouped by, and the name the window
+  list would show.
+
+  **SYSTEM UI IS NOT AN APPLICATION A PERSON LAUNCHES.** It has no Dock tile of its own to speak of and no menu bar of
+  its own to show: its windows are the System menu (a pop-up, at the pop-up level) and the About panel (at a floating
+  level, never the key window). The identifier exists because every bundle in this tree has one.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.agoradesktop.systemui</string>
+	<key>CFBundleName</key>
+	<string>System UI</string>
+	<key>CFBundleExecutable</key>
+	<string>SystemUI</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@PROJECT_VERSION@</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+</dict>
+</plist>

@@ -20,6 +20,7 @@
 #         AGORA_DPI=57.97 demo/agora-session.sh              # force the output scale (dots per inch)
 #         AGORA_UI_SCALE=1.25 demo/agora-session.sh          # a comfort factor on top of it (1.0 is the default)
 #         AGORA_CURSOR_THEME=/path demo/agora-session.sh     # another Xcursor theme for the pointer
+#         AGORA_SESSION_GET_INFO=/path demo/agora-session.sh # start with that item's Get Info open
 # Ctrl-C stops everything.
 set -u
 
@@ -159,7 +160,12 @@ fi
 # ---------------------------------------------------------------------------------------------------------------
 # `--seconds` IS THE TEST DOOR THAT KEEPS THE ORDINARY RUN LOOP GOING. Without it main.m defaults to
 # three seconds and the desktop — the menu bar and the icon window — leaves the session.
-AGORA_DESKTOP="$DESK" WAYLAND_DISPLAY="$SOCK" "$WORKSPACE_BIN" --seconds 1000000000 \
+# **AND ONE INSPECTOR, WHEN A PERSON ASKED FOR ONE.** Get Info is reached by a menu action or a context row, and a
+# probe — or a person showing someone the window — cannot click one; `--get-info PATH` is the same door `--show-about`
+# and `--file-window` are. Unset is the ordinary session: no window but the desktop.
+GETINFO=()
+[ -n "${AGORA_SESSION_GET_INFO:-}" ] && GETINFO=(--get-info "${AGORA_SESSION_GET_INFO}")
+AGORA_DESKTOP="$DESK" WAYLAND_DISPLAY="$SOCK" "$WORKSPACE_BIN" --seconds 1000000000 "${GETINFO[@]}" \
 	>/dev/null 2>/tmp/agora-session-workspace.log &
 WPID=$!
 sleep 1.5
@@ -232,6 +238,7 @@ echo "  desktop: ${DESK}"
 echo "  wallpaper: ${WALLPAPER}"
 echo "  dock: ${AGORA_DOCK_POSITION:-right} (vertical, below the menu bar)"
 echo "  menu bar: Workspace"
+[ -n "${AGORA_SESSION_GET_INFO:-}" ] && echo "  Get Info: ${AGORA_SESSION_GET_INFO}"
 echo "  logs: /tmp/agora-session-{server,workspace,dock,systemui}.log"
 echo "Ctrl-C stops the session."
 

@@ -613,10 +613,10 @@ the ingest are Apple's.
   `NSPanel`/`NSAlert`; both classes are here now and the sheet has not moved to them), progress is a handler feeding
   `WSProgressWindow`, and Compress is a ZIP writer using
   zlib's raw deflate (no shell-out). `WSTrash` uses `~/.Trash` or a per-volume `.Trash-<uid>` and Put Back records.
-  **MEASURED:** `workspace-file-ops` (**96 checks**) and `workspace-trash` (**19 checks**), plus
+  **MEASURED:** `workspace-file-ops` (**121 checks**) and `workspace-trash` (**19 checks**), plus
   `appkit-progress-indicator` (**11 checks**) in libagora-app. Named absences: no Trash window/Dock contract (W7/
   §5.3), no progress Cancel, and a multi-item operation that fails halfway has no rollback. **Compress is streamed and
-  ZIP64-capable, and archives are EXTRACTED beside themselves (double click or the right-click row, with
+  writes zip or tar (plain, .gz, .bz2, .xz) behind one 'Compression' submenu, ZIP64-capable, and archives are EXTRACTED beside themselves (double click or the right-click row, with
   zip-slip refused whole) — .zip, .tar, .tar.gz/.tgz, .tar.bz2/.tbz and .tar.xz/.txz — into a folder named for the
   archive, or AS THE FILE ITSELF when it holds only one** (4 GB entries, offsets past 4 GB, and 65,535+ entries are written in the 64-bit forms; the thresholds
   are lowered by a probe for the suite and were verified against Python's `zipfile` and `unzip` once at the real ones).

@@ -636,8 +636,9 @@ the ingest are Apple's.
   and a rename that re-files it). **Not done, named:** colour labels, `Open With` (F1), custom icons (F2), tags, "Hide
   extension", ACLs, a recursive folder size, and undo for the inspector's own rename. The preview is the picture at its own shape and the window's resolution
   (`WSItemIcons -cg_pictureForPath:box:`), not a square thumbnail stretched by the compositor, and a fact the file system
-  has no answer for is a row the window does not show (no Created row on a substrate without birth times). **MEASURED:**
-  `workspace-get-info` (**71 checks**); 21 of 22 workspace suites green, `workspace-file-window` failing on a gutter
+  has no answer for is a row the window does not show (no Created row on a substrate without birth times). Its Sharing & Permissions rows are editable — a menu of the
+  four privileges, applied as a chmod that keeps every other bit. **MEASURED:**
+  `workspace-get-info` (**86 checks**); 21 of 22 workspace suites green, `workspace-file-window` failing on a gutter
   width another change moved from 18 to 12.
 
 ### W9 — Quick Look

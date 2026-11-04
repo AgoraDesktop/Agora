@@ -613,7 +613,7 @@ the ingest are Apple's.
   `NSPanel`/`NSAlert`; both classes are here now and the sheet has not moved to them), progress is a handler feeding
   `WSProgressWindow`, and Compress is a ZIP writer using
   zlib's raw deflate (no shell-out). `WSTrash` uses `~/.Trash` or a per-volume `.Trash-<uid>` and Put Back records.
-  **MEASURED:** `workspace-file-ops` (**28 checks**) and `workspace-trash` (**19 checks**), plus
+  **MEASURED:** `workspace-file-ops` (**39 checks**) and `workspace-trash` (**19 checks**), plus
   `appkit-progress-indicator` (**11 checks**) in libagora-app. Named absences: no Trash window/Dock contract (W7/
   §5.3), no progress Cancel, no ZIP64, and a multi-item operation that fails halfway has no rollback.
 

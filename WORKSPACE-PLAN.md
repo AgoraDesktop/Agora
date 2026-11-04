@@ -628,6 +628,14 @@ the ingest are Apple's.
   preview, custom icon (F2), colour labels in the metadata store.
 - **Test:** `get_info.m` for the multiple-selection summing (size) and the mixed-value placeholder; custom-icon
   round-trip.
+- **Part done (2026-11-04):** `WSGetInfoWindowController` + `WSItemInfo` implement the single and multiple inspector in
+  six collapsible sections (General, More Info, Name & Extension, Comments, Preview, Sharing & Permissions), opened from
+  the desktop's and the file window's `getInfo:` commands and reused per subject. Three of the sections write: the name
+  field renames through `WSFileOperations`, **Locked** is the owner's write bit (this kernel has no chflags user flag),
+  and the comment is stored in the folder's `.agora` sidecar (`WSMetadataStore -commentForName:`/`-setComment:forName:`
+  and a rename that re-files it). **Not done, named:** colour labels, `Open With` (F1), custom icons (F2), tags, "Hide
+  extension", ACLs, a recursive folder size, and undo for the inspector's own rename. **MEASURED:**
+  `workspace-get-info` (**38 checks**), all 22 workspace suites green.
 
 ### W9 — Quick Look
 - **Deliverable:** `libagora-quicklook` + Workspace's Spacebar preview, panel, and slideshow; built-in

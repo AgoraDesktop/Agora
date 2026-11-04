@@ -636,7 +636,7 @@ the ingest are Apple's.
   and a rename that re-files it). **Not done, named:** colour labels, `Open With` (F1), custom icons (F2), tags, "Hide
   extension", ACLs, a recursive folder size, and undo for the inspector's own rename. The preview is the picture at its own shape and the window's resolution
   (`WSItemIcons -cg_pictureForPath:box:`), not a square thumbnail stretched by the compositor, and a fact the file system
-  has no answer for is a row the window does not show (no Created row on a substrate without birth times). A folder's size is the tree under it, measured off the main thread
+  has no answer for is a row the window does not show (no Created row on a substrate without birth times). A folder's size — in the inspector AND in the column view's preview pane — is the tree under it, measured off the main thread
   (`WSItemInfo +cg_measurePaths:`) with packages walked like the directories they are, and the window says
   "Calculating…" until the answer arrives. Its Sharing & Permissions rows are editable — a menu of the
   four privileges, applied as a chmod that keeps every other bit. **MEASURED:**

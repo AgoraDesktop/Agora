@@ -634,8 +634,9 @@ the ingest are Apple's.
   field renames through `WSFileOperations`, **Locked** is the owner's write bit (this kernel has no chflags user flag),
   and the comment is stored in the folder's `.agora` sidecar (`WSMetadataStore -commentForName:`/`-setComment:forName:`
   and a rename that re-files it). **Not done, named:** colour labels, `Open With` (F1), custom icons (F2), tags, "Hide
-  extension", ACLs, a recursive folder size, and undo for the inspector's own rename. **MEASURED:**
-  `workspace-get-info` (**64 checks**); 21 of 22 workspace suites green, `workspace-file-window` failing on a gutter
+  extension", ACLs, a recursive folder size, and undo for the inspector's own rename. The preview is the picture at its own shape and the window's resolution
+  (`WSItemIcons -cg_pictureForPath:box:`), not a square thumbnail stretched by the compositor. **MEASURED:**
+  `workspace-get-info` (**71 checks**); 21 of 22 workspace suites green, `workspace-file-window` failing on a gutter
   width another change moved from 18 to 12.
 
 ### W9 — Quick Look

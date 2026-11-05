@@ -62,13 +62,13 @@ framework directory of its own in that SDK. **Expect the diff to rewrite the scr
 |---|---|---|
 | `CoreAudio/CoreAudioTypes.h` | the structures, time stamps, flag vocabulary, status codes, `AudioChannelLayout`/`AudioBufferList` variable-length traps | the full constant tables (the manifest holds them) |
 | `CoreAudio/HostTime.h` | `clock_gettime(CLOCK_MONOTONIC)` scaled to 1e9 ticks/s; conversions invert | — |
-| `CoreAudio/AudioHardware*.h` | the object model: 5 property functions, listeners (proc **and** block, wildcards), io procs, the in-process mixer, volume/mute/clock; **three backends** (`null` always, ALSA when `pkg-config alsa`, PipeWire when `libpipewire-0.3`) | `kAudioDevicePropertyBufferFrameSize` writes, deprecated doors are *translated*, not refused |
+| `CoreAudio/AudioHardware*.h` | the object model: 5 property functions, listeners (proc **and** block, wildcards), io procs, the in-process mixer, volume/mute/clock; **three backends** (`null` always, ALSA when `pkg-config alsa`, PipeWire when `libpipewire-0.3`) and sndio where libsndio is; **an input side** — a capture stream per device, the cycle's input handed to every io proc as `inInputData` (one buffer per cycle, read-only, because it is the microphone), and the null device **hears a ramp** so capture is testable with no hardware | `kAudioDevicePropertyBufferFrameSize` writes, deprecated doors are *translated*, not refused; the three real backends open **no** capture stream yet, so their devices describe `has_input = false` |
 | `AudioToolbox/AudioFormat.h` | `FormatInfo`, `NumberOfChannelsForLayout`, `ChannelLayoutForTag`, `ValidateChannelLayout` | every other selector (`'prop'`) |
 | `AudioToolbox/AudioConverter.h` | both calling models, 14 properties, format + rate (windowed-sinc, 32 taps) | non-PCM (`'fmt?'`), `ConvertBuffer` across a rate change |
 | `AudioToolbox/AudioFile.h` | **WAV, AIFF, CAF** read/write with size patching; byte and packet doors; **MPEG-1/2/2.5 Layer III read** — a packet table walked from the stream's own sync words, ID3v2 skipped by its size field, and `kAudioFilePropertyPacketTableInfo` (`'pnfo'`) answering the encoder's gapless trim | writing MPEG (`kAudioFileUnsupportedFileTypeError`); every other compressed format and unknown container; `PacketToFrame`/`FrameToPacket` (not declared); FSRef doors (not declared, on purpose) |
 | `AudioToolbox/ExtendedAudioFile.h` | open/create/wrap, read/write/write-async, seek/tell, client format; **decodes MPEG in front of the ordinary pipeline**, so the converter above it only ever sees linear PCM; a seek restarts the decoder at the frame that holds the sample asked for; **`FileLengthFrames` reports the trimmed length** when the file declares one | a compressed file in a build with no decoder is refused *at open*, by name |
 | `AudioToolbox/AudioFileStream.h` | incremental parse of the same **four** containers, listener + packet callbacks; an MPEG stream reports every packet with its own description (a PCM stream's have none), skips an ID3v2 tag by its size, resynchronises a byte at a time, and reads the **Xing/Info tag** so its packet and byte counts are exact from the first frame | `AudioFileStreamSeek` for a stream with no table (`'nope'`) — PCM always, MPEG when the first frame is not the tag; the tag's gapless delay/padding is not applied |
-| `AudioToolbox/AudioQueue.h` | output queues: buffers, refilling callback (lock released), volume as a **parameter**, properties, **timelines** (a remembered time base that reports a start, a stop or a reset once), **offline render** (the queued buffers, in the client's format, into the caller's buffer — with the finished ones handed back through the same callback), mono↔stereo mapping, and **one processing tap** (`New`/`Dispose`/`GetSourceAudio`/`GetQueueTime`, the five flags, in-place processing, a **siphon**, the start/end-of-source flags, and a tap that runs on the offline path too) — the render path now **stages the source in the client's format** before converting it, which is what gives a tap something to process | input queues (there is no capture backend in the HAL); `kAudioQueueErr_InvalidTapType` has nothing to answer, because there is no input queue for a tap to be the wrong type on |
+| `AudioToolbox/AudioQueue.h` | **input and output** queues (a capture queue is the same object running backwards: empty buffers in, filled buffers back, the device's channels mapped to the client's, the converter facing the other way, the tap on the cycle's client-format audio), buffers, refilling callback (lock released), volume as a **parameter**, properties, **timelines** (a remembered time base that reports a start, a stop or a reset once), **offline render** (the queued buffers, in the client's format, into the caller's buffer — with the finished ones handed back through the same callback), mono↔stereo mapping, and **one processing tap** (`New`/`Dispose`/`GetSourceAudio`/`GetQueueTime`, the five flags, in-place processing, a **siphon**, the start/end-of-source flags, and a tap that runs on the offline path too) — the render path now **stages the source in the client's format** before converting it, which is what gives a tap something to process | a capture queue's volume (stored, not applied: a recording has no playback gain); real-backend capture (the `AudioQueue` and the HAL are ready, the drivers are not) |
 | `AudioToolbox/AudioServices.h` | system sounds by URL + the **generated** alert (1.5 kHz decay); a pool of four queues so two alerts overlap, and completions that fire when the buffer comes back rather than when it was handed over | properties (`'pty?'`) |
 | `AudioToolbox/AudioComponent.h` | a registry of **three** built-ins; find/count/describe/copy-name/instance | any fourth thing (no plug-in ABI) |
 | `AudioToolbox/AudioUnit.h` | `DefaultOutput`, `AUConverter`, `MultiChannelMixer`; properties, parameters, `AudioUnitRender`; **`ParameterList`/`ParameterInfo`, `AudioUnitParameterInfo`, the unit and flag vocabulary** | `AudioUnitProcess`, render notify, scheduled parameters |
@@ -83,6 +83,15 @@ round trips `memcmp`-exact; the null backend renders **12 000 frames in 250 ms**
 0.25 + 0.125 mix to **0.375**; a queue, a unit and a graph each reach the device at the value they were given;
 mute mixes **0.0**; through AUv3, two buses at volumes 1.0 and 0.25 mix **0.28125**, and a tree write lands in
 `AudioUnitGetParameter`.
+
+**Capture is measured against a source the suite can predict.** The null device's input is frame `n` = `(n % rate) /
+rate` on the left and half that on the right, so: an input queue records **512-frame buffers** whose consecutive
+frames step by exactly one ramp step (a dropped or duplicated frame is a step that is not), the right channel is the
+left at half scale, a **mono** client measures **0.75** of the left (the two channels summed and halved — not 1.0,
+which is one channel, and not 0.5, which is one of them), a tap on the recording halves that step and is refused
+`kAudioQueueErr_InvalidTapType` for queue time, and a **draining stop** on a capture queue returns rather than waiting
+for its own empty buffers. At the HAL, an io proc on the input device is handed the ramp as `inInputData` —
+**13 calls of 512 frames** in 150 ms — and the input-scope stream reports `kAudioStreamPropertyDirection` = 1.
 
 **The tap is measured at both ends**, because "the callback ran" and "the audio was processed" are different claims: the
 tap is shown **0.500** and the device plays **0.250**; a **siphon** is shown 0.5 and the device still plays **0.5**; the
@@ -271,7 +280,20 @@ Through the federation: `"$HOME/.agents/skills/agora-desktop/scripts/agora-build
 36. **A siphon produces nothing, so its output is its source.** Handing a siphon the `tapped` buffer (which it never
     fills, and which does not exist on the first call) segfaulted; `fn_tap_process` now answers with a pointer — the
     tap's own buffer for a processing tap, the stage it was shown for a siphon — plus the frame count.
-37. **The library's own suite was green because of an optimisation level.** `tests/converter.c` put two planes in a
+37. **A draining stop on a capture queue waits for ever.** `AudioQueueStop(queue, false)` waits until `current` is NULL
+    and `pending_count` is 0 — which is *playback*'s definition of drained. A recording queue's pending list holds the
+    caller's **empty** buffers, so it never empties: the stop would hang, and a test that called it would be a
+    deadlock rather than a failure. Capture skips the wait.
+38. **The cycle's input belongs to the device, not to the client.** One capture buffer is taken per cycle and handed
+    to every io proc unchanged, read-only. Copying it per proc would have been the easy way to keep `inInputData`'s
+    `const` honest and would also have made each proc see a *different* microphone — two clients on one device must
+    see the same input, which is what a device's input is.
+39. **A synthetic source is worth choosing for what it measures, not for what it sounds like.** The null device's input
+    is a ramp, not a tone, because the question a capture test asks is "are these the frames, in this order, without a
+    gap" — one subtraction per frame answers it, and a tone would have needed a pitch estimate to say less. The two
+    channels differ by a factor of two for the same reason: it makes the channel map measurable (a summing client
+    must measure 0.75, not 1.0, which is a fan-out, and not 0.5, which is one channel copied).
+40. **The library's own suite was green because of an optimisation level.** `tests/converter.c` put two planes in a
     bare `AudioBufferList`, whose declared single element is not enough; the second write landed on the next stack
     word and turned a 64-frame split conversion into a one-frame one — **in a Debug build only**, because in Release
     `wanted` happened to sit somewhere the overrun did not reach. `AudioBufferList` is variable-length and the trap is
@@ -345,11 +367,21 @@ refused on purpose (a decoder is a stream, a converter is a ring), and that deci
 - `CoreMIDI` stays out of this component; a `libagora-midi` if one appears.
 - ~~`AudioQueue`'s timelines~~ — **done**: a timeline reports a start, a stop or a reset once, and
   `AudioQueueGetCurrentTime` compares its remembered time base against the queue's.
-- `AudioQueue`'s **input side** is refused, not missing: no backend in the HAL opens a capture stream
-  (`snd_pcm_open(..., SND_PCM_STREAM_PLAYBACK)` is the only mode any of the three drivers uses, and the null
-  driver generates output rather than consuming input). An input queue needs an input *device* — a scope in the
-  HAL, a capture path in at least one backend, and a synthetic source in `null` to test it — which is a phase of
-  its own, not a door.
+- ~~`AudioQueue`'s input side~~ — **done**, and the estimate was right about the shape: an input *device* (a scope in
+  the HAL — already there, unused), a capture path in at least one backend, and a synthetic source in `null` to test it.
+  What it cost:
+  1. **The seam takes the cycle's input, not a per-client one** (§5.38): `fn_agora_device_render(id, capture, mix,
+     frames)`, and `capture` is what every io proc is handed as `inInputData`.
+  2. **The null device hears a ramp** (§5.39), which is what makes the whole thing measurable headlessly and is now
+     the fixture every capture assertion is written against.
+  3. **A capture queue is the same object backwards**, so it reuses the device, the converter, the stage, the channel
+     map and the tap; what changes is the direction of each. The converter faces `(device → client)`, and the tap runs
+     on the cycle's client-format audio *before* the caller's buffer — which is also what makes
+     `kAudioQueueErr_InvalidTapType` reachable at last.
+  4. **A drain on a capture queue is not a wait** (§5.37).
+  What is left is the part that needs a real device: `snd_pcm_open(SND_PCM_STREAM_CAPTURE)`, a `PW_DIRECTION_INPUT`
+  stream and `sio_open(SIO_REC)` in the three drivers, each of which only has to fill the buffer the seam already
+  takes.
 - ~~Processing taps~~ — **done**, and the prediction in the last handoff was right about where the work was: the
   obstacle was the render path, not the doors. What it cost:
   1. **The source is staged before it is converted.** `fn_stage_pull` gathers the enqueued buffers into a short FIFO in

@@ -89,6 +89,7 @@ The component repositories named below exist and build. This list will grow; fur
 | `libagora-text` | Core Text — text layout and fonts |
 | `libagora-drawing` | Core Graphics — the 2D drawing and geometry model |
 | `libagora-base` | Foundation — Objective-C collections, strings, dates, files, notifications |
+| `libagora-audio` | Core Audio — macOS 10.12's audio API: the types, the host clock, formats, the three containers, conversion, the device layer (`null` and ALSA backends), queues and system sounds. It resolves Foundation because 10.12's AUv3 headers do |
 | `libagora-app` | Application Kit (AppKit) — windows, views, controls, the menu model |
 
 ### Supporting libraries

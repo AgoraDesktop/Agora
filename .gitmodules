@@ -97,3 +97,8 @@
 	path = libagora-webview
 	url = https://github.com/AgoraDesktop/libagora-webview.git
 	branch = main
+
+[submodule "libagora-audio"]
+	path = libagora-audio
+	url = https://github.com/AgoraDesktop/libagora-audio.git
+	branch = main

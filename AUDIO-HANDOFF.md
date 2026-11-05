@@ -62,7 +62,7 @@ framework directory of its own in that SDK. **Expect the diff to rewrite the scr
 |---|---|---|
 | `CoreAudio/CoreAudioTypes.h` | the structures, time stamps, flag vocabulary, status codes, `AudioChannelLayout`/`AudioBufferList` variable-length traps | the full constant tables (the manifest holds them) |
 | `CoreAudio/HostTime.h` | `clock_gettime(CLOCK_MONOTONIC)` scaled to 1e9 ticks/s; conversions invert | — |
-| `CoreAudio/AudioHardware*.h` | the object model: 5 property functions, listeners (proc **and** block, wildcards), io procs, the in-process mixer, volume/mute/clock; **three backends** (`null` always, ALSA when `pkg-config alsa`, PipeWire when `libpipewire-0.3`) and sndio where libsndio is; **an input side** — a capture stream per device, the cycle's input handed to every io proc as `inInputData` (one buffer per cycle, read-only, because it is the microphone), the null device **hears a ramp** so capture is testable with no hardware, and **ALSA records from the same PCM it plays to** (a separate capture handle, read before the mixer, optional per PCM and rate) | `kAudioDevicePropertyBufferFrameSize` writes, deprecated doors are *translated*, not refused; **PipeWire and sndio open no capture stream yet**, so their devices describe `has_input = false` |
+| `CoreAudio/AudioHardware*.h` | the object model: 5 property functions, listeners (proc **and** block, wildcards), io procs, the in-process mixer, volume/mute/clock; **three backends** (`null` always, ALSA when `pkg-config alsa`, PipeWire when `libpipewire-0.3`) and sndio where libsndio is; **an input side** — a capture stream per device, the cycle's input handed to every io proc as `inInputData` (one buffer per cycle, read-only, because it is the microphone, **and with its own frame count**), the null device **hears a ramp** so capture is testable with no hardware, **ALSA records from the same PCM it plays to** (a separate capture handle, read before the mixer, optional per PCM and rate), and **PipeWire records from the session's default source** beside the sink it plays to | `kAudioDevicePropertyBufferFrameSize` writes, deprecated doors are *translated*, not refused; **sndio opens no capture stream yet**, so its device describes `has_input = false` |
 | `AudioToolbox/AudioFormat.h` | `FormatInfo`, `NumberOfChannelsForLayout`, `ChannelLayoutForTag`, `ValidateChannelLayout` | every other selector (`'prop'`) |
 | `AudioToolbox/AudioConverter.h` | both calling models, 14 properties, format + rate (windowed-sinc, 32 taps) | non-PCM (`'fmt?'`), `ConvertBuffer` across a rate change |
 | `AudioToolbox/AudioFile.h` | **WAV, AIFF, CAF** read/write with size patching; byte and packet doors; **MPEG-1/2/2.5 Layer III read** — a packet table walked from the stream's own sync words, ID3v2 skipped by its size field, and `kAudioFilePropertyPacketTableInfo` (`'pnfo'`) answering the encoder's gapless trim | writing MPEG (`kAudioFileUnsupportedFileTypeError`); every other compressed format and unknown container; `PacketToFrame`/`FrameToPacket` (not declared); FSRef doors (not declared, on purpose) |
@@ -83,6 +83,15 @@ round trips `memcmp`-exact; the null backend renders **12 000 frames in 250 ms**
 0.25 + 0.125 mix to **0.375**; a queue, a unit and a graph each reach the device at the value they were given;
 mute mixes **0.0**; through AUv3, two buses at volumes 1.0 and 0.25 mix **0.28125**, and a tree write lands in
 `AudioUnitGetParameter`.
+
+**PipeWire's two directions are negotiated separately, and the seam had to learn it.** In this machine's session the
+capture stream is given **1024-frame** quanta while the playback stream's buffers are **4096**; a driver that bent one
+to the other either dropped audio or claimed samples the device never heard, so `fn_agora_device_render` now takes the
+input's frame count too, and `inInputData` is as long as what arrived. Both streams' callbacks run on the same thread
+loop, so the capture callback leaves its quantum in the engine and the playback callback consumes it **once** — a
+source that stalls yields no input rather than the previous buffer for ever. MEASURED: the `hal` input leg now runs on
+three backends (the null ramp, with a **cross-cycle** continuity assertion — each cycle's first frame carries on from
+the last cycle's last — plus ALSA's and PipeWire's delivery), and only `sndio` says it has nothing to measure.
 
 **ALSA capture is measured on two PCMs, because they answer different questions.** On ALSA's `null` PCM capture opens,
 returns the full quantum every cycle and every sample is **0.0** — that plugin records silence, so the ALSA leg of the
@@ -316,6 +325,12 @@ Through the federation: `"$HOME/.agents/skills/agora-desktop/scripts/agora-build
     `wanted` happened to sit somewhere the overrun did not reach. `AudioBufferList` is variable-length and the trap is
     in §3 of the README for exactly this reason; the fixture now carries its own storage. A suite that has only ever
     been run at `-O2` has not been run.
+43. **A session server negotiates the two directions separately, so one frame count for both is a lie.** PipeWire gave
+    this tree's capture stream **1024**-frame quanta and its playback stream **4096**-frame buffers, and the first
+    version of the capture path passed the input only when the two matched — which is to say, never: the io proc saw
+    `inInputData == NULL` on every cycle while the capture node sat in the graph, running. The seam now carries
+    `capture_frames` beside `frames`, so the input keeps its own length; bending one to the other would have dropped
+    three quarters of the audio or claimed samples nobody recorded.
 
 ## 6. Next work, in the order the plan argues for
 
@@ -402,8 +417,13 @@ refused on purpose (a decoder is a stream, a converter is a ring), and that deci
   everywhere: a PCM that cannot record, or grants another rate, leaves playback alone. Two things it taught (§5.40,
   §5.41): a probe written as one expression measured a *prepare* on an unconfigured handle and returned `-EIO`, which
   looked like the plugin's fault; and the `null` PCM really does record silence, so the leg asserts delivery and the
-  null driver asserts values. **What is left of this phase is PipeWire's `PW_DIRECTION_INPUT` stream and sndio's
-  `sio_open(SIO_REC)`**, each of which only has to fill the buffer the seam already takes.
+  null driver asserts values.
+- **PipeWire's capture half** — **done**: the registry counts `Audio/Source` nodes, `has_input` follows that count, and
+  the engine opens a second `pw_stream` with `PW_DIRECTION_INPUT` that autoconnects to the session's default source at
+  the device's format. The two callbacks run on one thread loop: the input leaves its quantum in the engine, the
+  playback callback consumes it once. The lesson is §5.43 — the two quanta differ (1024 against 4096 here) and the seam
+  now carries the input's own length. **What is left of this phase is sndio's `sio_open(SIO_REC)`**, which only has to
+  fill the buffer the seam already takes.
 - ~~Processing taps~~ — **done**, and the prediction in the last handoff was right about where the work was: the
   obstacle was the render path, not the doors. What it cost:
   1. **The source is staged before it is converted.** `fn_stage_pull` gathers the enqueued buffers into a short FIFO in

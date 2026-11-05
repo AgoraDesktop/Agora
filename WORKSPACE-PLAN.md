@@ -651,6 +651,15 @@ the ingest are Apple's.
 ### W9 — Quick Look
 - **Deliverable:** `libagora-quicklook` + Workspace's Spacebar preview, panel, and slideshow; built-in
   generators for text/image/PDF/media.
+- **Part done (2026-11-05):** **Workspace's half of W9 is in `workspace/src/WSQuickLookController`** — one borderless,
+  non-activatable panel at the floating level, opened by Space in the icon, list and column views (and by File → Quick
+  Look), closed by Space or Esc or a click on it. The five kinds are decided from the bytes: an image through
+  `AGImageSourceRep` (so every format the drawing library decodes), a PDF as a vector page through `NSPDFImageRep`, text as
+  its first 8 KB cut at a line, a folder or anything else as its icon. **MEASURED:** `workspace-quick-look` (**15 checks**,
+  the kind and text decisions, which need no display) and 24 of 24 workspace suites green; the plate is on the glass in
+  5–23 ms with the picture 16 ms behind it (`WS_QUICKLOOK_DIAG`). **Not done, named:** the component split — this is a
+  controller inside Workspace rather than `libagora-quicklook` with a generator-plugin ABI, because one application's needs
+  are not yet an ABI — plus slideshow, media generation, and the column view's inline preview.
 - **Test:** a generator ABI test (a plugin produces a view for a fixture) and a panel test (Spacebar opens,
   arrows move, Escape closes).
 

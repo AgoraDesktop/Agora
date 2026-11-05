@@ -170,19 +170,29 @@ Through the federation: `"$HOME/.agents/skills/agora-desktop/scripts/agora-build
     limitation, not an event loop.
 18. **`default.audio.sink` is JSON** (`{"name":"…"}`) and `spa_json` is a cursor: reading a key without
     consuming its value desynchronises every pair after it. Read key, then `spa_json_next`, then parse.
-19. **A struct with an interior pointer cannot be returned by value.** The `auv3` suite's `fn_storage` fills
+19. **`AudioConverterNew` will not change a channel count, and that is correct.** The queue is where mono→stereo
+    belongs (`AudioQueue.c`'s `map_channels`), not the converter: teaching the converter to accept it would make
+    it disagree with Apple and with its own `kAudioConverterChannelMap` door.
+20. **A struct with an interior pointer cannot be returned by value.** The `auv3` suite's `fn_storage` fills
     a `render_storage` **in place**; returning one would leave `mBuffers[0].mData` pointing at the samples of
     a dead stack frame, and the render would write to nothing while the test read zeros.
 
 ## 6. Next work, in the order the plan argues for
 
-### (a) `libagora-app`'s remaining audio TODOs
+### (a) `libagora-app` — **done**, and what it found
 
-- **A suite for `NSSound`** (it has none): `-duration`, `-isPlaying` after `-play`, `-loops` re-enqueue,
-  `-stop`, `+soundNamed:`, `NSSoundDelegate`. Follow the census-edit rule in §5.9.
-- `NSBundleAdditions.h` still owes its **header split**: `-pathForSoundResource:` belongs in `NSSound.h`.
-- `NSButtonCell.m` still excludes `_sound` from archiving "because this tier does not ship `NSSound`".
-- `COCOA-10.11-SURFACE-PLAN.md` A5: the `NSSound` row says "refused or adapted"; it is implemented now.
+The four `NSSound` items are closed in `libagora-app` (`tests/nssound.m`, `NSSound.h`, `NSButtonCell.m`, the A5
+row). Three defects came out of the suite, and one of them was **this library's**:
+
+1. **A queue could not play a mono file at all.** `AudioConverterNew` refuses a channel-count change (Apple does
+   too — that is a channel map's job), so `AudioQueueNewOutput` for 16-bit mono 8 kHz failed at creation on a
+   stereo device and every mono beep was silent. `AudioQueue.c` now converts to the *client's* channel count and
+   fans out / sums down on the way into the device buffer (`map_channels`, `convert_format`, `map_scratch`), and
+   `queue`'s suite measures a mono buffer at 0.5 on the stereo device. **A second channel mapping belongs here
+   when one is wanted: `N`→`M` for `N, M > 1` is refused by name rather than approximated.**
+2. `NSSound`'s second `-play` after a sound *finished* played silence: the queue hands a non-looping buffer back,
+   so `_buffer != NULL` never meant "queued" (`_inFlight` now says so).
+3. `+soundNamed:` returned the file's name rather than the name asked for.
 
 ### (b) Smaller, in the plan's own order
 

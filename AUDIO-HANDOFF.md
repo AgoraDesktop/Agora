@@ -62,7 +62,7 @@ framework directory of its own in that SDK. **Expect the diff to rewrite the scr
 |---|---|---|
 | `CoreAudio/CoreAudioTypes.h` | the structures, time stamps, flag vocabulary, status codes, `AudioChannelLayout`/`AudioBufferList` variable-length traps | the full constant tables (the manifest holds them) |
 | `CoreAudio/HostTime.h` | `clock_gettime(CLOCK_MONOTONIC)` scaled to 1e9 ticks/s; conversions invert | — |
-| `CoreAudio/AudioHardware*.h` | the object model: 5 property functions, listeners (proc **and** block, wildcards), io procs, the in-process mixer, volume/mute/clock; **three backends** (`null` always, ALSA when `pkg-config alsa`, PipeWire when `libpipewire-0.3`) and sndio where libsndio is; **an input side** — a capture stream per device, the cycle's input handed to every io proc as `inInputData` (one buffer per cycle, read-only, because it is the microphone), and the null device **hears a ramp** so capture is testable with no hardware | `kAudioDevicePropertyBufferFrameSize` writes, deprecated doors are *translated*, not refused; the three real backends open **no** capture stream yet, so their devices describe `has_input = false` |
+| `CoreAudio/AudioHardware*.h` | the object model: 5 property functions, listeners (proc **and** block, wildcards), io procs, the in-process mixer, volume/mute/clock; **three backends** (`null` always, ALSA when `pkg-config alsa`, PipeWire when `libpipewire-0.3`) and sndio where libsndio is; **an input side** — a capture stream per device, the cycle's input handed to every io proc as `inInputData` (one buffer per cycle, read-only, because it is the microphone), the null device **hears a ramp** so capture is testable with no hardware, and **ALSA records from the same PCM it plays to** (a separate capture handle, read before the mixer, optional per PCM and rate) | `kAudioDevicePropertyBufferFrameSize` writes, deprecated doors are *translated*, not refused; **PipeWire and sndio open no capture stream yet**, so their devices describe `has_input = false` |
 | `AudioToolbox/AudioFormat.h` | `FormatInfo`, `NumberOfChannelsForLayout`, `ChannelLayoutForTag`, `ValidateChannelLayout` | every other selector (`'prop'`) |
 | `AudioToolbox/AudioConverter.h` | both calling models, 14 properties, format + rate (windowed-sinc, 32 taps) | non-PCM (`'fmt?'`), `ConvertBuffer` across a rate change |
 | `AudioToolbox/AudioFile.h` | **WAV, AIFF, CAF** read/write with size patching; byte and packet doors; **MPEG-1/2/2.5 Layer III read** — a packet table walked from the stream's own sync words, ID3v2 skipped by its size field, and `kAudioFilePropertyPacketTableInfo` (`'pnfo'`) answering the encoder's gapless trim | writing MPEG (`kAudioFileUnsupportedFileTypeError`); every other compressed format and unknown container; `PacketToFrame`/`FrameToPacket` (not declared); FSRef doors (not declared, on purpose) |
@@ -83,6 +83,13 @@ round trips `memcmp`-exact; the null backend renders **12 000 frames in 250 ms**
 0.25 + 0.125 mix to **0.375**; a queue, a unit and a graph each reach the device at the value they were given;
 mute mixes **0.0**; through AUv3, two buses at volumes 1.0 and 0.25 mix **0.28125**, and a tree write lands in
 `AudioUnitGetParameter`.
+
+**ALSA capture is measured on two PCMs, because they answer different questions.** On ALSA's `null` PCM capture opens,
+returns the full quantum every cycle and every sample is **0.0** — that plugin records silence, so the ALSA leg of the
+suite asserts delivery and the null *backend* asserts values. On this machine's `default` PCM the same code returns
+**14 cycles of 512 frames in 150 ms**, the card's own clock, with the card's own samples; the unpaced `null` PCM runs
+the loop at **66 072 cycles** in the same 150 ms, which is what an unpaced device does and why the suite makes no
+pacing claim on that leg.
 
 **Capture is measured against a source the suite can predict.** The null device's input is frame `n` = `(n % rate) /
 rate` on the left and half that on the right, so: an input queue records **512-frame buffers** whose consecutive
@@ -293,7 +300,17 @@ Through the federation: `"$HOME/.agents/skills/agora-desktop/scripts/agora-build
     gap" — one subtraction per frame answers it, and a tone would have needed a pitch estimate to say less. The two
     channels differ by a factor of two for the same reason: it makes the channel map measurable (a summing client
     must measure 0.75, not 1.0, which is a fan-out, and not 0.5, which is one channel copied).
-40. **The library's own suite was green because of an optimisation level.** `tests/converter.c` put two planes in a
+40. **Two ALSA calls in one expression are called in an order the compiler chooses.** A probe written as
+    `printf("params %d prepare %d", snd_pcm_hw_params(h, p), snd_pcm_prepare(h))` prepared an *unconfigured* PCM, which
+    answers `-EIO` — and `-EIO` from `snd_pcm_prepare` on ALSA's `null` PCM looked exactly like "this plugin cannot
+    record", which nearly cost a whole backend's capture path on the strength of one bogus measurement. The same calls
+    in statements, in order, return 0 and 0. Nothing about ALSA was wrong.
+41. **`null` records silence, and that is not a defect.** The ALSA `null` PCM is the device this tree's `hal-alsa` leg
+    runs against; it opens for capture, grants 48 kHz float stereo, returns the full quantum on every `snd_pcm_readi`,
+    and every sample is 0.0. A capture test on that leg must therefore assert *delivery* (a stream, a direction, a
+    cycle's worth of frames) and leave the *values* to the backend that owns a known source — the null driver's ramp.
+    Writing the ramp assertion into the ALSA leg would have made a correct plugin look broken.
+42. **The library's own suite was green because of an optimisation level.** `tests/converter.c` put two planes in a
     bare `AudioBufferList`, whose declared single element is not enough; the second write landed on the next stack
     word and turned a 64-frame split conversion into a one-frame one — **in a Debug build only**, because in Release
     `wanted` happened to sit somewhere the overrun did not reach. `AudioBufferList` is variable-length and the trap is
@@ -379,9 +396,14 @@ refused on purpose (a decoder is a stream, a converter is a ring), and that deci
      on the cycle's client-format audio *before* the caller's buffer — which is also what makes
      `kAudioQueueErr_InvalidTapType` reachable at last.
   4. **A drain on a capture queue is not a wait** (§5.37).
-  What is left is the part that needs a real device: `snd_pcm_open(SND_PCM_STREAM_CAPTURE)`, a `PW_DIRECTION_INPUT`
-  stream and `sio_open(SIO_REC)` in the three drivers, each of which only has to fill the buffer the seam already
-  takes.
+- **ALSA's capture half** — **done**: `fn_alsa_capture_opens` (a cached `snd_pcm_open(SND_PCM_STREAM_CAPTURE)` probe)
+  describes the device's input stream, and the data thread opens, configures and prepares a second handle for the same
+  PCM, reads a quantum *before* the mixer is asked for output, and passes it as the cycle's capture. It is optional
+  everywhere: a PCM that cannot record, or grants another rate, leaves playback alone. Two things it taught (§5.40,
+  §5.41): a probe written as one expression measured a *prepare* on an unconfigured handle and returned `-EIO`, which
+  looked like the plugin's fault; and the `null` PCM really does record silence, so the leg asserts delivery and the
+  null driver asserts values. **What is left of this phase is PipeWire's `PW_DIRECTION_INPUT` stream and sndio's
+  `sio_open(SIO_REC)`**, each of which only has to fill the buffer the seam already takes.
 - ~~Processing taps~~ — **done**, and the prediction in the last handoff was right about where the work was: the
   obstacle was the render path, not the doors. What it cost:
   1. **The source is staged before it is converted.** `fn_stage_pull` gathers the enqueued buffers into a short FIFO in

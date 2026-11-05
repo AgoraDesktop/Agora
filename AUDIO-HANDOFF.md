@@ -7,7 +7,7 @@ For a fresh session picking this up. Read this, then `AUDIO-PLAN.md` (the design
 
 | repository | HEAD | pushed | state |
 |---|---|---|---|
-| `libagora-audio` | see `git log -1` | no | clean; **15/15 tests, 0 warnings** on a clean configure; **needs committing** |
+| `libagora-audio` | see `git log -1` | no | clean; **16/16 tests** (15 run, `hal-sndio` skips), 0 warnings on a clean configure |
 | `libagora-app` | `44eee74` | yes, `origin/main` | clean; **215/215 tests**; built against the new prefix |
 | `release` | `66dba68` | no — 2 commits ahead | unchanged by phase 5b |
 | workspace (parent) | `069dfa2` | no | `libagora-audio` gitlink will be behind again once this phase is committed |
@@ -196,7 +196,14 @@ row). Three defects came out of the suite, and one of them was **this library's*
 
 ### (b) Smaller, in the plan's own order
 
-- `sndio` backend for the BSDs (`AudioHardware-sndio.c`), labelled **written, not measured** until a BSD run.
+- ~~`sndio` backend for the BSDs~~ — **written, compiled here, and not measured here** (`AudioHardware-sndio.c`,
+  done). This machine has `libsndio-dev` 1.10.0, so the file is built and linked against the real header and the
+  `hal-sndio` leg runs and **skips (77)** with no `sndiod` listening. What would lift the label is a BSD run — or
+  any machine with a server — measuring four things this tree cannot: the sample format the server grants
+  (`sio_getpar` after `sio_setpar`; anything but 32-bit signed native-endian is refused rather than played as
+  noise), the buffer/round it paces with, `sio_write`'s blocking back-pressure, and `sio_eof` on a server that
+  goes away. sndio has no float format, so the driver converts the mixer's float32 to 32-bit signed in its own
+  thread — the only backend that has to.
 - `CoreMIDI` stays out of this component; a `libagora-midi` if one appears.
 - `AudioQueue`'s input side, timelines, taps; `AUGraph` sub-graphs; the remaining `AudioFormat` selectors.
 - AUv3's remaining optional doors, each a real question rather than a stub: `-fullState`/`-factoryPresets`

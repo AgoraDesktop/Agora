@@ -67,7 +67,7 @@ framework directory of its own in that SDK. **Expect the diff to rewrite the scr
 | `AudioToolbox/AudioConverter.h` | both calling models, 14 properties, format + rate (windowed-sinc, 32 taps) | non-PCM (`'fmt?'`), `ConvertBuffer` across a rate change |
 | `AudioToolbox/AudioFile.h` | **WAV, AIFF, CAF** read/write with size patching; byte and packet doors; **MPEG-1/2/2.5 Layer III read** — a packet table walked from the stream's own sync words, ID3v2 skipped by its size field | writing MPEG (`kAudioFileUnsupportedFileTypeError`); every other compressed format and unknown container; FSRef doors (not declared, on purpose) |
 | `AudioToolbox/ExtendedAudioFile.h` | open/create/wrap, read/write/write-async, seek/tell, client format; **decodes MPEG in front of the ordinary pipeline**, so the converter above it only ever sees linear PCM; a seek restarts the decoder at the frame that holds the sample asked for | a compressed file in a build with no decoder is refused *at open*, by name |
-| `AudioToolbox/AudioFileStream.h` | incremental parse of the same **four** containers, listener + packet callbacks; an MPEG stream reports every packet with its own description (a PCM stream's have none), skips an ID3v2 tag by its size and resynchronises one byte at a time | `AudioFileStreamSeek` (`'nope'`); no Xing/LAME header, so a stream's packet count is `ValueUnknown` while the file door's is exact |
+| `AudioToolbox/AudioFileStream.h` | incremental parse of the same **four** containers, listener + packet callbacks; an MPEG stream reports every packet with its own description (a PCM stream's have none), skips an ID3v2 tag by its size, resynchronises a byte at a time, and reads the **Xing/Info tag** so its packet and byte counts are exact from the first frame | `AudioFileStreamSeek` for a stream with no table (`'nope'`) — PCM always, MPEG when the first frame is not the tag; the tag's gapless delay/padding is not applied |
 | `AudioToolbox/AudioQueue.h` | output queues: buffers, refilling callback (lock released), volume as a **parameter**, properties | input queues, timelines, taps, offline render |
 | `AudioToolbox/AudioServices.h` | system sounds by URL + the **generated** alert (1.5 kHz decay) | properties (`'pty?'`) |
 | `AudioToolbox/AudioComponent.h` | a registry of **three** built-ins; find/count/describe/copy-name/instance | any fourth thing (no plug-in ABI) |
@@ -94,7 +94,11 @@ at **440 Hz**; a seek to 1.5 s puts the audio back at **442 Hz** (±0.5%) and a 
 header are each refused **by name**. The incremental door is fed the same files a byte at a time, seven bytes at a time
 and 4 096 bytes at a time, and **every packet it reports is compared with the file door's, byte for byte**: 117/117 and
 80/80, the data offset at 44 (ffmpeg's own ID3v2 tag) and at 254 behind a synthetic 210-byte tag whose filler is
-`0xFF`. 78 checks in the build with the decoder, 50 without it.
+`0xFF`. The **Xing/Info tag** is asked of a stream fed only its first 4 KiB: it answers `AudioDataPacketCount` and
+`AudioDataByteCount` exactly (117 and 73 350; 80 and 3 642), and `AudioFileStreamSeek` returns packet 0 at byte 44
+exactly and the rest from the tag's hundredths within **130-260 bytes** of the file door's own offset (0.2-0.4% of the
+audio), flagged `OffsetIsEstimated`. A stream entered mid-file — the first frame skipped, so no tag — answers
+`ValueUnknown` and `'nope'`. **100 checks** in the build with the decoder, **72** without it.
 
 ### The three things about AUv3 that are not Apple's
 
@@ -220,7 +224,20 @@ Through the federation: `"$HOME/.agents/skills/agora-desktop/scripts/agora-build
     `kAudioFileStreamError_DataUnavailable` until the first four bytes had arrived, which is right for a property and
     wrong for a parser: every caller feeding a socket breaks out of its loop on a non-zero status, so a stream
     delivered one byte at a time stopped at the first call. `0` and a buffered byte is the honest answer.
-28. **A `ffmpeg`-generated fixture keeps its own padding apart from the decoder's.** The container counts padded
+28. **MPEG's protection bit is inverted.** Bit 0 of the second header byte is **zero** when a CRC is present; every
+    other flag a reader has met means the opposite. It matters here because a CRC moves the Xing tag two bytes, so a
+    wrong reading is not a crash: the tag is simply not found and the stream reports "no length declared" for a file
+    that declares one. Measured on both fixtures — `0xFF 0xFB` is unprotected, and the tag is at byte 36 of a 192 kbit/s
+    44.1 kHz stereo frame.
+29. **The Xing frame count excludes the frame that carries the tag, and its byte count includes it.** The tag says 116
+    frames and 73 350 bytes for a file this door reports as 117 packets of 73 350 bytes: the tag's own frame is a packet
+    here, so `packets = tag.frames + 1` and `bytes = tag.bytes` unchanged. Getting either wrong is a duration off by
+    26 ms and a count off by one, which is exactly the kind of thing a viewer shows and nobody can explain.
+30. **A TOC entry is a hundredth of the file, not a packet index.** `toc[i]` is `i`-percent of the *audio's bytes*, so a
+    packet offset is an interpolation (`packet x 100 / packets`), and the answer is an estimate — 130-260 bytes out on
+    this machine's fixtures. Packet 0 is exact because it is where the audio starts, and saying so is better than
+    estimating a position the door already knows.
+31. **A `ffmpeg`-generated fixture keeps its own padding apart from the decoder's.** The container counts padded
     frames; libmpg123 applies the LAME tag's gapless declaration, so the decoded count is the *audio's* length.
     Asserting "decoded == packets x samples-per-frame" fails by 2.5 frames on a 3 s file and by 3.4 on a 2 s VBR
     one. Assert the decoded count against the tone's duration and the packet count against it ±5 frames.
@@ -268,10 +285,16 @@ tables is exactly the drift the manifest exists to prevent. What the stream door
 parser: skip the tag by its size, resynchronise a byte at a time, and buffer the frame that straddles a call boundary.
 `fn_emit` still holds the PCM path, unchanged and unaware of either.
 
-**Next for this phase:** a Xing/LAME header would give a stream a packet count — and so a duration — before the file has
-been read to its end, which is the one property the stream door answers with `ValueUnknown` and the file door answers
-exactly. `AudioConverter`'s own MPEG support is *not* next: it is refused on purpose (a decoder is a stream, a converter
-is a ring), and that decision is now measured in two places.
+**The Xing/Info tag came third, and it is where a stream finally knows its own length.** It sits after the
+side-information block — 32 bytes for MPEG-1 stereo, 17 for MPEG-1 mono, 17 for MPEG-2 stereo, 9 for MPEG-2 mono, plus
+two for a CRC — and it holds a frame count, a byte count and a hundred-entry seek table. Two counts, one flag each, and
+the seek table is what makes `AudioFileStreamSeek` answerable at all.
+
+**Next for this phase:** nothing in the parse itself. What is left is a *policy* question that now has its data: the tag
+also declares the encoder's delay and padding, so **the duration the file door reports could be the audio's true length
+rather than the container's** (§7.6). That is a change to `AudioFile` and `ExtAudioFile`, not to the stream, and it wants
+a test that compares a decoded frame count with a reported one. `AudioConverter`'s own MPEG support is *not* next: it is
+refused on purpose (a decoder is a stream, a converter is a ring), and that decision is now measured in two places.
 
 ### (b) Smaller, in the plan's own order
 

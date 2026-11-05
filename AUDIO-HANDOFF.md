@@ -1,4 +1,4 @@
-# AUDIO-HANDOFF — `libagora-audio`, state at the end of phase 5
+# AUDIO-HANDOFF — `libagora-audio`, state at the end of phase 5 and phase 3
 
 For a fresh session picking this up. Read this, then `AUDIO-PLAN.md` (the design record) and
 `libagora-audio/README.md` (the component's own contract). This file is the *state*; those are the *reasons*.
@@ -7,7 +7,7 @@ For a fresh session picking this up. Read this, then `AUDIO-PLAN.md` (the design
 
 | repository | HEAD | pushed | state |
 |---|---|---|---|
-| `libagora-audio` | see `git log -1` | no | clean; **14/14 tests, 0 warnings** on a clean configure; **needs committing** |
+| `libagora-audio` | see `git log -1` | no | clean; **15/15 tests, 0 warnings** on a clean configure; **needs committing** |
 | `libagora-app` | `44eee74` | yes, `origin/main` | clean; **215/215 tests**; built against the new prefix |
 | `release` | `66dba68` | no — 2 commits ahead | unchanged by phase 5b |
 | workspace (parent) | `069dfa2` | no | `libagora-audio` gitlink will be behind again once this phase is committed |
@@ -17,8 +17,9 @@ For a fresh session picking this up. Read this, then `AUDIO-PLAN.md` (the design
 submodule pin when that repository is pushed. `git submodule status` must show no `-` for the components in
 `components.conf` (`forge` and `libagora-webview` are currently uninitialised and are not in it).
 
-`libagora-audio` is a submodule, sits **after `libagora-base`** in `release/components.conf`, and now links
+`libagora-audio` is a submodule, sits **after `libagora-base`** in `release/components.conf`, and links
 `Foundation::Foundation` **PUBLIC** — which is the same reason it sits there, and only makes it more true.
+ALSA and PipeWire are **PRIVATE** links behind `AGORA_WITH_ALSA` / `AGORA_WITH_PIPEWIRE`, both `AUTO`.
 
 ## 2. The contract: macOS 10.12 is the specification
 
@@ -61,7 +62,7 @@ framework directory of its own in that SDK. **Expect the diff to rewrite the scr
 |---|---|---|
 | `CoreAudio/CoreAudioTypes.h` | the structures, time stamps, flag vocabulary, status codes, `AudioChannelLayout`/`AudioBufferList` variable-length traps | the full constant tables (the manifest holds them) |
 | `CoreAudio/HostTime.h` | `clock_gettime(CLOCK_MONOTONIC)` scaled to 1e9 ticks/s; conversions invert | — |
-| `CoreAudio/AudioHardware*.h` | the object model: 5 property functions, listeners (proc **and** block, wildcards), io procs, the in-process mixer, volume/mute/clock; **two backends** (`null` always, ALSA when `pkg-config alsa`) | `kAudioDevicePropertyBufferFrameSize` writes, deprecated doors are *translated*, not refused |
+| `CoreAudio/AudioHardware*.h` | the object model: 5 property functions, listeners (proc **and** block, wildcards), io procs, the in-process mixer, volume/mute/clock; **three backends** (`null` always, ALSA when `pkg-config alsa`, PipeWire when `libpipewire-0.3`) | `kAudioDevicePropertyBufferFrameSize` writes, deprecated doors are *translated*, not refused |
 | `AudioToolbox/AudioFormat.h` | `FormatInfo`, `NumberOfChannelsForLayout`, `ChannelLayoutForTag`, `ValidateChannelLayout` | every other selector (`'prop'`) |
 | `AudioToolbox/AudioConverter.h` | both calling models, 14 properties, format + rate (windowed-sinc, 32 taps) | non-PCM (`'fmt?'`), `ConvertBuffer` across a rate change |
 | `AudioToolbox/AudioFile.h` | **WAV, AIFF, CAF** read/write with size patching; byte and packet doors | compressed formats, unknown containers, FSRef doors (not declared, on purpose) |
@@ -76,7 +77,8 @@ framework directory of its own in that SDK. **Expect the diff to rewrite the scr
 | `AudioToolbox/AUParameters.h` **(new)** | `AUParameterNode`/`Group`/`Tree`/`Parameter`, the three observer blocks, the implementor observer/provider pair, the `(Factory)` creation doors | `NSSecureCoding` (not claimed); the group-template doors (not declared) |
 | `AudioToolbox/AUAudioUnit.h` **(new)** | `AUAudioUnit` (+ `AUAudioInputOutputUnit` category), `AUAudioUnitBus`, `AUAudioUnitBusArray`, `AUAudioUnitPreset`, the block vocabulary, `-renderBlock`, `-parameterTree`, `-startHardware`/`-stopHardware`, `-allocateRenderResources` | out-of-process instantiation (answers with an error), MIDI, presets/state, `AUAudioUnitFactory` and app extensions (not declared) |
 
-Measured, as of the last green run: 44.1 k → 48 k SNR **85.2 dB**; int16 round trip **bit-exact**; WAV/AIFF/CAF
+Measured, as of the last green run: the PipeWire leg of `hal` against this machine's server finds **3 sinks**,
+puts the default first, and pulls **24 576 frames of a 0.5 tone in 512 ms**; 44.1 k → 48 k SNR **85.2 dB**; int16 round trip **bit-exact**; WAV/AIFF/CAF
 round trips `memcmp`-exact; the null backend renders **12 000 frames in 250 ms** (±20% band); two io procs
 0.25 + 0.125 mix to **0.375**; a queue, a unit and a graph each reach the device at the value they were given;
 mute mixes **0.0**; through AUv3, two buses at volumes 1.0 and 0.25 mix **0.28125**, and a tree write lands in
@@ -109,9 +111,14 @@ Through the federation: `"$HOME/.agents/skills/agora-desktop/scripts/agora-build
 (both scripts already pass `-DCMAKE_OBJC_COMPILER`).
 
 - `-DBUILD_TESTING=OFF` builds no test target at all (what the release driver passes).
-- `-DAGORA_AUDIO_WITH_ALSA=OFF` drops the ALSA backend; the HAL falls back to the null device.
+- `-DAGORA_AUDIO_WITH_ALSA=OFF` / `-DAGORA_AUDIO_WITH_PIPEWIRE=OFF` drop a backend (both default to `AUTO`); the
+  HAL falls back to the null device.
+- **With no `AGORA_AUDIO_DRIVER`, a client gets PipeWire if its server answers and `null` if not** — so on this
+  desktop a beep is audible and in a container it is silent, without a variable being set. ALSA is *not* in that
+  chain (see §7.1).
 - The ALSA leg runs the same `hal` suite against ALSA's `null` PCM (`hal-alsa`); it skips only the pacing
-  assertion.
+  assertion. The PipeWire leg (`hal-pipewire`) runs it against the live server, skips pacing *and* the numbers
+  the server chooses (rate, quantum, channel count), and **exits 77 = SKIP** when no server is reachable.
 - Suites state their backend in code (`fn_agora_audio_set_driver`, `AudioToolbox_internal.h`).
 
 ## 5. Traps already paid for — do not pay twice
@@ -151,22 +158,25 @@ Through the federation: `"$HOME/.agents/skills/agora-desktop/scripts/agora-build
 14. **clang's JSON omits `file` whenever a node repeats the previous node's file.** The ObjC facts read the
     file from the same source-order `walk` the C facts use (indexed by node id), not from a recursive
     `loc`-only descent — that descent finds no file for the children of the first declaration in a header.
-15. **A struct with an interior pointer cannot be returned by value.** The `auv3` suite's `fn_storage` fills
+15. **PipeWire has no `pw_thread_loop_roundtrip`** in 1.4's headers, only `pw_core_sync` + the core's `done`
+    event. The barrier is: hold the loop lock, `sync_seq = pw_core_sync(core, PW_ID_CORE, 0)`, then
+    `pw_thread_loop_wait` until the `done` handler clears it. `pw_thread_loop_wait` **needs the lock held** and
+    returns with it held; events are delivered with it held, which is what makes the signal safe.
+16. **A `struct spa_hook` must outlive the object it is added to**, so it cannot be a compound literal at the
+    `add_listener` call site. It lives in the engine/global struct.
+17. **The registry is asynchronous and `AudioObjectGetPropertyData` is not.** Connect once, two round trips, then
+    **remove both listeners** (`spa_hook_remove`, safe on a zeroed hook) so the device table cannot grow while a
+    client is reading it. A sink that appears later is invisible until the process restarts — a documented
+    limitation, not an event loop.
+18. **`default.audio.sink` is JSON** (`{"name":"…"}`) and `spa_json` is a cursor: reading a key without
+    consuming its value desynchronises every pair after it. Read key, then `spa_json_next`, then parse.
+19. **A struct with an interior pointer cannot be returned by value.** The `auv3` suite's `fn_storage` fills
     a `render_storage` **in place**; returning one would leave `mBuffers[0].mData` pointing at the samples of
     a dead stack frame, and the render would write to nothing while the test read zeros.
 
 ## 6. Next work, in the order the plan argues for
 
-### (a) PipeWire backend
-
-The seam is already there: `agora_driver` in `AudioToolbox_internal.h` (describe devices, start, stop) and
-`fn_agora_device_render`. A PipeWire driver describes the registry's devices, opens a stream in its process
-callback and calls `fn_agora_device_render`. Add `-DAGORA_AUDIO_WITH_PIPEWIRE`, the `libpipewire-0.3`
-pkg-config name (not `pipewire-0.3`), a `hal-pipewire` test leg against a live server, and
-`AGORA_AUDIO_DRIVER=pipewire`. This machine has PipeWire 1.4.2 running with four playback devices, so it is
-measurable.
-
-### (b) `libagora-app`'s remaining audio TODOs
+### (a) `libagora-app`'s remaining audio TODOs
 
 - **A suite for `NSSound`** (it has none): `-duration`, `-isPlaying` after `-play`, `-loops` re-enqueue,
   `-stop`, `+soundNamed:`, `NSSoundDelegate`. Follow the census-edit rule in §5.9.
@@ -174,7 +184,7 @@ measurable.
 - `NSButtonCell.m` still excludes `_sound` from archiving "because this tier does not ship `NSSound`".
 - `COCOA-10.11-SURFACE-PLAN.md` A5: the `NSSound` row says "refused or adapted"; it is implemented now.
 
-### (c) Smaller, in the plan's own order
+### (b) Smaller, in the plan's own order
 
 - `sndio` backend for the BSDs (`AudioHardware-sndio.c`), labelled **written, not measured** until a BSD run.
 - `CoreMIDI` stays out of this component; a `libagora-midi` if one appears.
@@ -185,12 +195,17 @@ measurable.
 
 ## 7. Open decisions
 
-1. **`AUAudioUnitBus.format` vs `AVAudioFormat`.** Settled the only way it can be without AVFoundation: a bus
+1. **Which backend is chosen with no `AGORA_AUDIO_DRIVER`.** Today: PipeWire if a server answers, else `null`;
+   ALSA is opt-in. The rejected alternative was PipeWire → ALSA → `null`, which sounds better on a machine with
+   a card but no server — but ALSA describes a device before opening one, so the HAL would report a device and
+   then fail at `AudioDeviceStart`. If the desktop ever wants that chain, the ALSA driver needs a real probe
+   (open and close a PCM in `device_count`), which is a change in `AudioHardware-alsa.c`, not in the HAL.
+2. **`AUAudioUnitBus.format` vs `AVAudioFormat`.** Settled the only way it can be without AVFoundation: a bus
    carries an `AudioStreamBasicDescription`. If `libagora-avfoundation` ever appears, this is the header to
    revisit — and the `auv3` suite is where the change will show.
-2. **Volume on the device vs on the queue/unit**: both exist and multiply today. Apple's HAL volume is per
+3. **Volume on the device vs on the queue/unit**: both exist and multiply today. Apple's HAL volume is per
    device; this is consistent, but worth stating in the README when the next audio door lands.
-3. **`AudioServices` one-queue reuse**: a second alert restarts the queue. If an app needs overlapping system
+4. **`AudioServices` one-queue reuse**: a second alert restarts the queue. If an app needs overlapping system
    sounds, that is the place to look.
-4. **Where `AUDIO-PLAN.md` lives long-term**: it is committed at the workspace root; the component's README has
+5. **Where `AUDIO-PLAN.md` lives long-term**: it is committed at the workspace root; the component's README has
    taken over the current-state job. Phase 5 is closed now, so the plan can be folded into the component.

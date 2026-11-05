@@ -62,7 +62,7 @@ framework directory of its own in that SDK. **Expect the diff to rewrite the scr
 |---|---|---|
 | `CoreAudio/CoreAudioTypes.h` | the structures, time stamps, flag vocabulary, status codes, `AudioChannelLayout`/`AudioBufferList` variable-length traps | the full constant tables (the manifest holds them) |
 | `CoreAudio/HostTime.h` | `clock_gettime(CLOCK_MONOTONIC)` scaled to 1e9 ticks/s; conversions invert | — |
-| `CoreAudio/AudioHardware*.h` | the object model: 5 property functions, listeners (proc **and** block, wildcards), io procs, the in-process mixer, volume/mute/clock; **three backends** (`null` always, ALSA when `pkg-config alsa`, PipeWire when `libpipewire-0.3`) and sndio where libsndio is; **an input side** — a capture stream per device, the cycle's input handed to every io proc as `inInputData` (one buffer per cycle, read-only, because it is the microphone, **and with its own frame count**), the null device **hears a ramp** so capture is testable with no hardware, **ALSA records from the same PCM it plays to** (a separate capture handle, read before the mixer, optional per PCM and rate), and **PipeWire records from the session's default source** beside the sink it plays to, and **sndio records from its own second handle** (written, not measured here) | `kAudioDevicePropertyBufferFrameSize` writes, deprecated doors are *translated*, not refused; **sndio opens no capture stream yet**, so its device describes `has_input = false` |
+| `CoreAudio/AudioHardware*.h` | the object model: 5 property functions, listeners (proc **and** block, wildcards), io procs, the in-process mixer, volume/mute/clock; **three backends** (`null` always, ALSA when `pkg-config alsa`, PipeWire when `libpipewire-0.3`) and sndio where libsndio is; **an input side, opened on demand** (a driver opens its capture side only when a client asked: `start(id, want_input)`, set by `fn_agora_device_set_input_wanted` from an input queue, with one restart if the device is already running for playback) — a capture stream per device, the cycle's input handed to every io proc as `inInputData` (one buffer per cycle, read-only, because it is the microphone, **and with its own frame count**), the null device **hears a ramp** so capture is testable with no hardware, **ALSA records from the same PCM it plays to** (a separate capture handle, read before the mixer, optional per PCM and rate), and **PipeWire records from the session's default source** beside the sink it plays to, and **sndio records from its own second handle** (written, not measured here) | `kAudioDevicePropertyBufferFrameSize` writes, deprecated doors are *translated*, not refused; **sndio opens no capture stream yet**, so its device describes `has_input = false` |
 | `AudioToolbox/AudioFormat.h` | `FormatInfo`, `NumberOfChannelsForLayout`, `ChannelLayoutForTag`, `ValidateChannelLayout` | every other selector (`'prop'`) |
 | `AudioToolbox/AudioConverter.h` | both calling models, 14 properties, format + rate (windowed-sinc, 32 taps) | non-PCM (`'fmt?'`), `ConvertBuffer` across a rate change |
 | `AudioToolbox/AudioFile.h` | **WAV, AIFF, CAF** read/write with size patching; byte and packet doors; **MPEG-1/2/2.5 Layer III read** — a packet table walked from the stream's own sync words, ID3v2 skipped by its size field, and `kAudioFilePropertyPacketTableInfo` (`'pnfo'`) answering the encoder's gapless trim | writing MPEG (`kAudioFileUnsupportedFileTypeError`); every other compressed format and unknown container; `PacketToFrame`/`FrameToPacket` (not declared); FSRef doors (not declared, on purpose) |
@@ -83,6 +83,15 @@ round trips `memcmp`-exact; the null backend renders **12 000 frames in 250 ms**
 0.25 + 0.125 mix to **0.375**; a queue, a unit and a graph each reach the device at the value they were given;
 mute mixes **0.0**; through AUv3, two buses at volumes 1.0 and 0.25 mix **0.28125**, and a tree write lands in
 `AudioUnitGetParameter`.
+
+**A capture stream that opens on every device start is a microphone held open for a player.** It was found in a
+session, not by a test: every `AudioDeviceStart` — including the one an output queue makes to play a beep — opened
+PipeWire's `agora-audio-input` node, so a player published a microphone, woke it, and on some setups asked the person at
+the machine for permission. The seam now takes the reason: `start(id, want_input)` with one HAL flag set by the client
+that wants input, and a single stop/start when a running device gains the other direction (pressing record during a
+sound). MEASURED both ways in this session: a playback queue publishes **0** `agora-audio-input` nodes; an input queue
+publishes one. The `hal` suite asserts both halves — silence without a reason, a cycle with one — on all three legs
+that run here.
 
 **PipeWire's two directions are negotiated separately, and the seam had to learn it.** In this machine's session the
 capture stream is given **1024-frame** quanta while the playback stream's buffers are **4096**; a driver that bent one
@@ -331,6 +340,11 @@ Through the federation: `"$HOME/.agents/skills/agora-desktop/scripts/agora-build
     `inInputData == NULL` on every cycle while the capture node sat in the graph, running. The seam now carries
     `capture_frames` beside `frames`, so the input keeps its own length; bending one to the other would have dropped
     three quarters of the audio or claimed samples nobody recorded.
+44. **A session server publishes a node per stream, so "open the capture side with the device" is a visible act.** One
+    `AudioDeviceStart` by a playback client opened `agora-audio-input` on every start — a microphone held open (and
+    woken) for the whole of a beep. A device is started *for a reason*, so the driver seam carries the reason now:
+    `start(id, want_input)`, one HAL flag, set by the client that wants input, plus one restart when a running device
+    gains the other direction. The rule is measurable as a node count: **0** during playback, **1** while recording.
 
 ## 6. Next work, in the order the plan argues for
 

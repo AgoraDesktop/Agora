@@ -1,4 +1,4 @@
-# AUDIO-HANDOFF — `libagora-audio`, state at the end of phase 5 and phase 3
+# AUDIO-HANDOFF — `libagora-audio`, state at the end of phases 3, 5 and 6a
 
 For a fresh session picking this up. Read this, then `AUDIO-PLAN.md` (the design record) and
 `libagora-audio/README.md` (the component's own contract). This file is the *state*; those are the *reasons*.
@@ -7,19 +7,18 @@ For a fresh session picking this up. Read this, then `AUDIO-PLAN.md` (the design
 
 | repository | HEAD | pushed | state |
 |---|---|---|---|
-| `libagora-audio` | see `git log -1` | no | clean; **16/16 tests** (15 run, `hal-sndio` skips), 0 warnings on a clean configure |
-| `libagora-app` | `44eee74` | yes, `origin/main` | clean; **215/215 tests**; built against the new prefix |
-| `release` | `66dba68` | no — 2 commits ahead | unchanged by phase 5b |
-| workspace (parent) | `069dfa2` | no | `libagora-audio` gitlink will be behind again once this phase is committed |
+| `libagora-audio` | `8f0af85` | yes, `origin/main` | clean; **16/16 tests** (15 run, `hal-sndio` skips), 0 warnings on a clean configure |
+| `libagora-app` | `2b2a954` | yes, `origin/main` | clean; **216/216 tests**, including the new `appkit-nssound` |
+| `release` | `66dba68` | yes, `origin/main` | `libagora-audio` is in `components.conf` above Foundation |
+| workspace (parent) | see `git log -1` | yes | every component it pins is pushed, **except `viewer`** — that repository has no remote at all, so its pin is local-only and a fresh clone cannot resolve it |
 
-**First action for the next session:** commit `libagora-audio`, then
-`git -C ~/Development/Agora add libagora-audio` before the next parent commit, and advance the `release`
-submodule pin when that repository is pushed. `git submodule status` must show no `-` for the components in
-`components.conf` (`forge` and `libagora-webview` are currently uninitialised and are not in it).
+**First action for the next session:** `git submodule status` and check that nothing shows `-` for a component
+in `components.conf` (`libagora-webview` is uninitialised and is not in it). Then pick up `## 6` below.
 
 `libagora-audio` is a submodule, sits **after `libagora-base`** in `release/components.conf`, and links
 `Foundation::Foundation` **PUBLIC** — which is the same reason it sits there, and only makes it more true.
-ALSA and PipeWire are **PRIVATE** links behind `AGORA_WITH_ALSA` / `AGORA_WITH_PIPEWIRE`, both `AUTO`.
+ALSA, PipeWire and sndio are **PRIVATE** links behind `AGORA_WITH_ALSA` / `AGORA_WITH_PIPEWIRE` /
+`AGORA_WITH_SNDIO`, all `AUTO`.
 
 ## 2. The contract: macOS 10.12 is the specification
 

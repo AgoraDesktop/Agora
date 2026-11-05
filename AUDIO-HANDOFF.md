@@ -62,7 +62,7 @@ framework directory of its own in that SDK. **Expect the diff to rewrite the scr
 |---|---|---|
 | `CoreAudio/CoreAudioTypes.h` | the structures, time stamps, flag vocabulary, status codes, `AudioChannelLayout`/`AudioBufferList` variable-length traps | the full constant tables (the manifest holds them) |
 | `CoreAudio/HostTime.h` | `clock_gettime(CLOCK_MONOTONIC)` scaled to 1e9 ticks/s; conversions invert | — |
-| `CoreAudio/AudioHardware*.h` | the object model: 5 property functions, listeners (proc **and** block, wildcards), io procs, the in-process mixer, volume/mute/clock; **three backends** (`null` always, ALSA when `pkg-config alsa`, PipeWire when `libpipewire-0.3`) and sndio where libsndio is; **an input side** — a capture stream per device, the cycle's input handed to every io proc as `inInputData` (one buffer per cycle, read-only, because it is the microphone, **and with its own frame count**), the null device **hears a ramp** so capture is testable with no hardware, **ALSA records from the same PCM it plays to** (a separate capture handle, read before the mixer, optional per PCM and rate), and **PipeWire records from the session's default source** beside the sink it plays to | `kAudioDevicePropertyBufferFrameSize` writes, deprecated doors are *translated*, not refused; **sndio opens no capture stream yet**, so its device describes `has_input = false` |
+| `CoreAudio/AudioHardware*.h` | the object model: 5 property functions, listeners (proc **and** block, wildcards), io procs, the in-process mixer, volume/mute/clock; **three backends** (`null` always, ALSA when `pkg-config alsa`, PipeWire when `libpipewire-0.3`) and sndio where libsndio is; **an input side** — a capture stream per device, the cycle's input handed to every io proc as `inInputData` (one buffer per cycle, read-only, because it is the microphone, **and with its own frame count**), the null device **hears a ramp** so capture is testable with no hardware, **ALSA records from the same PCM it plays to** (a separate capture handle, read before the mixer, optional per PCM and rate), and **PipeWire records from the session's default source** beside the sink it plays to, and **sndio records from its own second handle** (written, not measured here) | `kAudioDevicePropertyBufferFrameSize` writes, deprecated doors are *translated*, not refused; **sndio opens no capture stream yet**, so its device describes `has_input = false` |
 | `AudioToolbox/AudioFormat.h` | `FormatInfo`, `NumberOfChannelsForLayout`, `ChannelLayoutForTag`, `ValidateChannelLayout` | every other selector (`'prop'`) |
 | `AudioToolbox/AudioConverter.h` | both calling models, 14 properties, format + rate (windowed-sinc, 32 taps) | non-PCM (`'fmt?'`), `ConvertBuffer` across a rate change |
 | `AudioToolbox/AudioFile.h` | **WAV, AIFF, CAF** read/write with size patching; byte and packet doors; **MPEG-1/2/2.5 Layer III read** — a packet table walked from the stream's own sync words, ID3v2 skipped by its size field, and `kAudioFilePropertyPacketTableInfo` (`'pnfo'`) answering the encoder's gapless trim | writing MPEG (`kAudioFileUnsupportedFileTypeError`); every other compressed format and unknown container; `PacketToFrame`/`FrameToPacket` (not declared); FSRef doors (not declared, on purpose) |
@@ -422,8 +422,17 @@ refused on purpose (a decoder is a stream, a converter is a ring), and that deci
   the engine opens a second `pw_stream` with `PW_DIRECTION_INPUT` that autoconnects to the session's default source at
   the device's format. The two callbacks run on one thread loop: the input leaves its quantum in the engine, the
   playback callback consumes it once. The lesson is §5.43 — the two quanta differ (1024 against 4096 here) and the seam
-  now carries the input's own length. **What is left of this phase is sndio's `sio_open(SIO_REC)`**, which only has to
-  fill the buffer the seam already takes.
+  now carries the input's own length.
+- **sndio's capture half** — **written, compiled, and not measured here**, like the rest of that backend:
+  `sio_open(name, SIO_REC, 0)` is a second handle (sndio has no duplex mode), configured with `rchan` where playback uses
+  `pchan`, read before the mixer is asked for output, and converted from 32-bit signed back to float32 because
+  `SIO_PCM` has no float. The probe asks the server the same question for both directions, so `has_input` is a real
+  answer rather than a guess.
+  **A private `sndiod` was tried here and could not open a device** — worth recording so nobody repeats it: the binary
+  is in Debian's `sndiod` package (not with `libsndio-dev`), `dpkg -x` runs it without root, and it starts — but its
+  `snd` backend answers `snd0: no control device` / `snd0: failed to open audio device` for `-f null`, `-f hw:2` and
+  `-f snd/2` alike, so every client's `sio_setpar` fails. The leg therefore stays a skip (77), and a BSD run is still
+  what would turn this driver's label over — now including the recording side.
 - ~~Processing taps~~ — **done**, and the prediction in the last handoff was right about where the work was: the
   obstacle was the render path, not the doors. What it cost:
   1. **The source is staged before it is converted.** `fn_stage_pull` gathers the enqueued buffers into a short FIFO in

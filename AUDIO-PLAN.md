@@ -144,9 +144,14 @@ server composites, it does not drive a display.
 
 - **No `AVFoundation`** (`AVAudioPlayer`, `AVAudioEngine`, `AVAudioSession`). A media framework above this one
   when it is wanted — `libagora-avfoundation`. Out of Core Audio proper.
-- **No compressed codecs** (MP3, AAC, FLAC, ALAC, Opus): nothing on this machine provides a permissively
-  licensed decoder as a *system* library and vendoring code is not allowed. `AudioFileOpenURL` and
-  `AudioFileStreamOpen` return the documented unsupported-format status, and the suite measures that.
+- **No compressed codecs except MPEG Layer III** (AAC, FLAC, ALAC, Opus are still refused by name).
+  **This bullet used to say "no compressed codecs at all", on the grounds that nothing on this machine
+  provided a permissively licensed decoder as a system library.** That stopped being true when
+  `libmpg123-dev` (LGPL-2.1) was installed, and LGPL is acceptable in an LGPL library where GPL is not:
+  `libmad` and `libsidplayfp` remain unusable HERE for exactly that reason and belong in a GPL leaf instead.
+  What arrived is the shape §2 describes — `AudioFile` walks the frame headers into a packet table,
+  `ExtAudioFile` decodes behind the client's format — and `AudioFileStream` still refuses compressed input,
+  which is the next piece of this phase rather than a regression.
 - **No effects or synthesis beyond the alert tone.** No reverb, no EQ, no `AUSampler`, no DLS, no speech.
   `NSBeep` needs one sound, and it is **generated** (a short decaying tone) rather than vendored, so the
   installation carries no unlicensed audio.

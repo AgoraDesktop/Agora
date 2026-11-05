@@ -17,6 +17,12 @@ that makes it usable here. Each such tree carries its upstream licence file in p
 | `libagora-lcms2` | [lcms2](https://github.com/mm2/Little-CMS) | see its `PROVENANCE.md` | **MIT**, © 2023 Marti Maria Saguer |
 | `libagora-tsm` | [kmscon/libtsm](https://github.com/kmscon/libtsm) | `c0733a5` — `vte: Fix XTQMODKEYS interpreted has SGR 4 underline`, 2026-10-15 (4.8.0) | **MIT**, © David Herrmann and contributors |
 
+> **One third-party library is NOT in the tables above, because nothing is vendored.** `libmpg123` (MPEG audio
+> decoding, **LGPL-2.1**) is taken as a *system* library by `libagora-audio` — `pkg-config libmpg123`, linked PRIVATE
+> behind `-DAGORA_AUDIO_WITH_MPG123`, the same way ICU, OpenSSL, libpng and the Wayland stack are taken. No mpg123
+> source is in this tree, and a build without it compiles and refuses an MP3 by name. It is recorded here because a
+> new third-party dependency is a fact about the installation, not because a copy travelled with it.
+
 Each has a `PROVENANCE.md` recording exactly what was copied, what was dropped, and
 what Agora changed. `libagora-objc` is the only place in the tree where the change is a
 source edit (`arc.mm`, a small-object retain-count crash fix).

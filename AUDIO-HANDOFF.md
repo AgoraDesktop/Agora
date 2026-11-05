@@ -1,4 +1,4 @@
-# AUDIO-HANDOFF — `libagora-audio`, state at the end of phases 3, 5 and 6a
+# AUDIO-HANDOFF — `libagora-audio`, state at the end of phases 3, 5, 6a and 7
 
 For a fresh session picking this up. Read this, then `AUDIO-PLAN.md` (the design record) and
 `libagora-audio/README.md` (the component's own contract). This file is the *state*; those are the *reasons*.
@@ -7,7 +7,7 @@ For a fresh session picking this up. Read this, then `AUDIO-PLAN.md` (the design
 
 | repository | HEAD | pushed | state |
 |---|---|---|---|
-| `libagora-audio` | `8f0af85` | yes, `origin/main` | clean; **16/16 tests** (15 run, `hal-sndio` skips), 0 warnings on a clean configure |
+| `libagora-audio` | see `git log -1` | yes, `origin/main` | clean; **17/17 tests** (16 run, `hal-sndio` skips), 0 warnings on a clean configure, and the same suite green with `-DAGORA_AUDIO_WITH_MPG123=OFF` (where `mp3` reports a skip) |
 | `libagora-app` | `2b2a954` | yes, `origin/main` | clean; **216/216 tests**, including the new `appkit-nssound` |
 | `release` | `66dba68` | yes, `origin/main` | `libagora-audio` is in `components.conf` above Foundation |
 | workspace (parent) | see `git log -1` | yes | every component it pins is pushed, **except `viewer`** — that repository has no remote at all, so its pin is local-only and a fresh clone cannot resolve it |
@@ -18,7 +18,8 @@ in `components.conf` (`libagora-webview` is uninitialised and is not in it). The
 `libagora-audio` is a submodule, sits **after `libagora-base`** in `release/components.conf`, and links
 `Foundation::Foundation` **PUBLIC** — which is the same reason it sits there, and only makes it more true.
 ALSA, PipeWire and sndio are **PRIVATE** links behind `AGORA_WITH_ALSA` / `AGORA_WITH_PIPEWIRE` /
-`AGORA_WITH_SNDIO`, all `AUTO`.
+`AGORA_WITH_SNDIO`, all `AUTO`; the MPEG audio decoder is a fourth, `AGORA_AUDIO_WITH_MPG123`, and it is the one
+that changes what the library can *play* rather than only where it plays it.
 
 ## 2. The contract: macOS 10.12 is the specification
 
@@ -64,9 +65,9 @@ framework directory of its own in that SDK. **Expect the diff to rewrite the scr
 | `CoreAudio/AudioHardware*.h` | the object model: 5 property functions, listeners (proc **and** block, wildcards), io procs, the in-process mixer, volume/mute/clock; **three backends** (`null` always, ALSA when `pkg-config alsa`, PipeWire when `libpipewire-0.3`) | `kAudioDevicePropertyBufferFrameSize` writes, deprecated doors are *translated*, not refused |
 | `AudioToolbox/AudioFormat.h` | `FormatInfo`, `NumberOfChannelsForLayout`, `ChannelLayoutForTag`, `ValidateChannelLayout` | every other selector (`'prop'`) |
 | `AudioToolbox/AudioConverter.h` | both calling models, 14 properties, format + rate (windowed-sinc, 32 taps) | non-PCM (`'fmt?'`), `ConvertBuffer` across a rate change |
-| `AudioToolbox/AudioFile.h` | **WAV, AIFF, CAF** read/write with size patching; byte and packet doors | compressed formats, unknown containers, FSRef doors (not declared, on purpose) |
-| `AudioToolbox/ExtendedAudioFile.h` | open/create/wrap, read/write/write-async, seek/tell, client format | — |
-| `AudioToolbox/AudioFileStream.h` | incremental parse of the same three containers, listener + packet callbacks | `AudioFileStreamSeek` (`'nope'`) |
+| `AudioToolbox/AudioFile.h` | **WAV, AIFF, CAF** read/write with size patching; byte and packet doors; **MPEG-1/2/2.5 Layer III read** — a packet table walked from the stream's own sync words, ID3v2 skipped by its size field | writing MPEG (`kAudioFileUnsupportedFileTypeError`); every other compressed format and unknown container; FSRef doors (not declared, on purpose) |
+| `AudioToolbox/ExtendedAudioFile.h` | open/create/wrap, read/write/write-async, seek/tell, client format; **decodes MPEG in front of the ordinary pipeline**, so the converter above it only ever sees linear PCM; a seek restarts the decoder at the frame that holds the sample asked for | a compressed file in a build with no decoder is refused *at open*, by name |
+| `AudioToolbox/AudioFileStream.h` | incremental parse of the same three PCM containers, listener + packet callbacks | `AudioFileStreamSeek` (`'nope'`); **MPEG, which `AudioFile` now reads** — the next piece of this phase, and `tests/mp3.c` measures the refusal rather than describing it |
 | `AudioToolbox/AudioQueue.h` | output queues: buffers, refilling callback (lock released), volume as a **parameter**, properties | input queues, timelines, taps, offline render |
 | `AudioToolbox/AudioServices.h` | system sounds by URL + the **generated** alert (1.5 kHz decay) | properties (`'pty?'`) |
 | `AudioToolbox/AudioComponent.h` | a registry of **three** built-ins; find/count/describe/copy-name/instance | any fourth thing (no plug-in ABI) |
@@ -82,6 +83,15 @@ round trips `memcmp`-exact; the null backend renders **12 000 frames in 250 ms**
 0.25 + 0.125 mix to **0.375**; a queue, a unit and a graph each reach the device at the value they were given;
 mute mixes **0.0**; through AUv3, two buses at volumes 1.0 and 0.25 mix **0.28125**, and a tree write lands in
 `AudioUnitGetParameter`.
+
+**Phase 7 (`mp3` suite, 56 checks, two `ffmpeg` fixtures generated at configure time):** a 3 s 44.1 kHz stereo
+MPEG-1 tone reports `1152` samples per frame, `0` bytes per packet, and **117 packets**; it decodes to **132 300
+frames** of **132 300** — `ffmpeg`'s own number — at **440 Hz** by zero-crossing count, while the container's own
+count is **134 784**, which is the encoder's padding; a 2 s 22.05 kHz mono MPEG-2 tone reports `576` per frame and
+decodes to **44 100** frames at **330 Hz**; the same stream converted to **48 kHz float32** gives **143 982** frames
+at **440 Hz**; a seek to 1.5 s puts the audio back at **442 Hz** (±0.5%) and a seek to zero re-decodes the first
+4 096 frames **bit-exactly**; and `AudioFileCreateWithURL` for an MP3, `AudioFileStreamParseBytes` on MP3 bytes and a
+100-byte truncation of a valid frame header are each refused **by name**.
 
 ### The three things about AUv3 that are not Apple's
 
@@ -103,7 +113,7 @@ cmake -S libagora-audio -B libagora-audio/build -DCMAKE_C_COMPILER=$C \
       -DCMAKE_OBJC_COMPILER=$C \
       -DCMAKE_PREFIX_PATH=$PWD/build-prefix -DCMAKE_INSTALL_PREFIX=$PWD/build-prefix
 cmake --build libagora-audio/build -j"$(nproc)"
-ctest --test-dir libagora-audio/build --output-on-failure     # 14 tests, ~3 s
+ctest --test-dir libagora-audio/build --output-on-failure     # 17 tests, ~4 s
 ```
 
 Through the federation: `"$HOME/.agents/skills/agora-desktop/scripts/agora-build.sh" --only libagora-audio --test`
@@ -112,6 +122,10 @@ Through the federation: `"$HOME/.agents/skills/agora-desktop/scripts/agora-build
 - `-DBUILD_TESTING=OFF` builds no test target at all (what the release driver passes).
 - `-DAGORA_AUDIO_WITH_ALSA=OFF` / `-DAGORA_AUDIO_WITH_PIPEWIRE=OFF` drop a backend (both default to `AUTO`); the
   HAL falls back to the null device.
+- `-DAGORA_AUDIO_WITH_MPG123=OFF` drops the decoder. The container still reads — `AudioFile` walks frames without
+  mpg123 — and `ExtAudioFileOpenURL` refuses the file at open with `kAudioFileUnsupportedDataFormatError`, which is
+  what the `mp3` suite reports as a skip. **Check both configurations when touching the file doors**: this one is
+  green today because it was tried, not because it is obvious.
 - **With no `AGORA_AUDIO_DRIVER`, a client gets PipeWire if its server answers and `null` if not** — so on this
   desktop a beep is audible and in a container it is silent, without a variable being set. ALSA is *not* in that
   chain (see §7.1).
@@ -175,6 +189,29 @@ Through the federation: `"$HOME/.agents/skills/agora-desktop/scripts/agora-build
 20. **A struct with an interior pointer cannot be returned by value.** The `auv3` suite's `fn_storage` fills
     a `render_storage` **in place**; returning one would leave `mBuffers[0].mData` pointing at the samples of
     a dead stack frame, and the render would write to nothing while the test read zeros.
+21. **`mpg123_read` reports a message and the samples in the same call.** `MPG123_NEED_MORE` (-10) arrived with
+    **290 492 bytes** of decoded audio in the same call; a decoder that branched on the status before taking
+    `done` played 12 288 frames of a three-second file and dropped the rest. **Take the samples first, then read
+    the code.** `MPG123_OUTBLOCK` is a suggestion, not a bound, so the buffer is sized from the caller's own room.
+22. **There is no way to flush a feed-mode mpg123 handle.** `mpg123_feed(m, NULL, 0)` returns `0` and does
+    nothing, and feeding a 128-byte ID3v1 `TAG` block does nothing either (measured on 1.32.10). The last frames
+    appear only as the remaining bytes are fed and read, so "flush at end of file" is not a step — do not add one.
+    The consequence is that **the end of the container is not the end of the audio**, and the read loop must stop
+    on an *empty* refill rather than on `eof`.
+23. **`ExtAudioFileSeek` never set `file_position` and nothing set `input_packet`.** The first made a seek a lie
+    (the position came back, the audio did not move); the second made `fn_refill`'s PCM branch re-read from
+    packet 0 on every refill, which is an infinite loop for any PCM file whose client format differs from the
+    file's — the shape a rate change takes. Both fixed in phase 7; the refill now derives its start from
+    `file_position`, which is the only thing that tracks it.
+24. **`kAudioFileMP3Type` is `'MPG3'`, not `'mp3 '`.** 10.12 spells the three MPEG containers `'MPG1'`, `'MPG2'`,
+    `'MPG3'`; the obvious-looking constant compiles, does not match the manifest's value, and `api-macros` fails.
+    This is exactly the class of mistake the manifest exists for, and it caught one during phase 7.
+25. **libmpg123 is not in `/usr/include` on Debian** (it is under `/usr/include/x86_64-linux-gnu/`), so
+    `pkg-config --cflags libmpg123` is mandatory rather than decoration.
+26. **A `ffmpeg`-generated fixture keeps its own padding apart from the decoder's.** The container counts padded
+    frames; libmpg123 applies the LAME tag's gapless declaration, so the decoded count is the *audio's* length.
+    Asserting "decoded == packets x samples-per-frame" fails by 2.5 frames on a 3 s file and by 3.4 on a 2 s VBR
+    one. Assert the decoded count against the tone's duration and the packet count against it ±5 frames.
 
 ## 6. Next work, in the order the plan argues for
 
@@ -192,6 +229,30 @@ row). Three defects came out of the suite, and one of them was **this library's*
 2. `NSSound`'s second `-play` after a sound *finished* played silence: the queue hands a non-looping buffer back,
    so `_buffer != NULL` never meant "queued" (`_inFlight` now says so).
 3. `+soundNamed:` returned the file's name rather than the name asked for.
+
+### (a2) Phase 7, MPEG Layer III — **done**, and what it cost
+
+`libagora-audio` reads MPEG-1, MPEG-2 and MPEG-2.5 Layer III through `AudioFile` and plays it through
+`ExtAudioFile`, with `libmpg123` as a PRIVATE system dependency. Four things were worth the day they took:
+
+1. **The container is a walk, not a header.** There is no length field, so `fn_mp3_parse` indexes every frame's
+   offset and size once at open (ID3v2 skipped by its own size and the footer flag) and every later read is an
+   index into that table. A VBR file's duration is therefore exact. The walk rejects a frame whose version/rate/
+   channels disagree with the first one, because tag data contains accidental sync words.
+2. **The decoder is not the converter.** MPEG is decoded *behind* `ExtAudioFile`'s staging buffer, so
+   `AudioConverter` still refuses MPEG input (its suite asserts it) and the two facts stop looking like a
+   contradiction.
+3. **The fast path was the bug.** `ExtAudioFileRead` had a "the file's bytes are the client's frames" shortcut
+   for the no-converter case; with a decoder it handed compressed bytes to a client asking for PCM. The condition
+   is now `converter == NULL && decoder == NULL`, and the decoded case copies out of the staging buffer.
+4. **`ExtAudioFileSeek` had never worked.** It returned the new position and moved nothing. It now sets
+   `file_position` (with the rate ratio), restarts the decoder at the frame holding the requested sample, and
+   drops the samples before it inside that frame. A seek to zero is bit-exact; a seek into the middle is
+   frame-accurate, because the encoder's delay lives only in the first frame.
+
+**Next for this phase:** `AudioFileStream` still has no MPEG walker, so a network stream of MP3 is refused there.
+The walker it needs is `fn_mp3_frame_at` — but the incremental door's contract is "report packets as they arrive",
+and MPEG's packet boundaries are only known by walking, which is the design question to answer first.
 
 ### (b) Smaller, in the plan's own order
 
@@ -225,3 +286,11 @@ row). Three defects came out of the suite, and one of them was **this library's*
    sounds, that is the place to look.
 5. **Where `AUDIO-PLAN.md` lives long-term**: it is committed at the workspace root; the component's README has
    taken over the current-state job. Phase 5 is closed now, so the plan can be folded into the component.
+6. **What a compressed file's duration means, and whether to trim it.** `kExtAudioFileProperty_FileLengthFrames`
+   and `kAudioFilePropertyAudioDataPacketCount` report the container's padded frames (117 packets x 1152 on a 3 s
+   file); the decoder produces 132 300 — the audio's real length. Apple's `ExtAudioFile` trims too, so the
+   divergence is deliberate rather than missing, but a client showing a duration gets the padded number. The
+   honest fix is a `kAudioFilePropertyPacketTableInfo`-style trim reported by the file door; nobody needs it yet.
+7. **A second channel mapping.** The queue's `map_channels` handles mono<->stereo because that is a beep's shape.
+   An MP3 that is mono on a stereo device goes through the *queue*, not the converter, so this is still the one
+   place for `N`->`M` when a player needs it.

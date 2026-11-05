@@ -229,9 +229,9 @@ this plan commits to is the implementation, per header family, and the tier:
 | `CoreAudio/CoreAudioTypes.h` (inside `CoreAudio.framework` in 10.12) — `AudioStreamBasicDescription`, `AudioChannelLayout`, `AudioTimeStamp`, `SMPTETime`, the format flags and their macros | CoreAudio | A | 0 |
 | `AudioFormat.h` — `AudioFormatGetProperty`, converter-independent format questions | AudioToolbox | A | 1 |
 | `AudioConverter.h` — `AudioConverterNew`, `AudioConverterFillComplexBuffer`, properties, `Reset` | AudioToolbox | A | 1 |
-| `AudioFile.h` + `CAFFile.h`/`AudioFile` chunk files — open/read/write/packets/properties | AudioToolbox | A (WAV/AIFF/CAF) | 1 |
-| `AudioFileStream.h` — the incremental parser (`ParseBytes`, `ParseData`, properties) | AudioToolbox | A for the three containers | 1 |
-| `ExtendedAudioFile.h` — client-format reads and writes through the converter | AudioToolbox | A | 1 |
+| `AudioFile.h` + `CAFFile.h`/`AudioFile` chunk files — open/read/write/packets/properties | AudioToolbox | A (WAV/AIFF/CAF read and write; MPEG Layer III read, with `PacketTableInfo`) | 1, 7 |
+| `AudioFileStream.h` — the incremental parser (`ParseBytes`, `ParseData`, properties) | AudioToolbox | A for the four containers, MPEG packets described per frame | 1, 7 |
+| `ExtendedAudioFile.h` — client-format reads and writes through the converter | AudioToolbox | A, and the door that decodes MPEG | 1, 7 |
 | `CoreAudio/AudioObject.h` — `AudioObjectID`, `AudioObjectPropertyAddress`, `Get/Set/Has/AddListener` | CoreAudio | A | 2 |
 | `CoreAudio/AudioHardware.h` — devices, streams, IOProcs, `AudioDeviceStart/Stop`, default device, listeners | CoreAudio | A | 2 |
 | `CoreAudio/HostTime.h` — host clock and its conversions | CoreAudio | A | 2 |
@@ -263,7 +263,8 @@ being able to hear anything.
 | `api-layout`, `api-prototypes`, `api-macros`, `api-cxx`, `api-refuse` | §1.2: identity of every size, offset, prototype, macro result, C linkage — and that Tier B refuses with the documented status |
 | `audio-format` | flag decoding and ASBD validation against the header's own rules, including structures that must be refused |
 | `audio-converter` | a 1 kHz sine at 44.1 k → 48 k measured for frequency and SNR (a number, not "it ran"); interleave/de-interleave and i16↔f32 bit-exact |
-| `audio-file` | a known tone written and read back **bit-exactly** as WAV, AIFF and CAF; the format property reports what was written; MP3/FLAC refused with the documented error; the same files through `AudioFileStream`'s incremental parser |
+| `audio-file` | a known tone written and read back **bit-exactly** as WAV, AIFF and CAF; the format property reports what was written; AAC and unknown containers refused with the documented error; the same files through `AudioFileStream`'s incremental parser |
+| `mp3` | the first decoder: two `ffmpeg`-generated tones (MPEG-1 stereo 44.1 kHz, MPEG-2 mono 22.05 kHz) whose packet tables, decoded frame counts, pitch and gapless trim are all measured against what the encoder put in; a 12 kHz rate change, a seek that is bit-exact to zero and frame-accurate in the middle; the incremental door fed one byte, seven bytes and a buffer at a time; and three refusals by name. Skips (77) without `ffmpeg` or with `-DAGORA_AUDIO_WITH_MPG123=OFF` |
 | `audio-hal` | on `null`: an IOProc is called at the device's rate for N frames within a wall-clock tolerance; volume/mute round-trip; a listener fires on default-device change; **two IOProcs sum** (sample values, not a flag) |
 | `audio-queue` | ten enqueued buffers arrive in order and complete; a stop that drains does; an immediate stop does not |
 | `audio-unit` | the default-output unit renders a known oscillator through `AudioUnitRender` at the right frame count; a three-node `AUGraph` produces the same samples as the direct path |
@@ -302,7 +303,8 @@ Each is its own commit in its own repo, in this order, because each is what make
 | **4 — queues, alerts, `NSSound`** | `AudioQueue`, `AudioServices` + the generated alert tone, then the `libagora-app` wiring above | a real beep on the desktop; AppKit's suite still green; `NSSound` plays a WAV in a test |
 | **5 — units, graph, AUv3** | `AudioComponents` registry, `AudioUnit` core, `AudioOutputUnit`, `AUGraph`, `AUAudioUnit`/`AUParameterTree` over it, a demo binary playing a sine through three units | `audio-unit` green; the demo audible on a real device; a process-registered unit is found by `AudioComponentFindNext` and a foreign `AudioComponent` is refused |
 | **6 — music player, then the BSDs** | `MusicPlayer`/`MusicSequence` over the graph and the file layer; `AudioHardware-sndio.c` | a sequence plays; a BSD run turns "written" into "measured" — until then the README says which |
-| **7 — only if an app asks** | `libagora-midi` (CoreMIDI over ALSA rawmidi / PipeWire Midi), `libagora-avfoundation` | their own plans |
+| **7 — the first decoder** | `AudioMpeg.c` (the frame header, the ID3v2 length, the Xing/Info tag), MPEG Layer III through `AudioFile` and `AudioFileStream`, decoding behind `ExtAudioFile`, the gapless trim as `PacketTableInfo`; `libmpg123` as a PRIVATE system link | the `mp3` suite green on both fixtures; the decoded count equal to `ffmpeg`'s; the trim adding up; the incremental door byte-identical to the file door; and the same suite green with the decoder switched off |
+| **8 — only if an app asks** | `libagora-midi` (CoreMIDI over ALSA rawmidi / PipeWire Midi), `libagora-avfoundation` | their own plans |
 
 Rough size, to keep the phases honest: phase 0—1 ≈ 3 k lines of C (of which the doors are declarations), 2—3 ≈
 1.5 k, 4 ≈ 1.0 k, 5 ≈ 2.5 k, 6 ≈ 1.5 k, tests ≈ 2 k. That is several times `libagora-watch` (615 lines of C, 825

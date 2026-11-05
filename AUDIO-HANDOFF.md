@@ -65,8 +65,8 @@ framework directory of its own in that SDK. **Expect the diff to rewrite the scr
 | `CoreAudio/AudioHardware*.h` | the object model: 5 property functions, listeners (proc **and** block, wildcards), io procs, the in-process mixer, volume/mute/clock; **three backends** (`null` always, ALSA when `pkg-config alsa`, PipeWire when `libpipewire-0.3`) | `kAudioDevicePropertyBufferFrameSize` writes, deprecated doors are *translated*, not refused |
 | `AudioToolbox/AudioFormat.h` | `FormatInfo`, `NumberOfChannelsForLayout`, `ChannelLayoutForTag`, `ValidateChannelLayout` | every other selector (`'prop'`) |
 | `AudioToolbox/AudioConverter.h` | both calling models, 14 properties, format + rate (windowed-sinc, 32 taps) | non-PCM (`'fmt?'`), `ConvertBuffer` across a rate change |
-| `AudioToolbox/AudioFile.h` | **WAV, AIFF, CAF** read/write with size patching; byte and packet doors; **MPEG-1/2/2.5 Layer III read** — a packet table walked from the stream's own sync words, ID3v2 skipped by its size field | writing MPEG (`kAudioFileUnsupportedFileTypeError`); every other compressed format and unknown container; FSRef doors (not declared, on purpose) |
-| `AudioToolbox/ExtendedAudioFile.h` | open/create/wrap, read/write/write-async, seek/tell, client format; **decodes MPEG in front of the ordinary pipeline**, so the converter above it only ever sees linear PCM; a seek restarts the decoder at the frame that holds the sample asked for | a compressed file in a build with no decoder is refused *at open*, by name |
+| `AudioToolbox/AudioFile.h` | **WAV, AIFF, CAF** read/write with size patching; byte and packet doors; **MPEG-1/2/2.5 Layer III read** — a packet table walked from the stream's own sync words, ID3v2 skipped by its size field, and `kAudioFilePropertyPacketTableInfo` (`'pnfo'`) answering the encoder's gapless trim | writing MPEG (`kAudioFileUnsupportedFileTypeError`); every other compressed format and unknown container; `PacketToFrame`/`FrameToPacket` (not declared); FSRef doors (not declared, on purpose) |
+| `AudioToolbox/ExtendedAudioFile.h` | open/create/wrap, read/write/write-async, seek/tell, client format; **decodes MPEG in front of the ordinary pipeline**, so the converter above it only ever sees linear PCM; a seek restarts the decoder at the frame that holds the sample asked for; **`FileLengthFrames` reports the trimmed length** when the file declares one | a compressed file in a build with no decoder is refused *at open*, by name |
 | `AudioToolbox/AudioFileStream.h` | incremental parse of the same **four** containers, listener + packet callbacks; an MPEG stream reports every packet with its own description (a PCM stream's have none), skips an ID3v2 tag by its size, resynchronises a byte at a time, and reads the **Xing/Info tag** so its packet and byte counts are exact from the first frame | `AudioFileStreamSeek` for a stream with no table (`'nope'`) — PCM always, MPEG when the first frame is not the tag; the tag's gapless delay/padding is not applied |
 | `AudioToolbox/AudioQueue.h` | output queues: buffers, refilling callback (lock released), volume as a **parameter**, properties | input queues, timelines, taps, offline render |
 | `AudioToolbox/AudioServices.h` | system sounds by URL + the **generated** alert (1.5 kHz decay) | properties (`'pty?'`) |
@@ -98,7 +98,10 @@ and 4 096 bytes at a time, and **every packet it reports is compared with the fi
 `AudioDataByteCount` exactly (117 and 73 350; 80 and 3 642), and `AudioFileStreamSeek` returns packet 0 at byte 44
 exactly and the rest from the tag's hundredths within **130-260 bytes** of the file door's own offset (0.2-0.4% of the
 audio), flagged `OffsetIsEstimated`. A stream entered mid-file — the first frame skipped, so no tag — answers
-`ValueUnknown` and `'nope'`. **100 checks** in the build with the decoder, **72** without it.
+`ValueUnknown` and `'nope'`. The **gapless trim** is measured three ways: the reported length is **132 300** /
+**44 100** — exactly the decoded frames — the table reads `valid 132 300 + priming 1 728 + remainder 756 = 134 784` and
+`44 100 + 1 152 + 828 = 46 080`, which is what the packets hold, and the priming is the tag's frame plus the encoder's
+own 576. **112 checks** in the build with the decoder, **84** without it.
 
 ### The three things about AUv3 that are not Apple's
 
@@ -237,7 +240,16 @@ Through the federation: `"$HOME/.agents/skills/agora-desktop/scripts/agora-build
     packet offset is an interpolation (`packet x 100 / packets`), and the answer is an estimate — 130-260 bytes out on
     this machine's fixtures. Packet 0 is exact because it is where the audio starts, and saying so is better than
     estimating a position the door already knows.
-31. **A `ffmpeg`-generated fixture keeps its own padding apart from the decoder's.** The container counts padded
+31. **The packet-table selector is `'pnfo'`, not `'pkin'`.** The third constant the manifest caught in this component
+    (after `'MPG3'` and the converter's `'acid'`/`'acod'`). A wrong selector does not fail: the door answers
+    `kAudioFileUnsupportedPropertyError` and a client silently shows the untrimmed length.
+32. **The tag's own frame is priming, and the LAME block starts after the quality field.** The gapless arithmetic is
+    `packets x samples = valid + priming + remainder` with priming = one frame + the encoder's delay: LAME's own
+    "delay" alone under-counts by 1 152 samples per file, which is 26 ms of a seek bar that nobody can explain. And
+    the extension block sits after the *quality* field (flag 8), so skipping that flag's four bytes reads the delay
+    and padding one field early — measured: 576 delay + 756 padding on the 3 s fixture, not the values at the
+    wrong offset.
+33. **A `ffmpeg`-generated fixture keeps its own padding apart from the decoder's.** The container counts padded
     frames; libmpg123 applies the LAME tag's gapless declaration, so the decoded count is the *audio's* length.
     Asserting "decoded == packets x samples-per-frame" fails by 2.5 frames on a 3 s file and by 3.4 on a 2 s VBR
     one. Assert the decoded count against the tone's duration and the packet count against it ±5 frames.
@@ -328,11 +340,12 @@ refused on purpose (a decoder is a stream, a converter is a ring), and that deci
    sounds, that is the place to look.
 5. **Where `AUDIO-PLAN.md` lives long-term**: it is committed at the workspace root; the component's README has
    taken over the current-state job. Phase 5 is closed now, so the plan can be folded into the component.
-6. **What a compressed file's duration means, and whether to trim it.** `kExtAudioFileProperty_FileLengthFrames`
-   and `kAudioFilePropertyAudioDataPacketCount` report the container's padded frames (117 packets x 1152 on a 3 s
-   file); the decoder produces 132 300 — the audio's real length. Apple's `ExtAudioFile` trims too, so the
-   divergence is deliberate rather than missing, but a client showing a duration gets the padded number. The
-   honest fix is a `kAudioFilePropertyPacketTableInfo`-style trim reported by the file door; nobody needs it yet.
+6. ~~**What a compressed file's duration means, and whether to trim it.**~~ **Settled.** The file door answers
+   `kAudioFilePropertyPacketTableInfo` (`'pnfo'` — not `'pkin'`) with the encoder's own numbers, and
+   `ExtAudioFile`'s `FileLengthFrames` reports `mNumberValidFrames`. The container's count is still what
+   `AudioDataPacketCount` answers, because every packet can be read whether or not it is audio; the two numbers
+   differ by the trim, and both are reported. A file that declares nothing keeps the untrimmed length: the trim is
+   the encoder's claim, and this door does not invent one.
 7. **A second channel mapping.** The queue's `map_channels` handles mono<->stereo because that is a beep's shape.
    An MP3 that is mono on a stereo device goes through the *queue*, not the converter, so this is still the one
    place for `N`->`M` when a player needs it.

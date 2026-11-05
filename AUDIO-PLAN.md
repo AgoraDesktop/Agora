@@ -150,8 +150,8 @@ server composites, it does not drive a display.
   `libmpg123-dev` (LGPL-2.1) was installed, and LGPL is acceptable in an LGPL library where GPL is not:
   `libmad` and `libsidplayfp` remain unusable HERE for exactly that reason and belong in a GPL leaf instead.
   What arrived is the shape §2 describes — `AudioFile` walks the frame headers into a packet table,
-  `ExtAudioFile` decodes behind the client's format — and `AudioFileStream` still refuses compressed input,
-  which is the next piece of this phase rather than a regression.
+  `ExtAudioFile` decodes behind the client's format, and `AudioFileStream` reports the frames as they arrive,
+  one packet description each, from the same walker (`AudioMpeg.c`).
 - **No effects or synthesis beyond the alert tone.** No reverb, no EQ, no `AUSampler`, no DLS, no speech.
   `NSBeep` needs one sound, and it is **generated** (a short decaying tone) rather than vendored, so the
   installation carries no unlicensed audio.

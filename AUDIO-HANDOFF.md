@@ -67,7 +67,7 @@ framework directory of its own in that SDK. **Expect the diff to rewrite the scr
 | `AudioToolbox/AudioConverter.h` | both calling models, 14 properties, format + rate (windowed-sinc, 32 taps) | non-PCM (`'fmt?'`), `ConvertBuffer` across a rate change |
 | `AudioToolbox/AudioFile.h` | **WAV, AIFF, CAF** read/write with size patching; byte and packet doors; **MPEG-1/2/2.5 Layer III read** — a packet table walked from the stream's own sync words, ID3v2 skipped by its size field | writing MPEG (`kAudioFileUnsupportedFileTypeError`); every other compressed format and unknown container; FSRef doors (not declared, on purpose) |
 | `AudioToolbox/ExtendedAudioFile.h` | open/create/wrap, read/write/write-async, seek/tell, client format; **decodes MPEG in front of the ordinary pipeline**, so the converter above it only ever sees linear PCM; a seek restarts the decoder at the frame that holds the sample asked for | a compressed file in a build with no decoder is refused *at open*, by name |
-| `AudioToolbox/AudioFileStream.h` | incremental parse of the same three PCM containers, listener + packet callbacks | `AudioFileStreamSeek` (`'nope'`); **MPEG, which `AudioFile` now reads** — the next piece of this phase, and `tests/mp3.c` measures the refusal rather than describing it |
+| `AudioToolbox/AudioFileStream.h` | incremental parse of the same **four** containers, listener + packet callbacks; an MPEG stream reports every packet with its own description (a PCM stream's have none), skips an ID3v2 tag by its size and resynchronises one byte at a time | `AudioFileStreamSeek` (`'nope'`); no Xing/LAME header, so a stream's packet count is `ValueUnknown` while the file door's is exact |
 | `AudioToolbox/AudioQueue.h` | output queues: buffers, refilling callback (lock released), volume as a **parameter**, properties | input queues, timelines, taps, offline render |
 | `AudioToolbox/AudioServices.h` | system sounds by URL + the **generated** alert (1.5 kHz decay) | properties (`'pty?'`) |
 | `AudioToolbox/AudioComponent.h` | a registry of **three** built-ins; find/count/describe/copy-name/instance | any fourth thing (no plug-in ABI) |
@@ -90,8 +90,11 @@ frames** of **132 300** — `ffmpeg`'s own number — at **440 Hz** by zero-cros
 count is **134 784**, which is the encoder's padding; a 2 s 22.05 kHz mono MPEG-2 tone reports `576` per frame and
 decodes to **44 100** frames at **330 Hz**; the same stream converted to **48 kHz float32** gives **143 982** frames
 at **440 Hz**; a seek to 1.5 s puts the audio back at **442 Hz** (±0.5%) and a seek to zero re-decodes the first
-4 096 frames **bit-exactly**; and `AudioFileCreateWithURL` for an MP3, `AudioFileStreamParseBytes` on MP3 bytes and a
-100-byte truncation of a valid frame header are each refused **by name**.
+4 096 frames **bit-exactly**; and `AudioFileCreateWithURL` for an MP3 and a 100-byte truncation of a valid frame
+header are each refused **by name**. The incremental door is fed the same files a byte at a time, seven bytes at a time
+and 4 096 bytes at a time, and **every packet it reports is compared with the file door's, byte for byte**: 117/117 and
+80/80, the data offset at 44 (ffmpeg's own ID3v2 tag) and at 254 behind a synthetic 210-byte tag whose filler is
+`0xFF`. 78 checks in the build with the decoder, 50 without it.
 
 ### The three things about AUv3 that are not Apple's
 
@@ -208,7 +211,16 @@ Through the federation: `"$HOME/.agents/skills/agora-desktop/scripts/agora-build
     This is exactly the class of mistake the manifest exists for, and it caught one during phase 7.
 25. **libmpg123 is not in `/usr/include` on Debian** (it is under `/usr/include/x86_64-linux-gnu/`), so
     `pkg-config --cflags libmpg123` is mandatory rather than decoration.
-26. **A `ffmpeg`-generated fixture keeps its own padding apart from the decoder's.** The container counts padded
+26. **A validator that requires its output pointer silently becomes a one-byte dropper.** `fn_mpeg_frame_header`
+    first refused `out == NULL`; the stream's resynchroniser asks only "does a frame start here", so every such call
+    answered no and the emitter ate the buffer one byte at a time — a file that decoded perfectly through the file door
+    reported **zero** packets through the stream door. A predicate takes a NULL out, and `tests/mp3.c` feeds a fixture
+    one byte at a time for exactly this class of bug.
+27. **"I need more bytes yet" is not an error from `AudioFileStreamParseBytes`.** It returned
+    `kAudioFileStreamError_DataUnavailable` until the first four bytes had arrived, which is right for a property and
+    wrong for a parser: every caller feeding a socket breaks out of its loop on a non-zero status, so a stream
+    delivered one byte at a time stopped at the first call. `0` and a buffered byte is the honest answer.
+28. **A `ffmpeg`-generated fixture keeps its own padding apart from the decoder's.** The container counts padded
     frames; libmpg123 applies the LAME tag's gapless declaration, so the decoded count is the *audio's* length.
     Asserting "decoded == packets x samples-per-frame" fails by 2.5 frames on a 3 s file and by 3.4 on a 2 s VBR
     one. Assert the decoded count against the tone's duration and the packet count against it ±5 frames.
@@ -250,9 +262,16 @@ row). Three defects came out of the suite, and one of them was **this library's*
    drops the samples before it inside that frame. A seek to zero is bit-exact; a seek into the middle is
    frame-accurate, because the encoder's delay lives only in the first frame.
 
-**Next for this phase:** `AudioFileStream` still has no MPEG walker, so a network stream of MP3 is refused there.
-The walker it needs is `fn_mp3_frame_at` — but the incremental door's contract is "report packets as they arrive",
-and MPEG's packet boundaries are only known by walking, which is the design question to answer first.
+**The incremental door came after it, and it was the cheap part.** `fn_mp3_frame_at` became `fn_mpeg_frame_header` in
+a file of its own (`AudioMpeg.c`), because two doors now walk the same four-byte header and a second copy of the bitrate
+tables is exactly the drift the manifest exists to prevent. What the stream door needed was a state machine, not a
+parser: skip the tag by its size, resynchronise a byte at a time, and buffer the frame that straddles a call boundary.
+`fn_emit` still holds the PCM path, unchanged and unaware of either.
+
+**Next for this phase:** a Xing/LAME header would give a stream a packet count — and so a duration — before the file has
+been read to its end, which is the one property the stream door answers with `ValueUnknown` and the file door answers
+exactly. `AudioConverter`'s own MPEG support is *not* next: it is refused on purpose (a decoder is a stream, a converter
+is a ring), and that decision is now measured in two places.
 
 ### (b) Smaller, in the plan's own order
 

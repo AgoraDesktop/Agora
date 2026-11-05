@@ -632,7 +632,8 @@ the ingest are Apple's.
   preview, custom icon (F2), colour labels in the metadata store.
 - **Test:** `get_info.m` for the multiple-selection summing (size) and the mixed-value placeholder; custom-icon
   round-trip.
-- **Part done (2026-11-04):** `WSGetInfoWindowController` + `WSItemInfo` implement the single and multiple inspector in
+- **Part done (2026-11-04):** `WSGetInfoWindowController` + `WSItemInfo` implement the single and multiple inspector (a selection opens ONE WINDOW
+  PER ITEM, cascaded; the collective shape stays in `WSItemInfo` and nothing opens it) in
   six collapsible sections (General, More Info, Name & Extension, Comments, Preview, Sharing & Permissions), opened from
   the desktop's and the file window's `getInfo:` commands and reused per subject. Three of the sections write: the name
   field renames through `WSFileOperations`, **Locked** is the owner's write bit (this kernel has no chflags user flag),
@@ -644,7 +645,7 @@ the ingest are Apple's.
   (`WSItemInfo +cg_measurePaths:`) with packages walked like the directories they are, and the window says
   "Calculating…" until the answer arrives. Its Sharing & Permissions rows are editable — a menu of the
   four privileges, applied as a chmod that keeps every other bit. **MEASURED:**
-  `workspace-get-info` (**96 checks**); 21 of 22 workspace suites green, `workspace-file-window` failing on a gutter
+  `workspace-get-info` (**101 checks**); 21 of 22 workspace suites green, `workspace-file-window` failing on a gutter
   width another change moved from 18 to 12.
 
 ### W9 — Quick Look

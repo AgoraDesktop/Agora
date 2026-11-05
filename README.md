@@ -114,6 +114,7 @@ The component repositories named below exist and build. This list will grow; fur
 | `dock` | the Dock — running applications as tiles, in a vertical strip on the right (or the left), at `NSDockWindowLevel` and reserving its edge; an application, a separate client of the window server |
 | `viewer` | Viewer — the viewer: a window per document, a page drawn from the AppKit's representation registry (PNG and JPEG as pixels, a PDF as vectors), with zoom, fit and page commands; an application, and the handler Launch Services offers for `public.image` and `public.pdf` |
 | `terminal` | Terminal — a window with a shell in it: the emulator's cells painted with the glyph cache, a login shell on a pty, and the AppKit's own key split (commanding keys to the escape table, typed keys through the input context); an application |
+| `amp` | Amp — a Winamp skin player: a `.wal`/`.wsz` archive read as a ZIP, a modern WA2 skin drawn from its own XML and bitmaps, a playlist, playback through the audio framework, and a Maki container and stack machine; an application, and a leaf (nothing links it, which is what makes its GPL-3.0-or-later safe) |
 
 ### Tooling
 

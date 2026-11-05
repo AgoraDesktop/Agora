@@ -69,6 +69,15 @@ All four art sets are **data**, not linked code, and each has a `PROVENANCE` rec
 **ICU** and **OpenSSL** are used from the platform directly — neither is vendored nor
 pinned. Their licences stay on the host.
 
+## A table, not code: the Maki class names
+
+`amp` reads Winamp's `.maki` scripts. A `.maki` file names its standard classes by **16-byte identifier and nothing
+else** — the names are not in the file. `amp/src/AMPMakiClasses.c` maps those identifiers to Winamp's published object
+model. The mapping is the reference decompiler's, read as a specification for the **names**; no decompiler source is in
+this tree and none was copied. What is here is a list of `GUID → class name` pairs — a fact about Winamp's interface
+rather than anyone's expression of it. It is recorded because `amp` is GPL-3.0-or-later and the reading was of GPL
+code: a compatible one, so nothing follows from it except this note.
+
 ## Why the whole tree is not simply GPL
 
 `libagora-core` and `libagora-dispatch` are Apache-2.0. Apache-2.0 is compatible with

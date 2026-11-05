@@ -90,10 +90,10 @@ export AGORA_CURSOR_THEME="${AGORA_CURSOR_THEME:-$ROOT/window-server/assets/curs
 # **AND IT ADDS TO THE STANDARD ROOTS RATHER THAN REPLACING THEM**, which is what makes it usable here: `/Applications`
 # and the account's own `~/Applications` are still scanned, so an application EXPORTED into `~/Applications` — Forge's
 # export does exactly that — has an icon and a name in a session that never named that directory.
-# **AND PREVIEW IS WHERE A DOUBLE-CLICKED PICTURE GOES.** Its bundle declares `public.image` and `public.pdf` as types it
+# **AND VIEWER IS WHERE A DOUBLE-CLICKED PICTURE GOES.** Its bundle declares `public.image` and `public.pdf` as types it
 # views, so Workspace's `-openFile:` finds it through the same scan and spawns it with the document as an argument —
 # which is why the viewer needs no way to be "told" about a file.
-export AGORA_APPLICATIONS="$ROOT/workspace/build:$ROOT/dock/build:$ROOT/systemui/build:$ROOT/preview/build${AGORA_APPLICATIONS:+:$AGORA_APPLICATIONS}"
+export AGORA_APPLICATIONS="$ROOT/workspace/build:$ROOT/dock/build:$ROOT/systemui/build:$ROOT/viewer/build${AGORA_APPLICATIONS:+:$AGORA_APPLICATIONS}"
 
 # **AND WHERE EVERY APPLICATION'S PREFERENCES LIVE, BECAUSE A LOGIN SETS THAT TOO.** `NSUserDefaults` keeps its files
 # under a CONFIGURATION ROOT (`AGORA_CONFIG_ROOT`) rather than under `$HOME`: AN AGORA INSTALL LAYS DOWN THE Mac OS X

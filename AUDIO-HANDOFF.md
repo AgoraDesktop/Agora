@@ -68,8 +68,8 @@ framework directory of its own in that SDK. **Expect the diff to rewrite the scr
 | `AudioToolbox/AudioFile.h` | **WAV, AIFF, CAF** read/write with size patching; byte and packet doors; **MPEG-1/2/2.5 Layer III read** — a packet table walked from the stream's own sync words, ID3v2 skipped by its size field, and `kAudioFilePropertyPacketTableInfo` (`'pnfo'`) answering the encoder's gapless trim | writing MPEG (`kAudioFileUnsupportedFileTypeError`); every other compressed format and unknown container; `PacketToFrame`/`FrameToPacket` (not declared); FSRef doors (not declared, on purpose) |
 | `AudioToolbox/ExtendedAudioFile.h` | open/create/wrap, read/write/write-async, seek/tell, client format; **decodes MPEG in front of the ordinary pipeline**, so the converter above it only ever sees linear PCM; a seek restarts the decoder at the frame that holds the sample asked for; **`FileLengthFrames` reports the trimmed length** when the file declares one | a compressed file in a build with no decoder is refused *at open*, by name |
 | `AudioToolbox/AudioFileStream.h` | incremental parse of the same **four** containers, listener + packet callbacks; an MPEG stream reports every packet with its own description (a PCM stream's have none), skips an ID3v2 tag by its size, resynchronises a byte at a time, and reads the **Xing/Info tag** so its packet and byte counts are exact from the first frame | `AudioFileStreamSeek` for a stream with no table (`'nope'`) — PCM always, MPEG when the first frame is not the tag; the tag's gapless delay/padding is not applied |
-| `AudioToolbox/AudioQueue.h` | output queues: buffers, refilling callback (lock released), volume as a **parameter**, properties | input queues, timelines, taps, offline render |
-| `AudioToolbox/AudioServices.h` | system sounds by URL + the **generated** alert (1.5 kHz decay) | properties (`'pty?'`) |
+| `AudioToolbox/AudioQueue.h` | output queues: buffers, refilling callback (lock released), volume as a **parameter**, properties, **timelines** (a remembered time base that reports a start, a stop or a reset once), mono↔stereo mapping | input queues (there is no capture backend in the HAL), processing taps, offline render |
+| `AudioToolbox/AudioServices.h` | system sounds by URL + the **generated** alert (1.5 kHz decay); a pool of four queues so two alerts overlap, and completions that fire when the buffer comes back rather than when it was handed over | properties (`'pty?'`) |
 | `AudioToolbox/AudioComponent.h` | a registry of **three** built-ins; find/count/describe/copy-name/instance | any fourth thing (no plug-in ABI) |
 | `AudioToolbox/AudioUnit.h` | `DefaultOutput`, `AUConverter`, `MultiChannelMixer`; properties, parameters, `AudioUnitRender`; **`ParameterList`/`ParameterInfo`, `AudioUnitParameterInfo`, the unit and flag vocabulary** | `AudioUnitProcess`, render notify, scheduled parameters |
 | `AudioToolbox/AudioOutputUnit.h` | start/stop an output unit on the default device | — |
@@ -250,7 +250,11 @@ Through the federation: `"$HOME/.agents/skills/agora-desktop/scripts/agora-build
     the extension block sits after the *quality* field (flag 8), so skipping that flag's four bytes reads the delay
     and padding one field early — measured: 576 delay + 756 padding on the 3 s fixture, not the values at the
     wrong offset.
-33. **A `ffmpeg`-generated fixture keeps its own padding apart from the decoder's.** The container counts padded
+33. **A block that outlives its frame needs `Block.h`, and a C file does not get it for free.** `AudioServices.c` is C;
+    the compiler knows `^{}` syntax with `-fblocks` but declares no `Block_copy`/`Block_release`, so a stored completion
+    block compiles into an implicit declaration and fails at link. The header comes from the runtime's include
+    directory, which the target already has because the ObjC doors need it.
+34. **A `ffmpeg`-generated fixture keeps its own padding apart from the decoder's.** The container counts padded
     frames; libmpg123 applies the LAME tag's gapless declaration, so the decoded count is the *audio's* length.
     Asserting "decoded == packets x samples-per-frame" fails by 2.5 frames on a 3 s file and by 3.4 on a 2 s VBR
     one. Assert the decoded count against the tone's duration and the packet count against it ±5 frames.
@@ -320,25 +324,37 @@ refused on purpose (a decoder is a stream, a converter is a ring), and that deci
   goes away. sndio has no float format, so the driver converts the mixer's float32 to 32-bit signed in its own
   thread — the only backend that has to.
 - `CoreMIDI` stays out of this component; a `libagora-midi` if one appears.
-- `AudioQueue`'s input side, timelines, taps; `AUGraph` sub-graphs; the remaining `AudioFormat` selectors.
+- ~~`AudioQueue`'s timelines~~ — **done**: a timeline reports a start, a stop or a reset once, and
+  `AudioQueueGetCurrentTime` compares its remembered time base against the queue's.
+- `AudioQueue`'s **input side** is refused, not missing: no backend in the HAL opens a capture stream
+  (`snd_pcm_open(..., SND_PCM_STREAM_PLAYBACK)` is the only mode any of the three drivers uses, and the null
+  driver generates output rather than consuming input). An input queue needs an input *device* — a scope in the
+  HAL, a capture path in at least one backend, and a synthetic source in `null` to test it — which is a phase of
+  its own, not a door.
+- `AudioQueueOfflineRender`, processing taps; `AUGraph` **sub-graphs** (their Carbon doors — `AUGraphNewNodeSubGraph`,
+  `AUGraphGetNodeInfoSubGraph` — are not declared here, and declaring a door this tree cannot implement is what
+  Tier B exists for); `kAudioFormatProperty_FormatList` (the constant is in the manifest, but its *specifier* is a
+  calling convention the manifest does not record, so the door stays refused rather than guessed).
 - AUv3's remaining optional doors, each a real question rather than a stub: `-fullState`/`-factoryPresets`
   need a state serialisation the C side does not have; MIDI needs a device class this component does not
   ship. Both are nil today and said so in the README.
 
 ## 7. Open decisions
 
-1. **Which backend is chosen with no `AGORA_AUDIO_DRIVER`.** Today: PipeWire if a server answers, else `null`;
-   ALSA is opt-in. The rejected alternative was PipeWire → ALSA → `null`, which sounds better on a machine with
-   a card but no server — but ALSA describes a device before opening one, so the HAL would report a device and
-   then fail at `AudioDeviceStart`. If the desktop ever wants that chain, the ALSA driver needs a real probe
-   (open and close a PCM in `device_count`), which is a change in `AudioHardware-alsa.c`, not in the HAL.
+1. ~~**Which backend is chosen with no `AGORA_AUDIO_DRIVER`.**~~ **Settled:** PipeWire → sndio → **ALSA** → `null`.
+   The reason ALSA could not be in the chain was that it described a card whether or not one existed; its
+   `device_count` is now a real `snd_pcm_open`/`close`, so the chain's condition is the same as the other two
+   backends'. MEASURED with `XDG_RUNTIME_DIR` pointing at an empty directory: PipeWire declines, the ALSA probe
+   reports no device on this machine, and the library falls back to `null` — no error, no silence mistaken for a
+   failure.
 2. **`AUAudioUnitBus.format` vs `AVAudioFormat`.** Settled the only way it can be without AVFoundation: a bus
    carries an `AudioStreamBasicDescription`. If `libagora-avfoundation` ever appears, this is the header to
    revisit — and the `auv3` suite is where the change will show.
 3. **Volume on the device vs on the queue/unit**: both exist and multiply today. Apple's HAL volume is per
    device; this is consistent, but worth stating in the README when the next audio door lands.
-4. **`AudioServices` one-queue reuse**: a second alert restarts the queue. If an app needs overlapping system
-   sounds, that is the place to look.
+4. ~~**`AudioServices` one-queue reuse**: a second alert restarts the queue.~~ **Settled:** a pool of four queues, so
+   overlapping alerts both play; a fifth interrupts the oldest, which is what a buzzer does. The completion block
+   now fires when the queue hands the buffer back, which is the moment the sound has been heard.
 5. **Where `AUDIO-PLAN.md` lives long-term**: it is committed at the workspace root; the component's README has
    taken over the current-state job. Phase 5 is closed now, so the plan can be folded into the component.
 6. ~~**What a compressed file's duration means, and whether to trim it.**~~ **Settled.** The file door answers
@@ -347,6 +363,7 @@ refused on purpose (a decoder is a stream, a converter is a ring), and that deci
    `AudioDataPacketCount` answers, because every packet can be read whether or not it is audio; the two numbers
    differ by the trim, and both are reported. A file that declares nothing keeps the untrimmed length: the trim is
    the encoder's claim, and this door does not invent one.
-7. **A second channel mapping.** The queue's `map_channels` handles mono<->stereo because that is a beep's shape.
-   An MP3 that is mono on a stereo device goes through the *queue*, not the converter, so this is still the one
-   place for `N`->`M` when a player needs it.
+7. **A second channel mapping.** The queue's `map_channels` handles mono<->stereo because that is a beep's shape, and
+   it is where a wider map belongs — but `N`->`M` for `N, M > 1` cannot be computed from an `AudioStreamBasicDescription`
+   alone: the queue's API carries no channel layout, so nothing says which source channel becomes which. The map that
+   needed no layout is the one implemented; the rest waits for a door that describes one.

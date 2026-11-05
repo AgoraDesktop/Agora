@@ -101,7 +101,8 @@ audio), flagged `OffsetIsEstimated`. A stream entered mid-file — the first fra
 `ValueUnknown` and `'nope'`. The **gapless trim** is measured three ways: the reported length is **132 300** /
 **44 100** — exactly the decoded frames — the table reads `valid 132 300 + priming 1 728 + remainder 756 = 134 784` and
 `44 100 + 1 152 + 828 = 46 080`, which is what the packets hold, and the priming is the tag's frame plus the encoder's
-own 576. **112 checks** in the build with the decoder, **84** without it.
+own 576. **112 checks** in the build with the decoder, **72** without it (the container, the incremental door and the
+tag need no decoder; the playback legs do).
 
 ### The three things about AUv3 that are not Apple's
 

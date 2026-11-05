@@ -68,7 +68,7 @@ framework directory of its own in that SDK. **Expect the diff to rewrite the scr
 | `AudioToolbox/AudioFile.h` | **WAV, AIFF, CAF** read/write with size patching; byte and packet doors; **MPEG-1/2/2.5 Layer III read** — a packet table walked from the stream's own sync words, ID3v2 skipped by its size field, and `kAudioFilePropertyPacketTableInfo` (`'pnfo'`) answering the encoder's gapless trim | writing MPEG (`kAudioFileUnsupportedFileTypeError`); every other compressed format and unknown container; `PacketToFrame`/`FrameToPacket` (not declared); FSRef doors (not declared, on purpose) |
 | `AudioToolbox/ExtendedAudioFile.h` | open/create/wrap, read/write/write-async, seek/tell, client format; **decodes MPEG in front of the ordinary pipeline**, so the converter above it only ever sees linear PCM; a seek restarts the decoder at the frame that holds the sample asked for; **`FileLengthFrames` reports the trimmed length** when the file declares one | a compressed file in a build with no decoder is refused *at open*, by name |
 | `AudioToolbox/AudioFileStream.h` | incremental parse of the same **four** containers, listener + packet callbacks; an MPEG stream reports every packet with its own description (a PCM stream's have none), skips an ID3v2 tag by its size, resynchronises a byte at a time, and reads the **Xing/Info tag** so its packet and byte counts are exact from the first frame | `AudioFileStreamSeek` for a stream with no table (`'nope'`) — PCM always, MPEG when the first frame is not the tag; the tag's gapless delay/padding is not applied |
-| `AudioToolbox/AudioQueue.h` | output queues: buffers, refilling callback (lock released), volume as a **parameter**, properties, **timelines** (a remembered time base that reports a start, a stop or a reset once), **offline render** (the queued buffers, in the client's format, into the caller's buffer — with the finished ones handed back through the same callback), mono↔stereo mapping | input queues (there is no capture backend in the HAL), processing taps |
+| `AudioToolbox/AudioQueue.h` | output queues: buffers, refilling callback (lock released), volume as a **parameter**, properties, **timelines** (a remembered time base that reports a start, a stop or a reset once), **offline render** (the queued buffers, in the client's format, into the caller's buffer — with the finished ones handed back through the same callback), mono↔stereo mapping, and **one processing tap** (`New`/`Dispose`/`GetSourceAudio`/`GetQueueTime`, the five flags, in-place processing, a **siphon**, the start/end-of-source flags, and a tap that runs on the offline path too) — the render path now **stages the source in the client's format** before converting it, which is what gives a tap something to process | input queues (there is no capture backend in the HAL); `kAudioQueueErr_InvalidTapType` has nothing to answer, because there is no input queue for a tap to be the wrong type on |
 | `AudioToolbox/AudioServices.h` | system sounds by URL + the **generated** alert (1.5 kHz decay); a pool of four queues so two alerts overlap, and completions that fire when the buffer comes back rather than when it was handed over | properties (`'pty?'`) |
 | `AudioToolbox/AudioComponent.h` | a registry of **three** built-ins; find/count/describe/copy-name/instance | any fourth thing (no plug-in ABI) |
 | `AudioToolbox/AudioUnit.h` | `DefaultOutput`, `AUConverter`, `MultiChannelMixer`; properties, parameters, `AudioUnitRender`; **`ParameterList`/`ParameterInfo`, `AudioUnitParameterInfo`, the unit and flag vocabulary** | `AudioUnitProcess`, render notify, scheduled parameters |
@@ -83,6 +83,12 @@ round trips `memcmp`-exact; the null backend renders **12 000 frames in 250 ms**
 0.25 + 0.125 mix to **0.375**; a queue, a unit and a graph each reach the device at the value they were given;
 mute mixes **0.0**; through AUv3, two buses at volumes 1.0 and 0.25 mix **0.28125**, and a tree write lands in
 `AudioUnitGetParameter`.
+
+**The tap is measured at both ends**, because "the callback ran" and "the audio was processed" are different claims: the
+tap is shown **0.500** and the device plays **0.250**; a **siphon** is shown 0.5 and the device still plays **0.5**; the
+source flags report **StartOfStream** on the first pull and **EndOfStream** once the queue has run dry;
+`GetQueueTime` answers the quantum's **512** frames of queue time; and `AudioQueueOfflineRender` goes through the tap
+too, so a caller writing a file gets the processed audio.
 
 **Phase 7 (`mp3` suite, 56 checks, two `ffmpeg` fixtures generated at configure time):** a 3 s 44.1 kHz stereo
 MPEG-1 tone reports `1152` samples per frame, `0` bytes per packet, and **117 packets**; it decodes to **132 300
@@ -258,6 +264,19 @@ Through the federation: `"$HOME/.agents/skills/agora-desktop/scripts/agora-build
     frames; libmpg123 applies the LAME tag's gapless declaration, so the decoded count is the *audio's* length.
     Asserting "decoded == packets x samples-per-frame" fails by 2.5 frames on a 3 s file and by 3.4 on a 2 s VBR
     one. Assert the decoded count against the tone's duration and the packet count against it ±5 frames.
+35. **A tap's output buffer is allocated by the call that produces it, so nothing may read it first.**
+    `base = queue->tapped; available = fn_tap_process(...)` read the pointer *before* the call that reallocs it, and the
+    first render of every tapped queue converted from `NULL`. The order of two statements was the whole bug, and a
+    device thread rather than the caller found it. A function that produces a buffer should answer with the buffer.
+36. **A siphon produces nothing, so its output is its source.** Handing a siphon the `tapped` buffer (which it never
+    fills, and which does not exist on the first call) segfaulted; `fn_tap_process` now answers with a pointer — the
+    tap's own buffer for a processing tap, the stage it was shown for a siphon — plus the frame count.
+37. **The library's own suite was green because of an optimisation level.** `tests/converter.c` put two planes in a
+    bare `AudioBufferList`, whose declared single element is not enough; the second write landed on the next stack
+    word and turned a 64-frame split conversion into a one-frame one — **in a Debug build only**, because in Release
+    `wanted` happened to sit somewhere the overrun did not reach. `AudioBufferList` is variable-length and the trap is
+    in §3 of the README for exactly this reason; the fixture now carries its own storage. A suite that has only ever
+    been run at `-O2` has not been run.
 
 ## 6. Next work, in the order the plan argues for
 
@@ -331,11 +350,25 @@ refused on purpose (a decoder is a stream, a converter is a ring), and that deci
   driver generates output rather than consuming input). An input queue needs an input *device* — a scope in the
   HAL, a capture path in at least one backend, and a synthetic source in `null` to test it — which is a phase of
   its own, not a door.
-- Processing taps: the manifest has the whole surface (`New`, `Dispose`, `GetSourceAudio`, `GetQueueTime` and the
-  five flags), and only `New` is declared — but the real obstacle is the render path, which converts from the client's
-  buffers straight into the device's, so there is no client-format intermediate for a tap to see. **Make the render
-  path produce the client's format first, then taps are a loop and a callback** — that is the change to schedule, not a
-  door to add.
+- ~~Processing taps~~ — **done**, and the prediction in the last handoff was right about where the work was: the
+  obstacle was the render path, not the doors. What it cost:
+  1. **The source is staged before it is converted.** `fn_stage_pull` gathers the enqueued buffers into a short FIFO in
+     the client's own format, `fn_tap_process` runs on that, and the converter, the channel map and the volume are the
+     tail. That is also why a tap's processing format is the *client's* format rather than the device's — which is
+     what Apple promises and what `outProcessingFormat` could not honestly have answered before.
+  2. **`GetSourceAudio` is what consumes the source.** Only what a tap pulls through it advances `stage_offset`, so
+     what the tap did not take stays staged for the next quantum; a siphon takes the whole chunk without a copy and
+     without being able to change it, which is what the flag means.
+  3. **The tap answers with a pointer, not a count** (§5.35, §5.36), and it is asked for the quantum in *client* frames
+     (`fn_stage_quantum`), while the stage is sized with two frames of margin for the resampler's window — the margin is
+     what keeps an upsampling queue from a gap of silence at every quantum boundary.
+  4. **`PreEffects` and `PostEffects` differ only in the flag here.** This queue has no effects between them, so both
+     hear the source before the conversion and the volume. Said in the header and the README rather than papered over
+     with two copies of the same call.
+  5. **`AudioQueueOfflineRender` goes through the same chain**, because a tap does not know which path called it; the
+     offline path is a stage and a copy, since its format is already the client's.
+  What is left on this door is only what needs a *device*: taps on an input queue (`kAudioQueueErr_InvalidTapType` is
+  unreachable while no backend opens a capture stream), and the effects `PostEffects` would sit after.
 - `AudioQueueOfflineRender`'s *format* half (`AudioQueueSetOfflineRenderFormat` is not declared,
   so offline output is the client's format, which is what a file wants); `AUGraph` **sub-graphs** (their Carbon doors — `AUGraphNewNodeSubGraph`,
   `AUGraphGetNodeInfoSubGraph` — are not declared here, and declaring a door this tree cannot implement is what

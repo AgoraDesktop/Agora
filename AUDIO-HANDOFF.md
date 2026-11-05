@@ -331,7 +331,12 @@ refused on purpose (a decoder is a stream, a converter is a ring), and that deci
   driver generates output rather than consuming input). An input queue needs an input *device* — a scope in the
   HAL, a capture path in at least one backend, and a synthetic source in `null` to test it — which is a phase of
   its own, not a door.
-- Processing taps, and `AudioQueueOfflineRender`'s *format* half (`AudioQueueSetOfflineRenderFormat` is not declared,
+- Processing taps: the manifest has the whole surface (`New`, `Dispose`, `GetSourceAudio`, `GetQueueTime` and the
+  five flags), and only `New` is declared — but the real obstacle is the render path, which converts from the client's
+  buffers straight into the device's, so there is no client-format intermediate for a tap to see. **Make the render
+  path produce the client's format first, then taps are a loop and a callback** — that is the change to schedule, not a
+  door to add.
+- `AudioQueueOfflineRender`'s *format* half (`AudioQueueSetOfflineRenderFormat` is not declared,
   so offline output is the client's format, which is what a file wants); `AUGraph` **sub-graphs** (their Carbon doors — `AUGraphNewNodeSubGraph`,
   `AUGraphGetNodeInfoSubGraph` — are not declared here, and declaring a door this tree cannot implement is what
   Tier B exists for); `kAudioFormatProperty_FormatList` (the constant is in the manifest, but its *specifier* is a

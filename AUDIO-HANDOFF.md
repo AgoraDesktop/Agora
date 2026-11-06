@@ -42,8 +42,8 @@ The API is **declaration-identical** to `MacOSX10.12.sdk`, not "inspired by" it:
 Regenerating the manifest (needs the SDK; `/tmp/refsdk` from the last session is gone after a reboot):
 
 ```sh
-# stage a MacOSX10.12.sdk-like tree at /tmp/refsdk (System/Library/Frameworks/*.framework/Versions/A/Headers)
 cd libagora-audio
+tools/fetch-sdk.py --out /tmp/refsdk             # the four framework header trees; never committed
 python3 tools/api-manifest.py --sdk /tmp/refsdk --scratch /tmp/agora-api-stage \
     --out tests/api/manifest-10.12.txt \
     CoreAudio/CoreAudioTypes.h CoreAudio/HostTime.h CoreAudio/AudioHardwareBase.h CoreAudio/AudioHardware.h \
@@ -54,7 +54,8 @@ python3 tools/api-manifest.py --sdk /tmp/refsdk --scratch /tmp/agora-api-stage \
     AudioToolbox/AudioUnitProperties.h AudioToolbox/AUParameters.h AudioToolbox/AUAudioUnit.h
 ```
 
-Tip: the headers come from the `phracker/MacOSX-SDKs` raw tree (`MacOSX10.12.sdk/...`). The GitHub *contents* API
+`tools/fetch-sdk.py` does the staging above (it was prose in an earlier revision of this file, and the next session
+had to write it again). Tip: the headers come from the `phracker/MacOSX-SDKs` raw tree (`MacOSX10.12.sdk/...`). The GitHub *contents* API
 lists a framework's `Versions/A/Headers` directory and the raw tree serves each file; do **four** frameworks, not
 three — `CoreAudio` (9 files), `AudioToolbox` (30), `AudioUnit` (16) and **`CoreMIDI` (5)**, whose types
 `MusicPlayer.h` will need. `CoreAudioTypes` has no framework directory of its own in that SDK. MEASURED: staging all

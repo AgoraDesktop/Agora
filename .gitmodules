@@ -102,8 +102,3 @@
 	path = libagora-audio
 	url = https://github.com/AgoraDesktop/libagora-audio.git
 	branch = main
-
-[submodule "amp"]
-	path = amp
-	url = https://github.com/AgoraDesktop/amp.git
-	branch = main

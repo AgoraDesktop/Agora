@@ -26,7 +26,9 @@ that changes what the library can *play* rather than only where it plays it.
 The API is **declaration-identical** to `MacOSX10.12.sdk`, not "inspired by" it:
 
 - `tests/api/manifest-10.12.txt` is **generated** by `tools/api-manifest.py` from the reference headers and
-  committed: **87 records, 1853 constants, 269 typedefs, 244 prototypes, 9 Objective-C classes, 43 methods**.
+  committed: **87 records, 1853 constants, 269 typedefs, 250 prototypes, 9 Objective-C classes, 43 methods**. The count
+  went from 244 to 250 when the refshim learned `CF_INLINE` — six of Apple's inline helpers had been invisible to the
+  manifest (§5.45).
   The SDK itself is never committed.
 - Five gates keep it true: `api-layout` (`_Static_assert` on every size/alignment/offset), `api-macros`
   (constant values), `api-prototypes` (every exported function through a pointer typed from the manifest),
@@ -42,7 +44,8 @@ Regenerating the manifest (needs the SDK; `/tmp/refsdk` from the last session is
 ```sh
 # stage a MacOSX10.12.sdk-like tree at /tmp/refsdk (System/Library/Frameworks/*.framework/Versions/A/Headers)
 cd libagora-audio
-python3 tools/api-manifest.py --sdk /tmp/refsdk --out tests/api/manifest-10.12.txt \
+python3 tools/api-manifest.py --sdk /tmp/refsdk --scratch /tmp/agora-api-stage \
+    --out tests/api/manifest-10.12.txt \
     CoreAudio/CoreAudioTypes.h CoreAudio/HostTime.h CoreAudio/AudioHardwareBase.h CoreAudio/AudioHardware.h \
     AudioToolbox/AudioFormat.h AudioToolbox/AudioConverter.h AudioToolbox/AudioFile.h \
     AudioToolbox/AudioFileStream.h AudioToolbox/ExtendedAudioFile.h AudioToolbox/AudioQueue.h \
@@ -51,10 +54,15 @@ python3 tools/api-manifest.py --sdk /tmp/refsdk --out tests/api/manifest-10.12.t
     AudioToolbox/AudioUnitProperties.h AudioToolbox/AUParameters.h AudioToolbox/AUAudioUnit.h
 ```
 
-Tip: the headers come from the `phracker/MacOSX-SDKs` raw tree (`MacOSX10.12.sdk/...`). Fetch
-`CoreAudio`, `AudioToolbox` and `AudioUnit` (52 files) with the GitHub contents API; `CoreAudioTypes` has no
-framework directory of its own in that SDK. **Expect the diff to rewrite the scratch-directory paths** in six
-`[record]` field lines (`/tmp/agora-api-*/stage/...`) — that churn is inherent and harmless.
+Tip: the headers come from the `phracker/MacOSX-SDKs` raw tree (`MacOSX10.12.sdk/...`). The GitHub *contents* API
+lists a framework's `Versions/A/Headers` directory and the raw tree serves each file; do **four** frameworks, not
+three — `CoreAudio` (9 files), `AudioToolbox` (30), `AudioUnit` (16) and **`CoreMIDI` (5)**, whose types
+`MusicPlayer.h` will need. `CoreAudioTypes` has no framework directory of its own in that SDK. MEASURED: staging all
+four and regenerating reproduced the committed manifest **exactly** — same 87 records, 1853 constants, 269 typedefs,
+9 classes, 43 methods — which is the check that a re-staged SDK is the same SDK. **`--scratch` IS WHAT MAKES A REGENERATION A DIFF ABOUT THE API.** It used to be
+`mkdtemp`, so a record's field-type lines (which name the file they were read from) were rewritten on every run and
+the real diff hid among them. `--scratch /tmp/agora-api-stage` makes the same input produce the same file
+byte-for-byte; the generator keeps the directory for whoever has to read a surprising diff.
 
 ## 3. What exists, door by door
 
@@ -345,6 +353,17 @@ Through the federation: `"$HOME/.agents/skills/agora-desktop/scripts/agora-build
     woken) for the whole of a beep. A device is started *for a reason*, so the driver seam carries the reason now:
     `start(id, want_input)`, one HAL flag, set by the client that wants input, plus one restart when a running device
     gains the other direction. The rule is measurable as a node count: **0** during playback, **1** while recording.
+45. **An undefined annotation macro does not fail the parse, it *hides* the declaration.** The refshim never defined
+    `CF_INLINE`, so Apple's six `CF_INLINE` helpers — `AudioChannelLayoutTag_GetNumberOfChannels`,
+    `NumBytesToNumAudioFileMarkers`, `NumAudioFileMarkersToNumBytes`, `NextAudioFileRegion`,
+    `GetAudioUnitParameterDisplayType`, `SetAudioUnitParameterDisplayType` — were simply absent from the manifest, and
+    the "244 prototypes" the README quoted was 244 of 250. Regenerating from a re-staged SDK is what found it: the
+    counts only matched the old file until `CF_INLINE` was defined. **A shim macro that is missing is worse than a
+    wrong one**, because the headers around it still parse.
+    What the six now point at is real: our `AudioToolbox/AudioFile.h` declares **none** of the marker/region types
+    (`AudioFileMarker`, `AudioFileMarkerList`, `AudioFileRegion`, `AudioFileRegionList`, `Audio_SMPTE_Time`,
+    `AudioFileRegionFlags`), and our `AudioToolbox/AudioUnit.h` declares none of the `kAudioUnitParameterFlag_Display*`
+    bits those two helpers mask with. Only the channel-layout helper's dependency exists today.
 
 ## 6. Next work, in the order the plan argues for
 
@@ -464,8 +483,10 @@ refused on purpose (a decoder is a stream, a converter is a ring), and that deci
      with two copies of the same call.
   5. **`AudioQueueOfflineRender` goes through the same chain**, because a tap does not know which path called it; the
      offline path is a stage and a copy, since its format is already the client's.
-  What is left on this door is only what needs a *device*: taps on an input queue (`kAudioQueueErr_InvalidTapType` is
-  unreachable while no backend opens a capture stream), and the effects `PostEffects` would sit after.
+  Taps on an **input** queue came with capture (phase 9) and work: the tap runs on the cycle's client-format audio
+  before the caller's buffer, and `kAudioQueueErr_InvalidTapType` is now returned where it belongs — a recording has no
+  queue time to report. What is left on this door is only the effects `PostEffects` would sit after: this queue has no
+  varispeed or time-pitch for a post-effects tap to be after.
 - `AudioQueueOfflineRender`'s *format* half (`AudioQueueSetOfflineRenderFormat` is not declared,
   so offline output is the client's format, which is what a file wants); `AUGraph` **sub-graphs** (their Carbon doors — `AUGraphNewNodeSubGraph`,
   `AUGraphGetNodeInfoSubGraph` — are not declared here, and declaring a door this tree cannot implement is what
@@ -474,6 +495,29 @@ refused on purpose (a decoder is a stream, a converter is a ring), and that deci
 - AUv3's remaining optional doors, each a real question rather than a stub: `-fullState`/`-factoryPresets`
   need a state serialisation the C side does not have; MIDI needs a device class this component does not
   ship. Both are nil today and said so in the README.
+
+### (c) `MusicPlayer` — **measured, not started**, and it needs one generator change first
+
+The plan's phase 6 promised `MusicPlayer`/`MusicSequence` over the graph and the file layer. It is the largest thing
+that is missing (the manifest had **zero** records for it). With the SDK staged, the size is no longer a guess:
+
+- **`AudioToolbox/MusicSequence.h` does not exist in 10.12.** The whole API is in **`AudioToolbox/MusicPlayer.h`**, 1634
+  lines, which includes `CoreMIDI/MIDIServices.h` and `AudioToolbox/CoreAudioClock.h`.
+- It declares **26 `MusicSequence*`, 23 `MusicTrack*` and 14 `MusicPlayer*` functions** (62), plus the music-event
+  vocabulary (`MusicTimeStamp`, `MusicEventType`, the `MIDINoteMessage`/`MIDIChannelMessage`/… records, the track
+  loop/sequence types).
+- **Reading it needs five refshim additions, and they are done**: `ItemCount`/`ByteCount`/`SignedByte`, `CF_INLINE`,
+  `CF_IMPLICIT_BRIDGING_ENABLED`/`_DISABLED`, and the watchOS/tvOS "prohibited" decorators. With them
+  `MusicPlayer.h` parses.
+- **But adding it to the unit pulls CoreMIDI in with it**: 401 functions where there were 250 (48 of them `MIDI*`) and
+  1969 constants where there were 1853 (32 of them `kMIDI*`). This component deliberately does not claim CoreMIDI
+  (§10.8 of the plan), and a manifest row is a claim. **So the first step is in the generator, not the library: filter
+  the facts to the headers named on the command line**, so `MusicPlayer.h` contributes its 62 functions and
+  `MIDIServices.h` contributes none — while `MIDIEndpointRef` still resolves as a type, which is all MusicPlayer's
+  signatures need. Verify the filter by regenerating the current 18-header manifest byte-for-byte.
+- Then the door itself: the types, the 62 functions, and the semantics that make a sequence a sequence — tempo map,
+  `MusicTrackNewMIDINoteEvent`, the player's preroll/rate, and the wiring to an `AUGraph` — with the plan's exit
+  criterion unchanged: **a sequence plays**.
 
 ## 7. Open decisions
 

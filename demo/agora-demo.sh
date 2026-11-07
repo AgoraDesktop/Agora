@@ -9,7 +9,7 @@
 #   Workspace              the desktop, its icons and the application menu bar
 #   Dock                   the strip of running applications and the Trash — EVERY SESSION HAS ONE
 #   appkit_controls_draw   the control layer, in a window of its own, with its own menu bar
-#   test client            the wallpaper (wallpaper.jpg by default), at the desktop level: ONE frame, then it holds
+#   (the wallpaper)        drawn by the Dock, at the desktop level: the picture under every window
 #
 # **A SESSION IS THE DESKTOP AND THE DOCK, WHATEVER ELSE IT ADDS.** This script exists to add the controls window to
 # that scene; leaving the Dock out would make it a scene nobody could mistake for the desktop a person uses, and the
@@ -30,7 +30,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 SERVER_BIN="$ROOT/window-server/build/window-server"
-CLIENT_BIN="$ROOT/window-server/build/tests/window-server-test-client"
 # The bundle is laid out per platform and architecture — Contents/<platform>/<arch>/Workspace — and a
 # developer's build tree carries exactly one slice, so the glob is exact where a hand-written mapping
 # (Linux/FreeBSD/MacOS × amd64/arm64) would be a second copy of libagora-core's vocabulary.
@@ -42,7 +41,7 @@ CONTROLS_BIN="$ROOT/libagora-app/build/tests/appkit_controls_draw"
 # `systemui/README.md` and `demo/agora-session.sh`'s 2c.
 SYSTEMUI_BIN="$(ls "$ROOT"/systemui/build/SystemUI.app/Contents/*/*/SystemUI 2>/dev/null | head -1)"
 
-for b in "$SERVER_BIN" "$CLIENT_BIN" "$WORKSPACE_BIN" "$DOCK_BIN" "$CONTROLS_BIN" "$SYSTEMUI_BIN"; do
+for b in "$SERVER_BIN" "$WORKSPACE_BIN" "$DOCK_BIN" "$CONTROLS_BIN" "$SYSTEMUI_BIN"; do
 	if [ ! -x "$b" ]; then
 		echo "the demo needs $b" >&2
 		echo "build it first: window-server, workspace, dock and libagora-app each have a build/ directory" >&2
@@ -101,9 +100,10 @@ export AGORA_CONFIG_ROOT="${AGORA_CONFIG_ROOT:-$HOME/.agora}"
 RUNTIME="${XDG_RUNTIME_DIR:-/tmp}"
 SOCK="agora-demo"
 DESK="/tmp/agora-demo-desktop"
-# **THE WALLPAPER IS AN IMAGE NOW, TEMPORARILY.** `AGORA_WALLPAPER` overrides it; a missing file falls back to the
-# colour the server tests use, so the demo still runs in a tree without the picture.
-WALLPAPER="${AGORA_WALLPAPER:-$ROOT/wallpaper.jpg}"
+# **AND THE DESKTOP'S PICTURE IS THE DOCK'S** (WORKSPACE-PLAN.md §3), so this script starts no wallpaper client: the Dock
+# draws it at `kCGDesktopWindowLevel` when it starts, `AGORA_WALLPAPER` naming the image and the amber ramp of
+# `window-server/ARGENTUM.md` standing in when there is none.
+export AGORA_WALLPAPER="${AGORA_WALLPAPER:-$ROOT/wallpaper.jpg}"
 
 pkill -f "Workspace.app/Contents/" 2>/dev/null
 pkill -f "Dock.app/Contents/" 2>/dev/null
@@ -119,7 +119,7 @@ mkdir -p "$DESK/Photos" "$DESK/Projects"
 for n in hello.txt Notes.txt report.pdf README.txt Archive.zip Music; do printf 'x\n' > "$DESK/$n"; done
 
 cleanup() {
-	for pid in "${SPID:-}" "${WPID:-}" "${DPID:-}" "${SYSTEMUIPID:-}" "${CPID:-}" "${WALLPID:-}"; do
+	for pid in "${SPID:-}" "${WPID:-}" "${DPID:-}" "${SYSTEMUIPID:-}" "${CPID:-}"; do
 		[ -n "${pid:-}" ] && kill "$pid" 2>/dev/null
 	done
 	rm -f "${RUNTIME}/${SOCK}" "${RUNTIME}/${SOCK}.lock"
@@ -177,22 +177,12 @@ WAYLAND_DISPLAY="$SOCK" "$CONTROLS_BIN" >/dev/null 2>/tmp/agora-demo-controls.lo
 CPID=$!
 sleep 1.5
 
-# 4. **THE WALLPAPER: ONE FRAME, THEN HOLD.** This client redraws on every frame callback, so asking it for frames
-#    for ever makes it a frame-rate generator — MEASURED at 233 composites a second and 86% of a core for pixels
-#    that never change. A wallpaper is a still picture: one commit, and the buffer stays.
-if [ -f "$WALLPAPER" ]; then
-	WAYLAND_DISPLAY="$SOCK" "$CLIENT_BIN" --width "$W" --height "$H" --image "$WALLPAPER" --x 0 --y 0 \
-		--level $(( -2147483648 + 20 )) --frames 1 --hold --no-app-id >/dev/null 2>&1 &
-else
-	WAYLAND_DISPLAY="$SOCK" "$CLIENT_BIN" --width "$W" --height "$H" --colour 48240E --x 0 --y 0 \
-		--level $(( -2147483648 + 20 )) --frames 1 --hold --no-app-id >/dev/null 2>&1 &
-fi
-WALLPID=$!
-
+# 4. **THE WALLPAPER IS ALREADY UP: IT IS THE DOCK'S.** Step 3 started the Dock, and with it the window at
+#    `kCGDesktopWindowLevel` that draws `AGORA_WALLPAPER` — or the ramp when there is no image.
 sleep 1
-echo "server=$SPID  workspace=$WPID  controls=$CPID  wallpaper=$WALLPID"
+echo "server=$SPID  workspace=$WPID  controls=$CPID  dock=$DPID"
 echo "  window server: ${W}${H:+x}${H} on DISPLAY $DISPLAY, socket ${RUNTIME}/${SOCK}"
-echo "  wallpaper: ${WALLPAPER}"
+echo "  wallpaper: ${AGORA_WALLPAPER:-the ramp} (drawn by the Dock)"
 echo "  menu bar: Workspace (active) — click the Controls window to give ITS menus the bar"
 
 # ---------------------------------------------------------------------------------------------------------------

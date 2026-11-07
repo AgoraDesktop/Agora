@@ -8,7 +8,7 @@ Core Graphics, Core Text and the Application Kit carry the Cocoa surface an appl
 window server is a Wayland compositor with client-side chrome, layers and input routing; the Workspace
 shell draws the desktop, icons, menu bar and file windows and the Dock draws the running applications and the Trash;
 Viewer shows a picture or a PDF a person double-clicks;
-`demo/agora-session.sh` starts the default session — the window server, the wallpaper client, Workspace and the Dock —
+`demo/agora-session.sh` starts the default session — the window server, Workspace, the Dock and the System UI —
 nested on an X11 desktop, and `demo/agora-demo.sh` adds the controls application to that scene. Every session has the
 desktop and the Dock; the scripts differ in what they add. There is also a Swift toolchain that compiles Swift against this stack (the standard
 library, the Foundation overlay and the GNUstep class ABI). What is not there yet is an installable
@@ -114,6 +114,7 @@ The component repositories named below exist and build. This list will grow; fur
 | `dock` | the Dock — running applications as tiles, in a vertical strip on the right (or the left), at `NSDockWindowLevel` and reserving its edge; an application, a separate client of the window server |
 | `viewer` | Viewer — the viewer: a window per document, a page drawn from the AppKit's representation registry (PNG and JPEG as pixels, a PDF as vectors), with zoom, fit and page commands; an application, and the handler Launch Services offers for `public.image` and `public.pdf` |
 | `terminal` | Terminal — a window with a shell in it: the emulator's cells painted with the glyph cache, a login shell on a pty, and the AppKit's own key split (commanding keys to the escape table, typed keys through the input context); an application |
+| `music` | Music — the library and player: artists, their albums and the tracks on them as three Miller columns, with a transport; the ID3 reader is its own, and the playback is Core Audio's `ExtAudioFile` in front of an `AudioQueue`; an application |
 
 ### Tooling
 

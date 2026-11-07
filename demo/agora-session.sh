@@ -3,12 +3,12 @@
 # SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-### The default Agora development session: window server, wallpaper, Workspace, the Dock.
+### The default Agora development session: window server, Workspace, the Dock.
 #
 #   window-server          nested on the X11 desktop, and it GRABS NOTHING: no XGrabPointer, no XGrabKeyboard
-#   Workspace              the desktop, its icons and the application menu bar
-#   the Dock               running applications as tiles, in a vertical strip on the right
-#   wallpaper client       wallpaper.jpg at kCGDesktopWindowLevel: ONE frame, then it holds
+#   Workspace              the desktop's icons and the application menu bar
+#   the Dock               the desktop's wallpaper, then the running applications as tiles in a vertical strip
+#   the System UI          the system menu's square, clickable because this process draws the menu
 #
 # THIS IS THE SESSION, NOT THE DEMO. `agora-demo.sh` adds the controls application to the same scene to show two
 # applications fighting over the menu bar; this script is the composition a login session will eventually start.
@@ -28,7 +28,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 SERVER_BIN="$ROOT/window-server/build/window-server"
-CLIENT_BIN="$ROOT/window-server/build/tests/window-server-test-client"
 # The bundle is laid out per platform and architecture — Contents/<platform>/<arch>/Workspace — and a
 # developer's build tree carries exactly one slice, so the glob is exact.
 WORKSPACE_BIN="$(ls "$ROOT"/workspace/build/Workspace.app/Contents/*/*/Workspace 2>/dev/null | head -1)"
@@ -40,7 +39,7 @@ DOCK_BIN="$(ls "$ROOT"/dock/build/Dock.app/Contents/*/*/Dock 2>/dev/null | head 
 # the menu is this process's window, and the server forwards the square's click to it. See `systemui/README.md`.
 SYSTEMUI_BIN="$(ls "$ROOT"/systemui/build/SystemUI.app/Contents/*/*/SystemUI 2>/dev/null | head -1)"
 
-for b in "$SERVER_BIN" "$CLIENT_BIN" "$WORKSPACE_BIN" "$DOCK_BIN" "$SYSTEMUI_BIN"; do
+for b in "$SERVER_BIN" "$WORKSPACE_BIN" "$DOCK_BIN" "$SYSTEMUI_BIN"; do
 	if [ ! -x "$b" ]; then
 		echo "the session needs $b" >&2
 		echo "build it first: window-server, workspace and dock each have a build/ directory" >&2
@@ -92,8 +91,9 @@ export AGORA_CURSOR_THEME="${AGORA_CURSOR_THEME:-$ROOT/window-server/assets/curs
 # export does exactly that — has an icon and a name in a session that never named that directory.
 # **AND VIEWER IS WHERE A DOUBLE-CLICKED PICTURE GOES.** Its bundle declares `public.image` and `public.pdf` as types it
 # views, so Workspace's `-openFile:` finds it through the same scan and spawns it with the document as an argument —
-# which is why the viewer needs no way to be "told" about a file.
-export AGORA_APPLICATIONS="$ROOT/workspace/build:$ROOT/dock/build:$ROOT/systemui/build:$ROOT/viewer/build${AGORA_APPLICATIONS:+:$AGORA_APPLICATIONS}"
+# which is why the viewer needs no way to be "told" about a file. Music is in the list for the other half of the same
+# reason: it claims no document type yet, but its bundle is where the Dock's tile and its name come from.
+export AGORA_APPLICATIONS="$ROOT/workspace/build:$ROOT/dock/build:$ROOT/systemui/build:$ROOT/viewer/build:$ROOT/music/build${AGORA_APPLICATIONS:+:$AGORA_APPLICATIONS}"
 
 # **AND WHERE EVERY APPLICATION'S PREFERENCES LIVE, BECAUSE A LOGIN SETS THAT TOO.** `NSUserDefaults` keeps its files
 # under a CONFIGURATION ROOT (`AGORA_CONFIG_ROOT`) rather than under `$HOME`: AN AGORA INSTALL LAYS DOWN THE Mac OS X
@@ -109,7 +109,11 @@ export AGORA_CONFIG_ROOT="${AGORA_CONFIG_ROOT:-$HOME/.agora}"
 RUNTIME="${XDG_RUNTIME_DIR:-/tmp}"
 SOCK="${AGORA_SESSION_SOCKET:-agora-session}"
 DESK="${AGORA_DESKTOP:-$HOME/Desktop}"
-WALLPAPER="${AGORA_WALLPAPER:-$ROOT/wallpaper.jpg}"
+# **AND THE DESKTOP'S PICTURE IS THE DOCK'S**, which draws it at `kCGDesktopWindowLevel` (WORKSPACE-PLAN.md §3): the
+# wallpaper is a shell surface and not a file manager's private background, so the application that owns the strip owns
+# the picture under it. A development session points it at this checkout's `wallpaper.jpg`; an installed one leaves it
+# unset and gets the amber ramp `window-server/ARGENTUM.md` samples, which is art the tree can ship.
+export AGORA_WALLPAPER="${AGORA_WALLPAPER:-$ROOT/wallpaper.jpg}"
 
 # **THE HOME DIRECTORY SET IS A LOGIN'S JOB, SO THE SESSION DOES IT.** A complete Agora installation
 # carries the Mac OS X directories at the root (README, "The installation"), and each account's share of
@@ -133,7 +137,7 @@ fi
 rm -f "${RUNTIME}/${SOCK}.lock"
 
 cleanup() {
-	for pid in "${SPID:-}" "${WPID:-}" "${DOCKPID:-}" "${SYSTEMUIPID:-}" "${WALLPID:-}"; do
+	for pid in "${SPID:-}" "${WPID:-}" "${DOCKPID:-}" "${SYSTEMUIPID:-}"; do
 		[ -n "${pid:-}" ] && kill "$pid" 2>/dev/null
 	done
 	rm -f "${RUNTIME}/${SOCK}" "${RUNTIME}/${SOCK}.lock"
@@ -204,41 +208,24 @@ if ! kill -0 "$DOCKPID" 2>/dev/null; then
 fi
 
 # ---------------------------------------------------------------------------------------------------------------
-# 3. THE WALLPAPER: ONE FRAME, THEN HOLD. It redraws on every frame callback, so a still picture asks for one frame
-#    rather than becoming a frame-rate generator.
+# 3. **THE WALLPAPER CAME UP WITH THE DOCK.** The desktop's picture is a window at `kCGDesktopWindowLevel` and it is
+#    the Dock's to draw (WORKSPACE-PLAN.md §3), so this session starts no wallpaper client at all: one process owns the
+#    strip and the picture under it, and `AGORA_WALLPAPER` — exported above — is the image it draws, or the ramp when
+#    there is none.
 #
-#    **AND IT RENDERS AT THE COMPOSITOR'S OWN SCALE, BECAUSE IT IS THE ONE CLIENT THAT DOES NOT SPEAK THE EXTENSION.**
-#    An AppKit application hears `agora_output.preferred_scale` — the output's real fraction, whatever produced it —
-#    and rasterises at exactly that; the raw test client used as the wallpaper speaks neither that nor `wl_output`,
-#    so a 1x wallpaper on a 1.333x output is magnified by the compositor and looks soft. It is given the scale the
-#    server just printed, rounded up, and 1 (the client's own default) when the line cannot be read.
-#
-#    That printed number is the FINAL scale: the panel's own answer times AGORA_UI_SCALE, so a session at 1.25
-#    comfort on a 1.333 output asks the wallpaper for 2x and is composited from a big enough buffer either way.
-#
-#    **AND IT IS NOT AN APPLICATION, SO IT SAYS SO WITH `--no-app-id`.** A window that names an application id is an
-#    application to `NSWorkspace -runningApplications`, so the Dock grew a tile for the wallpaper — a grey ghost whose
-#    Quit is a close request a raw client never hears. Decoration is not an application.
-# ---------------------------------------------------------------------------------------------------------------
+#    **AND IT IS AN APPKit WINDOW, WHICH IS WHY THE SCALE QUESTION DISAPPEARS.** The client this replaced was raw
+#    Wayland: it spoke neither `agora_output.preferred_scale` nor `wl_output`, so the session had to read the scale the
+#    server printed and round it up, and a 1x picture on a 1.333x output was magnified and soft. An AppKit view
+#    rasterises at the output's real scale by construction, whatever produced it — the panel, `--dpi`, AGORA_UI_SCALE.
 OUTPUT_SCALE=$(sed -n 's/.*(scale \([0-9.]*\).*/\1/p' /tmp/agora-session-server.log | head -1)
-WALLPAPER_SCALE=$(awk -v s="${OUTPUT_SCALE:-1}" 'BEGIN { n = int(s); if (n < s) n++; if (n < 1) n = 1; print n }')
-if [ -f "$WALLPAPER" ]; then
-	WAYLAND_DISPLAY="$SOCK" "$CLIENT_BIN" --width "$W" --height "$H" --image "$WALLPAPER" --buffer-scale "$WALLPAPER_SCALE" \
-		--x 0 --y 0 --level $(( -2147483648 + 20 )) --frames 1 --hold --no-app-id >/dev/null 2>&1 &
-else
-	WAYLAND_DISPLAY="$SOCK" "$CLIENT_BIN" --width "$W" --height "$H" --colour 48240E --buffer-scale "$WALLPAPER_SCALE" \
-		--x 0 --y 0 --level $(( -2147483648 + 20 )) --frames 1 --hold --no-app-id >/dev/null 2>&1 &
-fi
-WALLPID=$!
-sleep 1
 
-echo "server=$SPID  workspace=$WPID  dock=$DOCKPID  systemui=$SYSTEMUIPID  wallpaper=$WALLPID"
+echo "server=$SPID  workspace=$WPID  dock=$DOCKPID  systemui=$SYSTEMUIPID"
 SCALE_NOTE="output scale ${OUTPUT_SCALE:-1}"
 [ -n "${AGORA_UI_SCALE:-}" ] && SCALE_NOTE="${SCALE_NOTE} = panel x ${AGORA_UI_SCALE} UI"
 echo "  window server: ${W}x${H} on DISPLAY $DISPLAY (${SCALE_NOTE})"
 echo "  Wayland socket: ${RUNTIME}/${SOCK}"
 echo "  desktop: ${DESK}"
-echo "  wallpaper: ${WALLPAPER}"
+echo "  wallpaper: ${AGORA_WALLPAPER:-the ramp} (drawn by the Dock)"
 echo "  dock: ${AGORA_DOCK_POSITION:-right} (vertical, below the menu bar)"
 echo "  menu bar: Workspace"
 [ -n "${AGORA_SESSION_GET_INFO:-}" ] && echo "  Get Info: ${AGORA_SESSION_GET_INFO}"

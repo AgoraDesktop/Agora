@@ -22,8 +22,8 @@ window's cursor; on a DRM output the compositor composites the same image itself
 
 ## The demo
 
-One window server, four clients — desktop, Dock, controls application and wallpaper — and a menu bar that belongs to
-whichever application is **active**.
+One window server and four clients — Workspace, the Dock, the System UI and the controls application — and a menu bar
+that belongs to whichever application is **active**. The desktop's wallpaper is not a client of its own: the Dock draws it.
 
 ```
 demo/agora-demo.sh [WIDTHxHEIGHT]      # 1280x720 by default; Ctrl-C stops it
@@ -37,13 +37,13 @@ nothing is grabbed: the compositor runs nested on your X11 desktop with `--input
 
 | layer | who draws it |
 |---|---|
-| the wallpaper (`wallpaper.jpg` by default) | `window-server-test-client`, at `kCGDesktopWindowLevel` — the **Dock's** layer, eventually |
+| the wallpaper (`wallpaper.jpg` by default) | the **Dock**, at `kCGDesktopWindowLevel` — the layer the plan gives it, one below Workspace's icons |
 | the icons, the menu bar and the file windows | **Workspace**, whose icon window is transparent at `kCGDesktopIconWindowLevel`; **File → New Workspace Window** (or `--file-window`) opens the file window, and **View → as List** (`--list-view`) shows W4's list, and **View → as Columns** (`--column-view`) W5's columns |
 | the window full of controls | **`appkit_controls_draw`**, an ordinary window — buttons, checkbox, radio, switch, sliders, a pop-up, a combo box, a text field, a scrolled panel, and a **toolbar** above them all |
 | the table and outline window | **`appkit_controls_draw`** again — the **Data → Table & Outline** item (or the toolbar's **Table** item): a real `NSOutlineView` with disclosure and levels beside a real `NSTableView` with columns, a header and alternating rows |
 | the GUI gallery | **`appkit_controls_draw`** again — the **Gallery → All Classes** item (or the toolbar's **Gallery** item): one scrollable window with every remaining view and control class — a radio matrix, a form, an image view, a colour well, a bare scroller, a browser, a token field, a rule editor, a predicate editor, a collection view, a ruler and a centred drawer tucked under the window — plus buttons for the alert, save, open, colour, font and print panels |
 
-**The wallpaper is `../wallpaper.jpg` by default**, decoded by the test client with libjpeg and scaled to cover the window; `AGORA_WALLPAPER=/path/to/image.jpg` overrides it, and the flat amber colour is the fallback when the file is absent. **The toolbar is the same acts as the menus.** "Show Grid" toggles the checkbox the View menu validates
+**The wallpaper is `../wallpaper.jpg` by default**, decoded by the Dock with `NSImage` and scaled to cover the screen; `AGORA_WALLPAPER=/path/to/image.jpg` overrides it, and the amber ramp `window-server/ARGENTUM.md` samples is the fallback when the file is absent — which is also what an installed Agora shows, since the photograph is a temporary stand-in and not art this tree ships. **The toolbar is the same acts as the menus.** "Show Grid" toggles the checkbox the View menu validates
 against, "Playground" opens the text window, "Table" opens the data views, "Gallery" opens the GUI gallery, and
 "Action" prints its own name — so the strip and the menus are not two sets of commands. The separator, flexible
 space and greyed "Disabled" item are the rest of what a toolbar has to show.
